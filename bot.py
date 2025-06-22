@@ -1,4 +1,4 @@
-# 📦 Telegram Quiz Bot with Webhooks, Group Verification & Score Tracking (Final Cleaned Version)
+# 📦 Telegram Quiz Bot with Webhooks, Group Verification & Score Tracking (Final Production Version)
 import os
 import json
 import gspread
@@ -73,6 +73,7 @@ def reverify(call):
     chat_id = call.message.chat.id
     try: member = bot.get_chat_member(GROUP_ID, user_id).status
     except: return bot.answer_callback_query(call.id, "❌ Still can't check.")
+    
     if member in ["creator", "administrator", "member"]:
         bot.delete_message(chat_id, call.message.message_id)
         bot.send_message(chat_id, "✅ Verified! You can now start the quiz from the 'Menu' ☰ button.")
@@ -99,13 +100,16 @@ def update_score(msg: types.Message):
         user_scores[user_id] = data
         summary_text = "\n".join([f"`{k}`: {v}" for k, v in data.items()])
         
+        # Leaderboard Logic
         score_num = int(data.get("score", 0))
         time_raw = str(data.get("totalTime", "999s")).replace("s", "")
         time_taken = int(time_raw) if time_raw.isdigit() else 999
         leaderboard.append({"name": full_name, "username": username, "score": score_num, "time": time_taken})
         print("✅ Leaderboard updated.")
 
+        # Google Sheets Logging
         try:
+            # A more efficient way to check if sheet is empty
             if len(sheet.get_all_values()) < 1:
                 sheet.append_row(["Timestamp", "Full Name", "Username", "Score (%)", "Correct", "Total Questions", "Total Time (s)", "Expected Score (%)"])
             sheet.append_row([
@@ -116,6 +120,7 @@ def update_score(msg: types.Message):
         except Exception as e:
             print(f"❌ Google Sheets export failed: {e}")
 
+        # Admin Report
         report = f"📅 {datetime.datetime.now().strftime('%d-%m-%Y %H:%M:%S')}\n👤 {full_name} (@{username})\n\n🎓 *Quiz Report:*\n{summary_text}"
         bot.send_message(ADMIN_USER_ID, report, parse_mode="Markdown")
         print("✅ Admin report sent.")
@@ -156,9 +161,10 @@ def show_menu(msg: types.Message):
     ), parse_mode="Markdown")
 
 
-# === SERVER STARTUP (This is the only part that runs the bot) ===
+# === SERVER STARTUP (This part runs the bot) ===
 if __name__ == "__main__":
     print("Setting up webhook for the bot...")
+    # Set the webhook for the bot. This tells Telegram where to send updates.
     bot.remove_webhook()
     bot.set_webhook(url=f"https://{SERVER_URL}/{BOT_TOKEN}")
     print(f"Webhook is set to https://{SERVER_URL}")
