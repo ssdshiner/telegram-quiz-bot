@@ -45,7 +45,7 @@ def get_message():
 # This route is for Render's health check
 @app.route('/')
 def health_check():
-    return "Bot is alive!", 200
+    return "Bot server is alive!", 200
 
 # === ALL BOT HANDLERS (Your bot's logic) ===
 
@@ -57,8 +57,7 @@ def on_start(msg: types.Message):
         status = bot.get_chat_member(GROUP_ID, user_id).status
         is_member = status in ["creator", "administrator", "member"]
     except Exception as e:
-        return bot.send_message(chat_id, "❌ Bot couldn't check membership. Is it admin?")
-    
+        return bot.send_message(chat_id, "❌ Bot couldn't check membership. Is it admin in the group?")
     if is_member:
         bot.send_message(chat_id, "✅ You're verified! Click the 'Menu' ☰ button below to start the quiz.")
     else:
@@ -74,7 +73,6 @@ def reverify(call):
     chat_id = call.message.chat.id
     try: member = bot.get_chat_member(GROUP_ID, user_id).status
     except: return bot.answer_callback_query(call.id, "❌ Still can't check.")
-    
     if member in ["creator", "administrator", "member"]:
         bot.delete_message(chat_id, call.message.message_id)
         bot.send_message(chat_id, "✅ Verified! You can now start the quiz from the 'Menu' ☰ button.")
@@ -85,6 +83,7 @@ def reverify(call):
 def update_score(msg: types.Message):
     try:
         user_id = msg.from_user.id
+        print(f"Received web_app_data from user {user_id}")
         try:
             status = bot.get_chat_member(GROUP_ID, user_id).status
             if status not in ["creator", "administrator", "member"]:
@@ -100,23 +99,23 @@ def update_score(msg: types.Message):
         user_scores[user_id] = data
         summary_text = "\n".join([f"`{k}`: {v}" for k, v in data.items()])
         
-        # Leaderboard Logic
         score_num = int(data.get("score", 0))
         time_raw = str(data.get("totalTime", "999s")).replace("s", "")
         time_taken = int(time_raw) if time_raw.isdigit() else 999
         leaderboard.append({"name": full_name, "username": username, "score": score_num, "time": time_taken})
         print("✅ Leaderboard updated.")
 
-        # Google Sheets Logging
-        if len(sheet.get_all_values()) < 1:
-            sheet.append_row(["Timestamp", "Full Name", "Username", "Score (%)", "Correct", "Total Questions", "Total Time (s)", "Expected Score (%)"])
-        sheet.append_row([
-            datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S"), full_name, f"@{username}",
-            data.get("score", ""), data.get("correct", ""), data.get("totalQuestions", ""),
-            data.get("totalTime", ""), data.get("expectedScore", "")])
-        print("✅ New row added to Google Sheets.")
+        try:
+            if len(sheet.get_all_values()) < 1:
+                sheet.append_row(["Timestamp", "Full Name", "Username", "Score (%)", "Correct", "Total Questions", "Total Time (s)", "Expected Score (%)"])
+            sheet.append_row([
+                datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S"), full_name, f"@{username}",
+                data.get("score", ""), data.get("correct", ""), data.get("totalQuestions", ""),
+                data.get("totalTime", ""), data.get("expectedScore", "")])
+            print("✅ New row added to Google Sheets.")
+        except Exception as e:
+            print(f"❌ Google Sheets export failed: {e}")
 
-        # Admin Report
         report = f"📅 {datetime.datetime.now().strftime('%d-%m-%Y %H:%M:%S')}\n👤 {full_name} (@{username})\n\n🎓 *Quiz Report:*\n{summary_text}"
         bot.send_message(ADMIN_USER_ID, report, parse_mode="Markdown")
         print("✅ Admin report sent.")
@@ -156,14 +155,15 @@ def show_menu(msg: types.Message):
         "_Your quiz score is recorded automatically after you finish._"
     ), parse_mode="Markdown")
 
+
 # === SERVER STARTUP (This is the only part that runs the bot) ===
 if __name__ == "__main__":
-    print("Starting bot in Webhook mode...")
+    print("Setting up webhook for the bot...")
     bot.remove_webhook()
-    # Set the webhook for the bot. This tells Telegram where to send updates.
     bot.set_webhook(url=f"https://{SERVER_URL}/{BOT_TOKEN}")
     print(f"Webhook is set to https://{SERVER_URL}")
     
     # Run the Flask web server
+    # Render provides the port number via an environment variable.
     port = int(os.environ.get('PORT', 5000))
     app.run(host="0.0.0.0", port=port)
