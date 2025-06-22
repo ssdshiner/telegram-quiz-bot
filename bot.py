@@ -1,5 +1,8 @@
 # 📦 Telegram Quiz Bot with Group Verification & Score Tracking
 import time
+import os
+import threading
+from flask import Flask
 from telebot import TeleBot, types
 import datetime
 import json
@@ -18,6 +21,13 @@ ADMIN_USER_ID = 1019286569
 
 # === INITIALIZATION ===
 bot = TeleBot(BOT_TOKEN)
+# === FLASK WEB SERVER for Render Health Check ===
+app = Flask(__name__)
+
+@app.route('/')
+def health_check():
+    return "Bot is alive and running!"
+# === END OF FLASK APP ===
 # In-memory storage for user scores and leaderboard
 user_scores = {}
 leaderboard = []
@@ -206,6 +216,27 @@ def show_menu(msg: types.Message):
     ), parse_mode="Markdown")
 
 
-# === POLLING ===
-print("Bot is running...")
-bot.infinity_polling()
+# === POLLING & SERVER START ===
+def run_bot_polling():
+    """This function runs the bot polling in a separate thread."""
+    print("Bot polling thread started...")
+    # This loop ensures the bot restarts on any error
+    while True:
+        try:
+            bot.infinity_polling()
+        except Exception as e:
+            print(f"!!! BOT POLLING CRASHED: {e} !!!")
+            print("...Restarting polling in 15 seconds...")
+            time.sleep(15)
+
+if __name__ == '__main__':
+    # Start the bot polling in a non-blocking thread
+    polling_thread = threading.Thread(target=run_bot_polling)
+    polling_thread.daemon = True
+    polling_thread.start()
+
+    # Start the Flask web server to keep the Render service alive
+    # Render provides the port number via an environment variable.
+    port = int(os.environ.get('PORT', 5000))
+    print(f"Starting Flask web server on port {port}...")
+    app.run(host='0.0.0.0', port=port)
