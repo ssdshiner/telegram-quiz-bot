@@ -1,4 +1,4 @@
-# 📦 Telegram Quiz Bot with Webhooks, Group Verification & Score Tracking (Final Version)
+# 📦 Telegram Quiz Bot with Webhooks, Group Verification & Score Tracking (Final Cleaned Version)
 import os
 import json
 import gspread
@@ -7,9 +7,8 @@ from flask import Flask, request
 from telebot import TeleBot, types
 from oauth2client.service_account import ServiceAccountCredentials
 
-# === CONFIGURATION (No changes needed here from your side) ===
+# === CONFIGURATION ===
 BOT_TOKEN = "7896908855:AAEtYIpo0s_BBNzy5hjiVDn2kX_AATH_q7Y"
-# This is your Render URL. I have added it for you.
 SERVER_URL = "telegram-quiz-bot-vvhm.onrender.com" 
 GROUP_ID = -1002788545510
 WEBAPP_URL = "https://studyprosync.web.app"
@@ -17,14 +16,13 @@ ADMIN_USER_ID = 1019286569
 
 # === INITIALIZATION ===
 bot = TeleBot(BOT_TOKEN)
-app = Flask(__name__) # The web server app
+app = Flask(__name__)
 user_scores = {}
 leaderboard = []
 
 # === GOOGLE SHEETS SETUP ===
 try:
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    # Ensure 'credentials.json' is added as a Secret File in Render
     creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
     client = gspread.authorize(creds)
     sheet = client.open_by_key("1QYNo21pmxp1qJmi3m8a7HI-B8zE8YfFGnP7zgoGWndI").sheet1
@@ -35,7 +33,6 @@ except Exception as e:
 # === WEBHOOK HANDLER (This receives ALL updates from Telegram) ===
 @app.route('/' + BOT_TOKEN, methods=['POST'])
 def get_message():
-    """This function is called by Telegram every time there is a new message or event."""
     try:
         json_string = request.get_data().decode('utf-8')
         update = types.Update.de_json(json_string)
@@ -47,10 +44,10 @@ def get_message():
         
 @app.route('/')
 def health_check():
-    """This tells Render that the service is alive."""
     return "Bot is alive and running!", 200
 
-# === START COMMAND (Verifies Group Membership) ===
+# === BOT HANDLERS (Your existing functions - No Changes Needed) ===
+
 @bot.message_handler(commands=["start"])
 def on_start(msg: types.Message):
     user_id = msg.from_user.id
@@ -60,38 +57,27 @@ def on_start(msg: types.Message):
         is_member = status in ["creator", "administrator", "member"]
     except Exception as e:
         return bot.send_message(chat_id, "❌ Bot couldn't check membership. Is it admin in the group?")
-    
     if is_member:
         bot.send_message(chat_id, "✅ You're verified! Click the 'Menu' ☰ button below to start the quiz.")
     else:
-        try:
-            invite_link = bot.export_chat_invite_link(GROUP_ID)
-        except:
-            invite_link = "https://t.me/ca_interdiscussion"
+        try: invite_link = bot.export_chat_invite_link(GROUP_ID)
+        except: invite_link = "https://t.me/ca_interdiscussion"
         markup = types.InlineKeyboardMarkup()
-        markup.add(
-            types.InlineKeyboardButton("📥 Join Group", url=invite_link),
-            types.InlineKeyboardButton("🔁 Re-Verify", callback_data="reverify")
-        )
+        markup.add(types.InlineKeyboardButton("📥 Join Group", url=invite_link), types.InlineKeyboardButton("🔁 Re-Verify", callback_data="reverify"))
         bot.send_message(chat_id, "❌ Please join our group first, then type /start again.", reply_markup=markup)
 
-# === REVERIFY CALLBACK (After User Joins Group) ===
 @bot.callback_query_handler(func=lambda call: call.data == "reverify")
 def reverify(call):
     user_id = call.from_user.id
     chat_id = call.message.chat.id
-    try:
-        member = bot.get_chat_member(GROUP_ID, user_id).status
-    except:
-        return bot.answer_callback_query(call.id, "❌ Still can't check.")
-    
+    try: member = bot.get_chat_member(GROUP_ID, user_id).status
+    except: return bot.answer_callback_query(call.id, "❌ Still can't check.")
     if member in ["creator", "administrator", "member"]:
         bot.delete_message(chat_id, call.message.message_id)
         bot.send_message(chat_id, "✅ Verified! You can now start the quiz from the 'Menu' ☰ button.")
     else:
         bot.answer_callback_query(call.id, "❌ You're still not in the group.")
 
-# === SCORE HANDLER (Receives data from WebApp) ===
 @bot.message_handler(content_types=["web_app_data"])
 def update_score(msg: types.Message):
     try:
@@ -107,66 +93,52 @@ def update_score(msg: types.Message):
         username = msg.from_user.username or "NoUsername"
         full_name = f"{msg.from_user.first_name} {msg.from_user.last_name or ''}".strip()
         text = msg.web_app_data.data
-        
         data = json.loads(text)
         user_scores[user_id] = data
         summary_text = "\n".join([f"`{k}`: {v}" for k, v in data.items()])
         
-        # Leaderboard Logic
         score_num = int(data.get("score", 0))
         time_raw = str(data.get("totalTime", "999s")).replace("s", "")
         time_taken = int(time_raw) if time_raw.isdigit() else 999
         leaderboard.append({"name": full_name, "username": username, "score": score_num, "time": time_taken})
         print("✅ Leaderboard updated.")
 
-        # Google Sheets Logging
         if not sheet.get_all_values():
             sheet.append_row(["Timestamp", "Full Name", "Username", "Score (%)", "Correct", "Total Questions", "Total Time (s)", "Expected Score (%)"])
         sheet.append_row([
             datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S"), full_name, f"@{username}",
             data.get("score", ""), data.get("correct", ""), data.get("totalQuestions", ""),
-            data.get("totalTime", ""), data.get("expectedScore", "")
-        ])
+            data.get("totalTime", ""), data.get("expectedScore", "")])
         print("✅ New row added to Google Sheets.")
 
-        # Admin Report
-        report = f"📅 {datetime.datetime.now().strftime('%d-%m-%Y %H:%M:%S')}\n� {full_name} (@{username})\n\n🎓 *Quiz Report:*\n{summary_text}"
+        report = f"📅 {datetime.datetime.now().strftime('%d-%m-%Y %H:%M:%S')}\n👤 {full_name} (@{username})\n\n🎓 *Quiz Report:*\n{summary_text}"
         bot.send_message(ADMIN_USER_ID, report, parse_mode="Markdown")
         print("✅ Admin report sent.")
-
     except Exception as e:
         print(f"❌ Error in update_score: {e}")
 
-# === SHOW USER'S OWN SCORE ===
 @bot.message_handler(commands=["myscore"])
 def show_score(msg: types.Message):
     user_id = msg.from_user.id
     report = user_scores.get(user_id)
     if report:
-        if isinstance(report, dict):
-            report_text = "\n".join([f"`{k}`: {v}" for k, v in report.items()])
-        else:
-            report_text = report
+        report_text = "\n".join([f"`{k}`: {v}" for k, v in report.items()]) if isinstance(report, dict) else report
         bot.reply_to(msg, f"⭐ *Your last quiz report:*\n{report_text}", parse_mode="Markdown")
     else:
         bot.reply_to(msg, "🙂 You haven't taken a quiz yet. Use /start to begin.")
 
-# === LEADERBOARD COMMAND ===
 @bot.message_handler(commands=["leaderboard"])
 def show_leaderboard(msg: types.Message):
     if not leaderboard:
         bot.send_message(msg.chat.id, "🏆 The leaderboard is empty! Be the first to set a score.")
         return
-    
     sorted_leaderboard = sorted(leaderboard, key=lambda x: (-x["score"], x["time"]))
-    
     text = "🏆 *Top 5 Leaderboard:*\n\n"
     for i, entry in enumerate(sorted_leaderboard[:5], start=1):
         name_display = f"@{entry['username']}" if entry['username'] != "NoUsername" else entry['name']
         text += f"*{i}.* {name_display} – *{entry['score']}%* in {entry['time']}s\n"
     bot.send_message(msg.chat.id, text, parse_mode="Markdown")
 
-# === HELP / MENU COMMAND ===
 @bot.message_handler(commands=["menu"])
 def show_menu(msg: types.Message):
     bot.send_message(msg.chat.id, (
@@ -179,15 +151,11 @@ def show_menu(msg: types.Message):
     ), parse_mode="Markdown")
 
 
-# === SERVER STARTUP (This part is crucial for Webhooks on Render) ===
+# === SERVER STARTUP ===
 if __name__ == "__main__":
     print("Starting bot server...")
-    # Set the webhook for the bot. This tells Telegram where to send updates.
     bot.remove_webhook()
     bot.set_webhook(url=f"https://{SERVER_URL}/{BOT_TOKEN}")
     print(f"Webhook set to https://{SERVER_URL}")
-    
-    # Run the Flask web server
-    # Render provides the port number via an environment variable.
     port = int(os.environ.get('PORT', 5000))
     app.run(host="0.0.0.0", port=port)
