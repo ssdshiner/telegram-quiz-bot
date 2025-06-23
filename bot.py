@@ -40,7 +40,7 @@ except Exception as e:
     print(f"Initial sheet check failed: {e}")
 
 
-# === NEW: Helper function for safe integer conversion ===
+# === Helper function for safe integer conversion ===
 def safe_int(value, default=0):
     """Safely converts a value to an integer, returning a default on failure."""
     try:
@@ -99,7 +99,7 @@ def send_join_group_prompt(chat_id):
     )
 
 
-# === BOT HANDLERS (with updated Leaderboard logic) ===
+# === BOT HANDLERS ===
 
 @bot.message_handler(commands=["start"])
 def on_start(msg: types.Message):
@@ -184,7 +184,11 @@ def show_score(msg: types.Message):
     
     try:
         all_records = sheet.get_all_records()
-        user_records = [rec for rec in all_records if str(rec.get("User ID")) == user_id]
+        # Filter for valid records for this user
+        user_records = [
+            rec for rec in all_records 
+            if str(rec.get("User ID")) == user_id and rec.get("Score (%)") is not None
+        ]
 
         if not user_records:
             return bot.reply_to(msg, "🙂 You haven't completed a quiz yet. Click '🚀 Start Quiz' to begin.")
@@ -206,7 +210,7 @@ def show_score(msg: types.Message):
         bot.reply_to(msg, "An error occurred while fetching your score.")
 
 
-# --- UPDATED: /leaderboard command using the safe_int helper ---
+# --- FULLY REVISED AND ROBUST /leaderboard command ---
 @bot.message_handler(func=lambda msg: msg.text == "🏆 Leaderboard")
 @bot.message_handler(commands=["leaderboard"])
 @membership_required
@@ -216,22 +220,31 @@ def show_leaderboard(msg: types.Message):
 
     try:
         all_records = sheet.get_all_records()
-        if len(all_records) <= 1: # Check if there is more than just the header
+        
+        # --- KEY FIX: Pre-filter records to ensure they are valid for ranking ---
+        valid_records = [
+            r for r in all_records 
+            if r.get("User ID") and r.get("Score (%)") != '' and r.get("Total Time (s)") != ''
+        ]
+
+        if not valid_records:
             return bot.send_message(msg.chat.id, "🏆 The leaderboard is empty! Be the first to set a score.")
         
-        # THIS IS THE KEY FIX: Using safe_int to prevent crashes on empty/bad data
+        # Sort the valid records using the safe_int helper
         sorted_records = sorted(
-            all_records, 
+            valid_records, 
             key=lambda x: (safe_int(x.get("Score (%)")), -safe_int(x.get("Total Time (s)"), 999)), 
             reverse=True
         )
 
+        # Remove duplicates, keeping only the best score for each user
         unique_leaderboard = {}
         for record in sorted_records:
             user_id = record.get("User ID")
-            if user_id and user_id not in unique_leaderboard: # Ensure user_id exists
+            if user_id not in unique_leaderboard:
                 unique_leaderboard[user_id] = record
         
+        # Sort the final unique list
         final_leaderboard = sorted(
             unique_leaderboard.values(), 
             key=lambda x: (safe_int(x.get("Score (%)")), -safe_int(x.get("Total Time (s)"), 999)), 
@@ -252,7 +265,8 @@ def show_leaderboard(msg: types.Message):
         bot.send_message(msg.chat.id, text, parse_mode="Markdown")
 
     except Exception as e:
-        print(f"Error in /leaderboard: {e}")
+        # This now prints the SPECIFIC error to your logs, which is very helpful
+        print(f"CRITICAL ERROR in /leaderboard: {e}")
         bot.send_message(msg.chat.id, "An error occurred while fetching the leaderboard.")
 
 
