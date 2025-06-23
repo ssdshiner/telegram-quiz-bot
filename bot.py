@@ -1,4 +1,4 @@
-# 📦 Telegram Quiz Bot with Webhooks, Group Verification & Persistent Score Tracking (Definitive Final Version)
+# 📦 Telegram Quiz Bot with Webhooks, Group Verification & Persistent Score Tracking (Definitive Final Version 2.0)
 import os
 import json
 import gspread
@@ -12,7 +12,6 @@ from oauth2client.service_account import ServiceAccountCredentials
 BOT_TOKEN = "7896908855:AAEtYIpo0s_BBNzy5hjiVDn2kX_AATH_q7Y"
 SERVER_URL = "telegram-quiz-bot-vvhm.onrender.com" 
 GROUP_ID = -1002788545510
-# WEBAPP_URL = "https://ca-inter-quiz.web.app" # This was the one I mistakenly used.
 WEBAPP_URL = "https://studyprosync.web.app" # This is your correct Web App URL.
 ADMIN_USER_ID = 1019286569
 
@@ -26,7 +25,6 @@ def get_gsheet():
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
         creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
         client = gspread.authorize(creds)
-        # Verified with your original
         return client.open_by_key("1QYNo21pmxp1qJmi3m8a7HI-B8zE8YfFGnP7zgoGWndI").sheet1
     except Exception as e:
         print(f"❌ Google Sheets connection failed: {e}")
@@ -155,20 +153,29 @@ def handle_quiz_start_button(msg: types.Message):
     bot.send_message(msg.chat.id, "Opening the quiz... Good luck! 🤞")
 
 
+# --- THIS IS THE FULLY CORRECTED `update_score` FUNCTION ---
 @bot.message_handler(content_types=["web_app_data"])
 def update_score(msg: types.Message):
     user_id = msg.from_user.id
     try:
-        status = bot.get_chat_member(GROUP_ID, user_.id).status
-        if status not in ["creator", "administrator", "member"]: return
-    except: return
+        # THE CRITICAL TYPO FIX: user_id instead of user_.id
+        status = bot.get_chat_member(GROUP_ID, user_id).status
+        if status not in ["creator", "administrator", "member"]: 
+            print(f"⚠️ Score submission REJECTED for non-member: {user_id}")
+            return
+    except Exception as e: 
+        print(f"⚠️ Could not verify membership for {user_id}. Rejecting score. Error: {e}")
+        return
+
     try:
         data = json.loads(msg.web_app_data.data)
         full_name = f"{msg.from_user.first_name} {msg.from_user.last_name or ''}".strip()
+        
         sheet = get_gsheet()
         if not sheet: 
             bot.send_message(ADMIN_USER_ID, "CRITICAL: Could not connect to Google Sheets to save a score.")
             return
+
         sheet.append_row([
             datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S"),
             user_id,
@@ -178,12 +185,22 @@ def update_score(msg: types.Message):
             data.get("totalTime", ""), data.get("expectedScore", "")
         ])
         print("✅ New row added to Google Sheets.")
-        summary_text = "\n".join([f"`{k}`: {v}" for k, v in data.items()])
-        report = f"🎓 *Quiz Report:*\n👤 {full_name} (@{msg.from_user.username})\n\n{summary_text}"
+        
+        # RESTORED ADMIN REPORT LOGIC
+        summary_text = "\n".join([f"`{key}`: {value}" for key, value in data.items()])
+        report = (
+            f"🎓 *New Quiz Submission!*\n\n"
+            f"👤 **User:** {full_name} (@{msg.from_user.username or 'NoUsername'})\n"
+            f"🆔 **ID:** `{user_id}`\n"
+            f"----------------------------------\n"
+            f"{summary_text}"
+        )
         bot.send_message(ADMIN_USER_ID, report, parse_mode="Markdown")
+        print(f"✅ Admin report for {full_name} sent successfully.")
+
     except Exception as e:
-        print(f"❌ Error in update_score: {e}")
-        bot.send_message(ADMIN_USER_ID, f"Error processing score from {user_id}: {e}")
+        print(f"❌ Error in update_score for user {user_id}: {e}")
+        bot.send_message(ADMIN_USER_ID, f"⚠️ An error occurred while processing a score from user {user_id}.\n\nError: `{e}`", parse_mode="Markdown")
 
 
 @bot.message_handler(func=lambda msg: msg.text == "📊 My Score")
