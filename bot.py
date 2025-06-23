@@ -1,4 +1,4 @@
-# 📦 Telegram Quiz Bot with Webhooks, Group Verification & Persistent Score Tracking (Definitive Final Version 2.0)
+# 📦 Telegram Quiz Bot with Webhooks, Group Verification & Persistent Score Tracking (Final Version with Timezone Fix)
 import os
 import json
 import gspread
@@ -7,12 +7,13 @@ import functools
 from flask import Flask, request
 from telebot import TeleBot, types
 from oauth2client.service_account import ServiceAccountCredentials
+from datetime import timezone # <-- NEW: Import timezone object
 
 # === CONFIGURATION (Verified with your Original) ===
 BOT_TOKEN = "7896908855:AAEtYIpo0s_BBNzy5hjiVDn2kX_AATH_q7Y"
 SERVER_URL = "telegram-quiz-bot-vvhm.onrender.com" 
 GROUP_ID = -1002788545510
-WEBAPP_URL = "https://studyprosync.web.app" # This is your correct Web App URL.
+WEBAPP_URL = "https://studyprosync.web.app"
 ADMIN_USER_ID = 1019286569
 
 # === INITIALIZATION ===
@@ -42,11 +43,8 @@ except Exception as e:
 
 # === Helper function for safe integer conversion ===
 def safe_int(value, default=0):
-    """Safely converts a value to an integer, returning a default on failure."""
-    try:
-        return int(value)
-    except (ValueError, TypeError):
-        return default
+    try: return int(value)
+    except (ValueError, TypeError): return default
 
 # === WEBHOOK & HEALTH CHECK ===
 @app.route('/' + BOT_TOKEN, methods=['POST'])
@@ -153,12 +151,11 @@ def handle_quiz_start_button(msg: types.Message):
     bot.send_message(msg.chat.id, "Opening the quiz... Good luck! 🤞")
 
 
-# --- THIS IS THE FULLY CORRECTED `update_score` FUNCTION ---
+# --- `update_score` FUNCTION WITH TIMEZONE FIX ---
 @bot.message_handler(content_types=["web_app_data"])
 def update_score(msg: types.Message):
     user_id = msg.from_user.id
     try:
-        # THE CRITICAL TYPO FIX: user_id instead of user_.id
         status = bot.get_chat_member(GROUP_ID, user_id).status
         if status not in ["creator", "administrator", "member"]: 
             print(f"⚠️ Score submission REJECTED for non-member: {user_id}")
@@ -176,8 +173,14 @@ def update_score(msg: types.Message):
             bot.send_message(ADMIN_USER_ID, "CRITICAL: Could not connect to Google Sheets to save a score.")
             return
 
+        # --- THIS IS THE KEY FIX FOR TIMEZONE ---
+        # 1. Define the IST timezone (UTC+5:30)
+        ist_tz = timezone(datetime.timedelta(hours=5, minutes=30))
+        # 2. Get the current time in UTC and convert it to IST
+        timestamp_ist = datetime.datetime.now(ist_tz).strftime("%d-%m-%Y %H:%M:%S")
+
         sheet.append_row([
-            datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S"),
+            timestamp_ist, # <-- Using the new IST timestamp
             user_id,
             data.get("name", full_name),
             f"@{msg.from_user.username or 'NoUsername'}",
@@ -186,7 +189,6 @@ def update_score(msg: types.Message):
         ])
         print("✅ New row added to Google Sheets.")
         
-        # RESTORED ADMIN REPORT LOGIC
         summary_text = "\n".join([f"`{key}`: {value}" for key, value in data.items()])
         report = (
             f"🎓 *New Quiz Submission!*\n\n"
@@ -212,7 +214,10 @@ def show_score(msg: types.Message):
     if not sheet: return bot.reply_to(msg, "Sorry, I can't access the score database right now.")
     try:
         all_records = sheet.get_all_records()
-        user_records = [rec for rec in all_records if str(rec.get("User ID")) == user_id and rec.get("Score (%)") is not None]
+        user_records = [
+            rec for rec in all_records 
+            if str(rec.get("User ID")) == user_id and rec.get("Score (%)") is not None
+        ]
         if not user_records:
             return bot.reply_to(msg, "🙂 You haven't completed a quiz yet. Click '🚀 Start Quiz' to begin.")
         last_record = user_records[-1]
@@ -230,7 +235,6 @@ def show_score(msg: types.Message):
         bot.reply_to(msg, "An error occurred while fetching your score.")
 
 
-# --- THE FINAL, MOST ROBUST /leaderboard command ---
 @bot.message_handler(func=lambda msg: msg.text == "🏆 Leaderboard")
 @bot.message_handler(commands=["leaderboard"])
 @membership_required
