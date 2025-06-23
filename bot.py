@@ -1,13 +1,14 @@
-# 📦 Telegram Quiz Bot with Webhooks, Group Verification & Persistent Score Tracking (Final Version with Timezone Fix)
+# 📦 Telegram Quiz Bot with Webhooks, Group Verification & Persistent Score Tracking (Bulletproof Version)
 import os
 import json
 import gspread
 import datetime
 import functools
+import traceback # <-- NEW: Import for detailed error logging
 from flask import Flask, request
 from telebot import TeleBot, types
 from oauth2client.service_account import ServiceAccountCredentials
-from datetime import timezone # <-- NEW: Import timezone object
+from datetime import timezone
 
 # === CONFIGURATION (Verified with your Original) ===
 BOT_TOKEN = "7896908855:AAEtYIpo0s_BBNzy5hjiVDn2kX_AATH_q7Y"
@@ -43,8 +44,11 @@ except Exception as e:
 
 # === Helper function for safe integer conversion ===
 def safe_int(value, default=0):
-    try: return int(value)
-    except (ValueError, TypeError): return default
+    try:
+        # Handle potential float strings like "53.0"
+        return int(float(str(value).strip()))
+    except (ValueError, TypeError):
+        return default
 
 # === WEBHOOK & HEALTH CHECK ===
 @app.route('/' + BOT_TOKEN, methods=['POST'])
@@ -151,7 +155,6 @@ def handle_quiz_start_button(msg: types.Message):
     bot.send_message(msg.chat.id, "Opening the quiz... Good luck! 🤞")
 
 
-# --- `update_score` FUNCTION WITH TIMEZONE FIX ---
 @bot.message_handler(content_types=["web_app_data"])
 def update_score(msg: types.Message):
     user_id = msg.from_user.id
@@ -173,14 +176,11 @@ def update_score(msg: types.Message):
             bot.send_message(ADMIN_USER_ID, "CRITICAL: Could not connect to Google Sheets to save a score.")
             return
 
-        # --- THIS IS THE KEY FIX FOR TIMEZONE ---
-        # 1. Define the IST timezone (UTC+5:30)
         ist_tz = timezone(datetime.timedelta(hours=5, minutes=30))
-        # 2. Get the current time in UTC and convert it to IST
         timestamp_ist = datetime.datetime.now(ist_tz).strftime("%d-%m-%Y %H:%M:%S")
 
         sheet.append_row([
-            timestamp_ist, # <-- Using the new IST timestamp
+            timestamp_ist,
             user_id,
             data.get("name", full_name),
             f"@{msg.from_user.username or 'NoUsername'}",
@@ -216,7 +216,7 @@ def show_score(msg: types.Message):
         all_records = sheet.get_all_records()
         user_records = [
             rec for rec in all_records 
-            if str(rec.get("User ID")) == user_id and rec.get("Score (%)") is not None
+            if str(rec.get("User ID")) == user_id and rec.get("Score (%)") is not None and rec.get("Score (%)") != ''
         ]
         if not user_records:
             return bot.reply_to(msg, "🙂 You haven't completed a quiz yet. Click '🚀 Start Quiz' to begin.")
@@ -235,6 +235,7 @@ def show_score(msg: types.Message):
         bot.reply_to(msg, "An error occurred while fetching your score.")
 
 
+# --- FULLY REVISED AND ROBUST /leaderboard command ---
 @bot.message_handler(func=lambda msg: msg.text == "🏆 Leaderboard")
 @bot.message_handler(commands=["leaderboard"])
 @membership_required
@@ -243,25 +244,36 @@ def show_leaderboard(msg: types.Message):
     if not sheet: return bot.send_message(msg.chat.id, "Sorry, I can't access the leaderboard right now.")
     try:
         all_records = sheet.get_all_records()
-        valid_records = [
-            r for r in all_records 
-            if r.get("User ID") and r.get("Score (%)") != '' and r.get("Total Time (s)") != ''
-        ]
+        
+        valid_records = []
+        # Manually loop to debug and clean data
+        for record in all_records:
+            # Check if essential keys exist and are not empty
+            user_id = record.get("User ID")
+            score = record.get("Score (%)")
+            time = record.get("Total Time (s)")
+            if user_id and score not in [None, ''] and time not in [None, '']:
+                valid_records.append(record)
+
         if not valid_records:
             return bot.send_message(msg.chat.id, "🏆 The leaderboard is empty! Be the first to set a score.")
         
+        # Sort using the safe_int helper
         sorted_records = sorted(
             valid_records, 
             key=lambda x: (safe_int(x.get("Score (%)")), -safe_int(x.get("Total Time (s)"), 999)), 
             reverse=True
         )
 
+        # Find the best score for each unique user
         unique_leaderboard = {}
         for record in sorted_records:
             user_id = record.get("User ID")
-            if user_id and user_id not in unique_leaderboard:
-                unique_leaderboard[user_id] = record
+            if user_id:
+                if user_id not in unique_leaderboard:
+                    unique_leaderboard[user_id] = record
         
+        # Sort the final unique list
         final_leaderboard = sorted(
             unique_leaderboard.values(), 
             key=lambda x: (safe_int(x.get("Score (%)")), -safe_int(x.get("Total Time (s)"), 999)), 
@@ -271,15 +283,20 @@ def show_leaderboard(msg: types.Message):
         text = "🏆 *Universal Leaderboard (Top 5)*\n\n"
         for i, entry in enumerate(final_leaderboard[:5], start=1):
             name_display = entry.get('Username', entry.get('Full Name', 'Unknown'))
-            if name_display.startswith('@'):
+            if name_display and name_display.startswith('@'):
                 name_display = name_display.replace("_", "\\_")
+            
             score_display = entry.get('Score (%)', 'N/A')
             time_display = entry.get('Total Time (s)', 'N/A')
+
             text += f"*{i}.* {name_display} – *{score_display}%* in {time_display}s\n"
         
         bot.send_message(msg.chat.id, text, parse_mode="Markdown")
+
     except Exception as e:
-        print(f"CRITICAL ERROR in /leaderboard: {e}")
+        # This gives us the most detailed error possible in the logs
+        error_details = traceback.format_exc()
+        print(f"CRITICAL ERROR in /leaderboard:\n{error_details}")
         bot.send_message(msg.chat.id, "An error occurred while fetching the leaderboard.")
 
 
