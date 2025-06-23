@@ -8,25 +8,23 @@ from flask import Flask, request
 from telebot import TeleBot, types
 from oauth2client.service_account import ServiceAccountCredentials
 
-# === CONFIGURATION (Verified and Corrected from your Original) ===
+# === CONFIGURATION (Verified and Corrected) ===
 BOT_TOKEN = "7896908855:AAEtYIpo0s_BBNzy5hjiVDn2kX_AATH_q7Y"
 SERVER_URL = "telegram-quiz-bot-vvhm.onrender.com" 
 GROUP_ID = -1002788545510
-WEBAPP_URL = "https://studyprosync.web.app"  # <-- CORRECTED to your original URL
+WEBAPP_URL = "https://studyprosync.web.app"
 ADMIN_USER_ID = 1019286569
 
 # === INITIALIZATION ===
 bot = TeleBot(BOT_TOKEN)
 app = Flask(__name__)
 
-# === GOOGLE SHEETS SETUP (Verified and Corrected from your Original) ===
-# Using a function to re-authorize to prevent timeouts
+# === GOOGLE SHEETS SETUP ===
 def get_gsheet():
     try:
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
         creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
         client = gspread.authorize(creds)
-        # CORRECTED to use your original Sheet Key
         return client.open_by_key("1QYNo21pmxp1qJmi3m8a7HI-B8zE8YfFGnP7zgoGWndI").sheet1
     except Exception as e:
         print(f"❌ Google Sheets connection failed: {e}")
@@ -36,14 +34,21 @@ def get_gsheet():
 try:
     sheet = get_gsheet()
     if sheet and len(sheet.get_all_values()) < 1:
-        # This header matches the data sent by BOTH your web apps now
         sheet.append_row(["Timestamp", "User ID", "Full Name", "Username", "Score (%)", "Correct", "Total Questions", "Total Time (s)", "Expected Score"])
         print("✅ Google Sheets header row created.")
 except Exception as e:
     print(f"Initial sheet check failed: {e}")
 
 
-# === WEBHOOK & HEALTH CHECK (No changes needed) ===
+# === NEW: Helper function for safe integer conversion ===
+def safe_int(value, default=0):
+    """Safely converts a value to an integer, returning a default on failure."""
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        return default
+
+# === WEBHOOK & HEALTH CHECK (No changes) ===
 @app.route('/' + BOT_TOKEN, methods=['POST'])
 def get_message():
     try:
@@ -59,7 +64,7 @@ def health_check():
     return "Bot server is alive!", 200
 
 
-# === MEMBERSHIP VERIFICATION DECORATOR (Latest improved logic) ===
+# === MEMBERSHIP VERIFICATION & KEYBOARD HELPERS (No changes) ===
 def membership_required(func):
     @functools.wraps(func)
     def wrapper(msg: types.Message, *args, **kwargs):
@@ -73,11 +78,8 @@ def membership_required(func):
         send_join_group_prompt(msg.chat.id)
     return wrapper
 
-
-# === KEYBOARD & PROMPT HELPERS (Latest improved logic) ===
 def create_main_menu_keyboard():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    # This button opens your CORRECT web app
     quiz_button = types.KeyboardButton("🚀 Start Quiz", web_app=types.WebAppInfo(WEBAPP_URL))
     markup.add(quiz_button)
     markup.add(types.KeyboardButton("🏆 Leaderboard"), types.KeyboardButton("📊 My Score"))
@@ -97,7 +99,7 @@ def send_join_group_prompt(chat_id):
     )
 
 
-# === BOT HANDLERS (Latest improved logic) ===
+# === BOT HANDLERS (with updated Leaderboard logic) ===
 
 @bot.message_handler(commands=["start"])
 def on_start(msg: types.Message):
@@ -130,7 +132,6 @@ def reverify(call: types.CallbackQuery):
     except Exception:
         bot.answer_callback_query(call.id, "❌ Error checking membership.", show_alert=True)
 
-# This handler checks membership before opening the web app
 @bot.message_handler(func=lambda msg: msg.text == "🚀 Start Quiz")
 @membership_required
 def handle_quiz_start_button(msg: types.Message):
@@ -205,6 +206,7 @@ def show_score(msg: types.Message):
         bot.reply_to(msg, "An error occurred while fetching your score.")
 
 
+# --- UPDATED: /leaderboard command using the safe_int helper ---
 @bot.message_handler(func=lambda msg: msg.text == "🏆 Leaderboard")
 @bot.message_handler(commands=["leaderboard"])
 @membership_required
@@ -214,25 +216,38 @@ def show_leaderboard(msg: types.Message):
 
     try:
         all_records = sheet.get_all_records()
-        if not all_records:
+        if len(all_records) <= 1: # Check if there is more than just the header
             return bot.send_message(msg.chat.id, "🏆 The leaderboard is empty! Be the first to set a score.")
         
-        sorted_records = sorted(all_records, key=lambda x: (int(x.get("Score (%)", 0)), -int(x.get("Total Time (s)", 999))), reverse=True)
+        # THIS IS THE KEY FIX: Using safe_int to prevent crashes on empty/bad data
+        sorted_records = sorted(
+            all_records, 
+            key=lambda x: (safe_int(x.get("Score (%)")), -safe_int(x.get("Total Time (s)"), 999)), 
+            reverse=True
+        )
 
         unique_leaderboard = {}
         for record in sorted_records:
             user_id = record.get("User ID")
-            if user_id not in unique_leaderboard:
+            if user_id and user_id not in unique_leaderboard: # Ensure user_id exists
                 unique_leaderboard[user_id] = record
         
-        final_leaderboard = sorted(unique_leaderboard.values(), key=lambda x: (int(x.get("Score (%)", 0)), -int(x.get("Total Time (s)", 999))), reverse=True)
+        final_leaderboard = sorted(
+            unique_leaderboard.values(), 
+            key=lambda x: (safe_int(x.get("Score (%)")), -safe_int(x.get("Total Time (s)"), 999)), 
+            reverse=True
+        )
 
         text = "🏆 *Universal Leaderboard (Top 5)*\n\n"
         for i, entry in enumerate(final_leaderboard[:5], start=1):
             name_display = entry.get('Username', entry.get('Full Name', 'Unknown'))
             if name_display.startswith('@'):
                 name_display = name_display.replace("_", "\\_")
-            text += f"*{i}.* {name_display} – *{entry.get('Score (%)', 'N/A')}%* in {entry.get('Total Time (s)', 'N/A')}s\n"
+            
+            score_display = entry.get('Score (%)', 'N/A')
+            time_display = entry.get('Total Time (s)', 'N/A')
+
+            text += f"*{i}.* {name_display} – *{score_display}%* in {time_display}s\n"
         
         bot.send_message(msg.chat.id, text, parse_mode="Markdown")
 
@@ -247,7 +262,7 @@ def handle_other_messages(msg: types.Message):
     bot.reply_to(msg, "I'm not sure what you mean. Please use the buttons below.")
 
 
-# === SERVER STARTUP (No changes needed) ===
+# === SERVER STARTUP (No changes) ===
 if __name__ == "__main__":
     print("Setting up webhook for the bot...")
     bot.remove_webhook()
