@@ -1,4 +1,4 @@
-# 📦 Telegram Quiz Bot with Webhooks, Group Verification & Persistent Score Tracking (Final Production Version)
+# 📦 Telegram Quiz Bot with Webhooks, Group Verification & Persistent Score Tracking (Definitive Final Version)
 import os
 import json
 import gspread
@@ -8,11 +8,12 @@ from flask import Flask, request
 from telebot import TeleBot, types
 from oauth2client.service_account import ServiceAccountCredentials
 
-# === CONFIGURATION (Verified and Corrected) ===
+# === CONFIGURATION (Verified with your Original) ===
 BOT_TOKEN = "7896908855:AAEtYIpo0s_BBNzy5hjiVDn2kX_AATH_q7Y"
 SERVER_URL = "telegram-quiz-bot-vvhm.onrender.com" 
 GROUP_ID = -1002788545510
-WEBAPP_URL = "https://studyprosync.web.app"
+# WEBAPP_URL = "https://ca-inter-quiz.web.app" # This was the one I mistakenly used.
+WEBAPP_URL = "https://studyprosync.web.app" # This is your correct Web App URL.
 ADMIN_USER_ID = 1019286569
 
 # === INITIALIZATION ===
@@ -25,6 +26,7 @@ def get_gsheet():
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
         creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
         client = gspread.authorize(creds)
+        # Verified with your original
         return client.open_by_key("1QYNo21pmxp1qJmi3m8a7HI-B8zE8YfFGnP7zgoGWndI").sheet1
     except Exception as e:
         print(f"❌ Google Sheets connection failed: {e}")
@@ -48,7 +50,7 @@ def safe_int(value, default=0):
     except (ValueError, TypeError):
         return default
 
-# === WEBHOOK & HEALTH CHECK (No changes) ===
+# === WEBHOOK & HEALTH CHECK ===
 @app.route('/' + BOT_TOKEN, methods=['POST'])
 def get_message():
     try:
@@ -64,7 +66,7 @@ def health_check():
     return "Bot server is alive!", 200
 
 
-# === MEMBERSHIP VERIFICATION & KEYBOARD HELPERS (No changes) ===
+# === MEMBERSHIP VERIFICATION & KEYBOARD HELPERS ===
 def membership_required(func):
     @functools.wraps(func)
     def wrapper(msg: types.Message, *args, **kwargs):
@@ -101,17 +103,36 @@ def send_join_group_prompt(chat_id):
 
 # === BOT HANDLERS ===
 
+# --- ADMIN ANNOUNCEMENT FEATURE ---
+@bot.message_handler(commands=['announce'])
+def handle_announce_command(msg: types.Message):
+    if msg.from_user.id != ADMIN_USER_ID: return
+    prompt = bot.send_message(
+        msg.chat.id,
+        "🎤 **Broadcast Mode**\n\nPlease send the message you want to broadcast.\n\nType /cancel to abort.",
+        parse_mode="Markdown"
+    )
+    bot.register_next_step_handler(prompt, process_announcement_message)
+
+def process_announcement_message(msg: types.Message):
+    if msg.text and msg.text.lower() == '/cancel':
+        bot.send_message(msg.chat.id, "Broadcast cancelled.")
+        return
+    try:
+        bot.copy_message(chat_id=GROUP_ID, from_chat_id=msg.chat.id, message_id=msg.message_id)
+        bot.send_message(msg.chat.id, "✅ Announcement sent to the group successfully!")
+    except Exception as e:
+        print(f"Error during announcement broadcast: {e}")
+        bot.send_message(msg.chat.id, f"❌ Failed to send announcement. Error: {e}")
+
+
 @bot.message_handler(commands=["start"])
 def on_start(msg: types.Message):
     user_id = msg.from_user.id
     try:
         status = bot.get_chat_member(GROUP_ID, user_id).status
         if status in ["creator", "administrator", "member"]:
-            bot.send_message(
-                msg.chat.id, 
-                f"✅ Welcome, {msg.from_user.first_name}! Use the buttons below.",
-                reply_markup=create_main_menu_keyboard()
-            )
+            bot.send_message(msg.chat.id, f"✅ Welcome, {msg.from_user.first_name}! Use the buttons below.", reply_markup=create_main_menu_keyboard())
         else: send_join_group_prompt(msg.chat.id)
     except Exception:
         send_join_group_prompt(msg.chat.id)
@@ -123,11 +144,7 @@ def reverify(call: types.CallbackQuery):
         if status in ["creator", "administrator", "member"]:
             bot.delete_message(call.message.chat.id, call.message.message_id)
             bot.answer_callback_query(call.id, "✅ Verification Successful!")
-            bot.send_message(
-                call.message.chat.id,
-                f"✅ Verified! Welcome, {call.from_user.first_name}!",
-                reply_markup=create_main_menu_keyboard()
-            )
+            bot.send_message(call.message.chat.id, f"✅ Verified! Welcome, {call.from_user.first_name}!", reply_markup=create_main_menu_keyboard())
         else: bot.answer_callback_query(call.id, "❌ You're still not in the group.", show_alert=True)
     except Exception:
         bot.answer_callback_query(call.id, "❌ Error checking membership.", show_alert=True)
@@ -142,19 +159,16 @@ def handle_quiz_start_button(msg: types.Message):
 def update_score(msg: types.Message):
     user_id = msg.from_user.id
     try:
-        status = bot.get_chat_member(GROUP_ID, user_id).status
+        status = bot.get_chat_member(GROUP_ID, user_.id).status
         if status not in ["creator", "administrator", "member"]: return
     except: return
-
     try:
         data = json.loads(msg.web_app_data.data)
         full_name = f"{msg.from_user.first_name} {msg.from_user.last_name or ''}".strip()
-        
         sheet = get_gsheet()
         if not sheet: 
             bot.send_message(ADMIN_USER_ID, "CRITICAL: Could not connect to Google Sheets to save a score.")
             return
-
         sheet.append_row([
             datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S"),
             user_id,
@@ -164,11 +178,9 @@ def update_score(msg: types.Message):
             data.get("totalTime", ""), data.get("expectedScore", "")
         ])
         print("✅ New row added to Google Sheets.")
-        
         summary_text = "\n".join([f"`{k}`: {v}" for k, v in data.items()])
         report = f"🎓 *Quiz Report:*\n👤 {full_name} (@{msg.from_user.username})\n\n{summary_text}"
         bot.send_message(ADMIN_USER_ID, report, parse_mode="Markdown")
-
     except Exception as e:
         print(f"❌ Error in update_score: {e}")
         bot.send_message(ADMIN_USER_ID, f"Error processing score from {user_id}: {e}")
@@ -181,20 +193,12 @@ def show_score(msg: types.Message):
     user_id = str(msg.from_user.id)
     sheet = get_gsheet()
     if not sheet: return bot.reply_to(msg, "Sorry, I can't access the score database right now.")
-    
     try:
         all_records = sheet.get_all_records()
-        # Filter for valid records for this user
-        user_records = [
-            rec for rec in all_records 
-            if str(rec.get("User ID")) == user_id and rec.get("Score (%)") is not None
-        ]
-
+        user_records = [rec for rec in all_records if str(rec.get("User ID")) == user_id and rec.get("Score (%)") is not None]
         if not user_records:
             return bot.reply_to(msg, "🙂 You haven't completed a quiz yet. Click '🚀 Start Quiz' to begin.")
-        
         last_record = user_records[-1]
-        
         report_text = (
             f"⭐ *Your Last Quiz Report*\n"
             f"*(from {last_record['Timestamp']})*\n\n"
@@ -204,47 +208,39 @@ def show_score(msg: types.Message):
             f"▪️ *Your Target:* {last_record.get('Expected Score', 'N/A')}"
         )
         bot.reply_to(msg, report_text, parse_mode="Markdown")
-
     except Exception as e:
         print(f"Error in /myscore: {e}")
         bot.reply_to(msg, "An error occurred while fetching your score.")
 
 
-# --- FULLY REVISED AND ROBUST /leaderboard command ---
+# --- THE FINAL, MOST ROBUST /leaderboard command ---
 @bot.message_handler(func=lambda msg: msg.text == "🏆 Leaderboard")
 @bot.message_handler(commands=["leaderboard"])
 @membership_required
 def show_leaderboard(msg: types.Message):
     sheet = get_gsheet()
     if not sheet: return bot.send_message(msg.chat.id, "Sorry, I can't access the leaderboard right now.")
-
     try:
         all_records = sheet.get_all_records()
-        
-        # --- KEY FIX: Pre-filter records to ensure they are valid for ranking ---
         valid_records = [
             r for r in all_records 
             if r.get("User ID") and r.get("Score (%)") != '' and r.get("Total Time (s)") != ''
         ]
-
         if not valid_records:
             return bot.send_message(msg.chat.id, "🏆 The leaderboard is empty! Be the first to set a score.")
         
-        # Sort the valid records using the safe_int helper
         sorted_records = sorted(
             valid_records, 
             key=lambda x: (safe_int(x.get("Score (%)")), -safe_int(x.get("Total Time (s)"), 999)), 
             reverse=True
         )
 
-        # Remove duplicates, keeping only the best score for each user
         unique_leaderboard = {}
         for record in sorted_records:
             user_id = record.get("User ID")
-            if user_id not in unique_leaderboard:
+            if user_id and user_id not in unique_leaderboard:
                 unique_leaderboard[user_id] = record
         
-        # Sort the final unique list
         final_leaderboard = sorted(
             unique_leaderboard.values(), 
             key=lambda x: (safe_int(x.get("Score (%)")), -safe_int(x.get("Total Time (s)"), 999)), 
@@ -256,16 +252,12 @@ def show_leaderboard(msg: types.Message):
             name_display = entry.get('Username', entry.get('Full Name', 'Unknown'))
             if name_display.startswith('@'):
                 name_display = name_display.replace("_", "\\_")
-            
             score_display = entry.get('Score (%)', 'N/A')
             time_display = entry.get('Total Time (s)', 'N/A')
-
             text += f"*{i}.* {name_display} – *{score_display}%* in {time_display}s\n"
         
         bot.send_message(msg.chat.id, text, parse_mode="Markdown")
-
     except Exception as e:
-        # This now prints the SPECIFIC error to your logs, which is very helpful
         print(f"CRITICAL ERROR in /leaderboard: {e}")
         bot.send_message(msg.chat.id, "An error occurred while fetching the leaderboard.")
 
@@ -276,7 +268,7 @@ def handle_other_messages(msg: types.Message):
     bot.reply_to(msg, "I'm not sure what you mean. Please use the buttons below.")
 
 
-# === SERVER STARTUP (No changes) ===
+# === SERVER STARTUP ===
 if __name__ == "__main__":
     print("Setting up webhook for the bot...")
     bot.remove_webhook()
