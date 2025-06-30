@@ -81,23 +81,6 @@ def initialize_google_sheet():
     except Exception as e:
         print(f"❌ Initial sheet setup failed: {e}")
 
-def get_quiz_bank_sheet():
-    """
-    Connects to the separate Google Sheet 'Quiz Questions'.
-    Sheet ID: 1Ou-3zBzkZqsj6jXFT0C0HsXgMd_AltymWddZI6OI7Vw
-    """
-    try:
-        creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", [
-            "https://spreadsheets.google.com/feeds",
-            "https://www.googleapis.com/auth/drive"
-        ])
-        client = gspread.authorize(creds)
-        sheet = client.open_by_key("1Ou-3zBzkZqsj6jXFT0C0HsXgMd_AltymWddZI6OI7Vw").worksheet("Sheet1")
-        return sheet
-    except Exception as e:
-        print(f"❌ Quiz Sheet error: {e}")
-        return None
-
 # ===== UTILITY FUNCTIONS =====
 def safe_int(value, default=0):
     """Safely convert value to integer with fallback."""
@@ -386,63 +369,6 @@ def handle_ajka_quiz_command(msg: types.Message):
     )
     
     bot.reply_to(msg, details_text, parse_mode="Markdown")
-
-
-@bot.message_handler(commands=['importsheetquiz'])
-def import_quiz_from_sheet(msg: types.Message):
-    ADMIN_IDS = [1019286569]  # Only these users can import sheet quizzes
-
-    if msg.from_user.id not in ADMIN_IDS:
-        bot.reply_to(msg, "🚫 You are not authorized to import quizzes.")
-        return
-
-    sheet = get_quiz_bank_sheet()
-    if not sheet:
-        bot.reply_to(msg, "❌ Sheet not found or access error.")
-        return
-
-    try:
-        rows = sheet.get_all_values()[1:]  # Skip header
-        count = 0
-        skipped = []
-
-        for i, row in enumerate(rows, start=2):  # i = row number in Sheet
-            if len(row) < 7:
-                skipped.append(f"Row {i}: Not enough columns")
-                continue
-
-            question, a, b, c, d, correct, explanation = [cell.strip() for cell in row[:7]]
-            if not all([question, a, b, c, d, correct, explanation]):
-                skipped.append(f"Row {i}: Empty fields found")
-                continue
-
-            correct_index = {"A": 0, "B": 1, "C": 2, "D": 3}.get(correct.upper(), -1)
-            if correct_index == -1:
-                skipped.append(f"Row {i}: Invalid correct option '{correct}'")
-                continue
-
-            bot.send_poll(
-                chat_id=GROUP_ID,
-                question=question,
-                options=[a, b, c, d],
-                type='quiz',
-                correct_option_id=correct_index,
-                explanation=f"✅ {explanation}",
-                is_anonymous=False
-            )
-            count += 1
-            time.sleep(1.5)
-
-        response = f"✅ {count} questions imported from Google Sheet."
-        if skipped:
-            response += f"\n⚠️ Skipped {len(skipped)} row(s):\n" + "\n".join(skipped[:5])
-            if len(skipped) > 5:
-                response += f"\n...and {len(skipped)-5} more."
-        bot.reply_to(msg, response)
-
-    except Exception as e:
-        bot.reply_to(msg, f"❌ Import error: {e}")
-
 
 @bot.message_handler(commands=['sujhavdo'])
 @membership_required
@@ -1686,23 +1612,22 @@ def ignore_all_group_messages(msg: types.Message):
     print(f"🚫 Ignored group message: {msg.text} from {get_user_display_name(msg.from_user)}")
 
 
-
 # ===== MAIN EXECUTION =====
 if __name__ == "__main__":
     try:
         # Initialize everything
         initialize_bot()
-
-        # Get port from environment (Render needs this)
+        
+        # Get port from environment (required for hosting services)
         port = int(os.environ.get("PORT", 8080))
-
+        
         print(f"🌐 Starting Flask server on port {port}...")
         print("🤖 Bot is now running and ready to receive messages!")
         print("=" * 50)
-
-        # Start the Flask server
+        
+        # Start the Flask server (this blocks)
         app.run(host="0.0.0.0", port=port, debug=False)
-
+        
     except KeyboardInterrupt:
         print("\n⚠️ Bot stopped by user")
     except Exception as e:
@@ -1711,4 +1636,3 @@ if __name__ == "__main__":
     finally:
         print("👋 Bot shutting down...")
         cleanup_on_shutdown()
-
