@@ -1604,7 +1604,7 @@ def ignore_group_chatter(msg: types.Message):
 # ===== STRICT GROUP FILTER (BLOCK ALL EXCEPT /ajkaquiz) =====
 @bot.message_handler(func=lambda msg: is_group_message(msg))
 @error_handler
-def ignore_all_group_messages(msg: types.Message):
+def ignore_all_group_messages(msg: types.Message): 
     """Allow only /ajkaquiz command in group. Ignore everything else."""
     if msg.text and msg.text.strip().startswith("/ajkaquiz"):
         return  # Let /ajkaquiz be handled by its own handler
