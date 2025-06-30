@@ -339,8 +339,10 @@ def status_check():
 def handle_start_command(msg: types.Message):
     """Handle the /start command for both private and group chats."""
     # Don't respond to group messages unless bot is mentioned
-    if is_group_message(msg) and not is_bot_mentioned(msg):
-        return
+    if is_group_message(msg):
+    print(f"🚫 Ignoring /start in group by {msg.from_user.id}")
+    return
+
     
     user_id = msg.from_user.id
     user_name = msg.from_user.first_name
@@ -1404,28 +1406,7 @@ def handle_quiz_button(msg: types.Message):
     
     bot.send_message(msg.chat.id, response, parse_mode="Markdown")
 
-# ===== GROUP MESSAGE FILTERING =====
-@bot.message_handler(func=lambda message: is_group_message(message) and is_bot_mentioned(message))
-@error_handler
-def handle_group_mentions(msg: types.Message):
-    """Handle messages in groups where bot is mentioned."""
-    # Only respond to admin mentions in groups
-    if not is_admin(msg.from_user.id):
-        print(f"ℹ️ Non-admin mentioned bot in group: {msg.from_user.id}")
-        return
-    
-    # Admin mentioned the bot - provide help
-    response = (
-        f"Hello Admin! 👋\n\n"
-        f"I'm ready to help you manage the group.\n"
-        f"Use `/madad` to see all available admin commands.\n\n"
-        f"**Quick Actions:**\n"
-        f"• `/ghoshna` - Send announcement\n"
-        f"• `/matdaan` - Create poll\n"
-        f"• `/tezquiz` - Quick quiz"
-    )
-    
-    bot.reply_to(msg, response, parse_mode="Markdown")
+
 
 # ===== FALLBACK HANDLERS =====
 @bot.message_handler(func=lambda message: not is_group_message(message))
