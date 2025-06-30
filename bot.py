@@ -334,33 +334,23 @@ def status_check():
     return status, 200
 
 # ===== BASIC BOT HANDLERS =====
-@bot.message_handler(commands=['start'])
-@error_handler
-def handle_start_command(msg: types.Message):
-    """Handle the /start command for both private and group chats."""
-    # Don't respond to group messages unless bot is mentioned
+@bot.message_handler(commands=["start"])
+def handle_start_command(msg):
     if is_group_message(msg):
-    print(f"🚫 Ignoring /start in group by {msg.from_user.id}")
-    return
+        print(f"🚫 Ignoring /start in group by {msg.from_user.id}")
+        return
 
-    
-    user_id = msg.from_user.id
-    user_name = msg.from_user.first_name
-    
-    if check_membership(user_id):
-        welcome_text = f"✅ Welcome, {user_name}! I'm your quiz bot assistant."
-        
-        if is_group_message(msg):
-            welcome_text += "\n\n💡 *Tip: Use private chat with me for better experience!*"
-        else:
-            welcome_text += "\n\nUse the buttons below or type /ajkaquiz to see today's quiz details."
-            
-        bot.send_message(
-            msg.chat.id, 
-            welcome_text, 
-            reply_markup=create_main_menu_keyboard(), 
-            parse_mode="Markdown"
-        )
+    user = msg.from_user
+    welcome_text = (
+        f"👋 Hello {user.first_name or 'User'}!\n"
+        "I'm your quiz bot 🤖\n\n"
+        "You can start practicing MCQs, receive scores and ranks 🧠✨\n"
+        "Use /ajkaquiz in the group to launch public quiz.\n"
+        "Use /importsheetquiz or /pastequiz to import custom questions.\n\n"
+        "🏁 Let’s get started!"
+    )
+    bot.send_message(msg.chat.id, welcome_text)
+
     else:
         send_join_group_prompt(msg.chat.id)
 
