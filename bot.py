@@ -334,23 +334,31 @@ def status_check():
     return status, 200
 
 # ===== BASIC BOT HANDLERS =====
-@bot.message_handler(commands=["start"])
-def handle_start_command(msg):
-    if is_group_message(msg):
-        print(f"🚫 Ignoring /start in group by {msg.from_user.id}")
+@bot.message_handler(commands=['start'])
+@error_handler
+def handle_start_command(msg: types.Message):
+    """Handle the /start command for both private and group chats."""
+    # Don't respond to group messages unless bot is mentioned
+    if is_group_message(msg) and not is_bot_mentioned(msg):
         return
-
-    user = msg.from_user
-    welcome_text = (
-        f"👋 Hello {user.first_name or 'User'}!\n"
-        "I'm your quiz bot 🤖\n\n"
-        "You can start practicing MCQs, receive scores and ranks 🧠✨\n"
-        "Use /ajkaquiz in the group to launch public quiz.\n"
-        "Use /importsheetquiz or /pastequiz to import custom questions.\n\n"
-        "🏁 Let’s get started!"
-    )
-    bot.send_message(msg.chat.id, welcome_text)
-
+    
+    user_id = msg.from_user.id
+    user_name = msg.from_user.first_name
+    
+    if check_membership(user_id):
+        welcome_text = f"✅ Welcome, {user_name}! I'm your quiz bot assistant."
+        
+        if is_group_message(msg):
+            welcome_text += "\n\n💡 *Tip: Use private chat with me for better experience!*"
+        else:
+            welcome_text += "\n\nUse the buttons below or type /ajkaquiz to see today's quiz details."
+            
+        bot.send_message(
+            msg.chat.id, 
+            welcome_text, 
+            reply_markup=create_main_menu_keyboard(), 
+            parse_mode="Markdown"
+        )
     else:
         send_join_group_prompt(msg.chat.id)
 
@@ -1396,7 +1404,28 @@ def handle_quiz_button(msg: types.Message):
     
     bot.send_message(msg.chat.id, response, parse_mode="Markdown")
 
-
+# ===== GROUP MESSAGE FILTERING =====
+@bot.message_handler(func=lambda message: is_group_message(message) and is_bot_mentioned(message))
+@error_handler
+def handle_group_mentions(msg: types.Message):
+    """Handle messages in groups where bot is mentioned."""
+    # Only respond to admin mentions in groups
+    if not is_admin(msg.from_user.id):
+        print(f"ℹ️ Non-admin mentioned bot in group: {msg.from_user.id}")
+        return
+    
+    # Admin mentioned the bot - provide help
+    response = (
+        f"Hello Admin! 👋\n\n"
+        f"I'm ready to help you manage the group.\n"
+        f"Use `/madad` to see all available admin commands.\n\n"
+        f"**Quick Actions:**\n"
+        f"• `/ghoshna` - Send announcement\n"
+        f"• `/matdaan` - Create poll\n"
+        f"• `/tezquiz` - Quick quiz"
+    )
+    
+    bot.reply_to(msg, response, parse_mode="Markdown")
 
 # ===== FALLBACK HANDLERS =====
 @bot.message_handler(func=lambda message: not is_group_message(message))
