@@ -125,11 +125,67 @@ def initialize_gsheet():
 # =============================================================================
 # 4. UTILITY & HELPER FUNCTIONS
 # =============================================================================
-
+# ADD THIS NEW HELPER FUNCTION
+def report_error_to_admin(error_message: str):
+    """Sends a formatted error message to the admin."""
+    try:
+        # We limit the length to avoid hitting Telegram's message size limit
+        error_text = f"🚨 **BOT ERROR** 🚨\n\nAn error occurred:\n\n<pre>{error_message[:3500]}</pre>"
+        bot.send_message(ADMIN_USER_ID, error_text, parse_mode="HTML")
+    except Exception as e:
+        # If sending the error fails, we just print it.
+        print(f"CRITICAL: Failed to report error to admin: {e}")
 def is_admin(user_id):
     """Checks if a user is the bot admin."""
     return user_id == ADMIN_USER_ID
+# ADD THIS NEW HELPER FUNCTION
+def post_daily_quiz():
+    """Fetches a random, unused question from Supabase and posts it as a quiz."""
+    if not supabase: return
 
+    try:
+        # Fetch one random, unused question.
+        # Supabase doesn't have a built-in random function in the Python client's filter,
+        # so we fetch a few and pick one. A more scalable solution for huge tables
+        # would involve a database function (view), but this is great for hundreds of questions.
+        response = supabase.table('questions').select('*').eq('used', 'false').limit(10).execute()
+        
+        if not response.data:
+            # If no unused questions, reset all and try again
+            print("ℹ️ No unused questions found. Resetting all questions to unused.")
+            supabase.table('questions').update({'used': 'false'}).neq('id', 0).execute()
+            response = supabase.table('questions').select('*').eq('used', 'false').limit(10).execute()
+            if not response.data:
+                print("❌ No questions found in the database at all.")
+                return
+
+        # Pick a random question from the fetched list
+        quiz_data = random.choice(response.data)
+        
+        question_id = quiz_data['id']
+        question_text = quiz_data['question_text']
+        options = quiz_data['options']
+        correct_index = quiz_data['correct_index']
+        
+        # Post the poll to the group
+        poll = bot.send_poll(
+            chat_id=GROUP_ID,
+            question=f"🧠 Daily Automated Quiz 🧠\n\n{question_text}",
+            options=options,
+            type='quiz',
+            correct_option_id=correct_index,
+            is_anonymous=False,
+            open_period=300 # 5-minute quiz
+        )
+        bot.send_message(GROUP_ID, "👆 You have 5 minutes to answer the daily quiz! Good luck!", reply_to_message_id=poll.message_id)
+
+        # Mark the question as used in the database
+        supabase.table('questions').update({'used': 'true'}).eq('id', question_id).execute()
+        print(f"✅ Daily quiz posted using question ID: {question_id}")
+
+    except Exception as e:
+        print(f"❌ Failed to post daily quiz: {e}")
+        report_error_to_admin(f"Failed to post daily quiz:\n{traceback.format_exc()}")
 def admin_required(func):
     """Decorator to restrict a command to the admin."""
     @functools.wraps(func)
@@ -304,57 +360,66 @@ def save_data():
 # =============================================================================
 # 6. BACKGROUND SCHEDULER (Calls the new save_data function)
 # =============================================================================
+# This global variable prevents the bot from posting the quiz multiple times
+## REPLACEMENT CODE
+# This global variable prevents the bot from re-posting a quiz if it restarts.
+last_quiz_posted_hour = -1 
+
 def background_worker():
-    """A background thread to handle scheduled tasks."""
-    print("Background worker thread started.")
+    global last_quiz_posted_hour
     while True:
         try:
-            current_time = datetime.datetime.now()
-            
-            # --- Process scheduled messages ---
-            messages_to_remove = []
-            for msg_details in scheduled_messages:
-                if current_time >= msg_details['send_time']:
-                    try:
-                        bot.send_message(
-                            GROUP_ID,
-                            msg_details['message'],
-                            parse_mode="Markdown" if msg_details.get('markdown') else None
-                        )
-                        print(f"✅ Scheduled message sent: {msg_details['message'][:50]}...")
-                    except Exception as e:
-                        print(f"❌ Failed to send scheduled message: {e}")
-                    
-                    if not msg_details.get('recurring', False):
-                        messages_to_remove.append(msg_details)
-                    else: # Reschedule recurring daily message for the next day
-                        msg_details['send_time'] += datetime.timedelta(days=1)
+            # Use a timezone-aware current time (e.g., IST for India)
+            ist_tz = timezone(timedelta(hours=5, minutes=30))
+            current_time = datetime.datetime.now(ist_tz)
+            current_hour = current_time.hour
 
-            for msg in messages_to_remove:
-                scheduled_messages.remove(msg)
+            # --- Automated Bi-Hourly Quiz Trigger ---
+            # We use the modulo operator (%) to check if the hour is a multiple of 2.
+            # This will trigger at hours 0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22.
+            is_quiz_time = (current_hour % 2 == 0)
+
+            # Check if it's quiz time AND we haven't already posted for this specific hour.
+            if is_quiz_time and last_quiz_posted_hour != current_hour:
+                print(f"⏰ It's {current_hour}:00, time for a bi-hourly quiz! Posting...")
+                post_daily_quiz() # The function name is still fine, it just posts a quiz
+                last_quiz_posted_hour = current_hour # Mark this hour as done
+
+            # --- Process scheduled messages ---
+            messages_to_remove = [msg for msg in scheduled_messages if datetime.datetime.now() >= msg['send_time']]
+            for msg_details in messages_to_remove:
+                try:
+                    bot.send_message(
+                        GROUP_ID,
+                        msg_details['message'],
+                        parse_mode="Markdown" if msg_details.get('markdown') else None
+                    )
+                except Exception as e:
+                    print(f"❌ Failed to send scheduled message: {e}")
+                
+                if not msg_details.get('recurring', False):
+                    scheduled_messages.remove(msg_details)
+                else:
+                    msg_details['send_time'] += datetime.timedelta(days=1)
 
             # --- Process active polls ---
-            polls_to_remove = []
-            for poll in active_polls:
-                if 'close_time' in poll and isinstance(poll['close_time'], datetime.datetime) and current_time >= poll['close_time']:
-                    try:
-                        bot.stop_poll(poll['chat_id'], poll['message_id'])
-                        print(f"✅ Stopped poll {poll['message_id']} in chat {poll['chat_id']}.")
-                    except Exception as e:
-                        print(f"❌ Failed to stop poll {poll['message_id']}: {e}")
-                    polls_to_remove.append(poll)
-            
+            polls_to_remove = [p for p in active_polls if 'close_time' in p and isinstance(p['close_time'], datetime.datetime) and datetime.datetime.now() >= p['close_time']]
             for poll in polls_to_remove:
+                try:
+                    bot.stop_poll(poll['chat_id'], poll['message_id'])
+                except Exception as e:
+                    print(f"❌ Failed to stop poll {poll['message_id']}: {e}")
                 active_polls.remove(poll)
 
-            # Save state periodically for local testing
+            # --- Save data to Supabase ---
             save_data()
 
         except Exception as e:
-            print(f"Error in background_worker: {e}")
-            traceback.print_exc()
+            tb_string = traceback.format_exc()
+            print(f"Error in background_worker:\n{tb_string}")
+            report_error_to_admin(tb_string)
+            
         time.sleep(30) # Check every 30 seconds
-
 # =============================================================================
 # 7. FLASK WEB SERVER & WEBHOOK
 # =============================================================================
@@ -580,20 +645,65 @@ def handle_create_quiz_command(msg: types.Message):
     bot.send_message(msg.chat.id, "🧠 *Create Quiz*\n\nSelect quiz type:", reply_markup=markup, parse_mode="Markdown")
 
 # THIS IS THE COMPLETE AND CORRECT CODE FOR THE /createpoll FEATURE
-
-@bot.message_handler(commands=['createpoll'])
+# REPLACEMENT CODE
+@bot.message_handler(commands=['createpoll'], func=bot_is_target)
 @admin_required
 def handle_poll_command(msg: types.Message):
     user_id = msg.from_user.id
-    user_states[user_id] = 'awaiting_poll_details'
+    user_states[user_id] = {'step': 'awaiting_poll_duration', 'data': {}}
     bot.send_message(
         msg.chat.id,
-        "📊 *Create Poll*\n\nSend the details in this format:\n`<minutes> | Question | Option1 | Option2...`\n\n"
-        "Example: `5 | Favorite subject? | Math | Science | History`\nOr send /cancel to abort.",
+        "📊 **New Poll: Step 1 of 2**\n\n"
+        "How long should the poll be open for (in minutes)?\n\n"
+        "Enter a number (e.g., `5`).",
         parse_mode="Markdown"
     )
 
-# This is the second part that was missing from your review
+@bot.message_handler(func=lambda msg: user_states.get(msg.from_user.id, {}).get('step') == 'awaiting_poll_duration')
+def process_poll_duration(msg: types.Message):
+    user_id = msg.from_user.id
+    try:
+        duration = int(msg.text.strip())
+        if duration <= 0: raise ValueError()
+        
+        user_states[user_id]['data']['duration'] = duration
+        user_states[user_id]['step'] = 'awaiting_poll_q_and_opts'
+        
+        bot.send_message(
+            msg.chat.id,
+            f"✅ Duration set to {duration} minutes.\n\n"
+            "**Step 2 of 2**\n"
+            "Now send the question and options in this format:\n"
+            "`Question | Option1 | Option2...`"
+        )
+    except (ValueError, IndexError):
+        bot.send_message(msg.chat.id, "❌ Please enter a valid positive number for the minutes.")
+
+@bot.message_handler(func=lambda msg: user_states.get(msg.from_user.id, {}).get('step') == 'awaiting_poll_q_and_opts')
+def process_poll_q_and_opts(msg: types.Message):
+    user_id = msg.from_user.id
+    try:
+        duration = user_states[user_id]['data']['duration']
+        parts = msg.text.split(' | ')
+        if len(parts) < 3: raise ValueError("Invalid format")
+        
+        question, options = parts[0].strip(), [opt.strip() for opt in parts[1:]]
+        if not (2 <= len(options) <= 10):
+            bot.reply_to(msg, "❌ Poll must have 2-10 options. Please try again.")
+            return
+
+        full_question = f"{question}\n\n⏰ Closes in {duration} minute{'s' if duration > 1 else ''}"
+        sent_poll = bot.send_poll(chat_id=GROUP_ID, question=full_question, options=options, is_anonymous=False)
+        close_time = datetime.datetime.now() + datetime.timedelta(minutes=duration)
+        active_polls.append({'chat_id': sent_poll.chat.id, 'message_id': sent_poll.message_id, 'close_time': close_time})
+        
+        bot.reply_to(msg, "✅ Poll sent successfully!")
+        
+    except Exception as e:
+        bot.reply_to(msg, f"❌ Error creating poll: {e}. Please start over.")
+    finally:
+        if user_id in user_states:
+            del user_states[user_id]
 @bot.message_handler(func=lambda msg: user_states.get(msg.from_user.id) == 'awaiting_poll_details')
 def process_poll_details(msg: types.Message):
     user_id = msg.from_user.id
@@ -639,60 +749,63 @@ def process_poll_details(msg: types.Message):
     if user_id in user_states:
         del user_states[user_id]
 # This handler will catch the button press from /createquiz
+# REPLACEMENT CODE
+# REPLACEMENT CODE
 @bot.callback_query_handler(func=lambda call: call.data in ['quiz_text', 'quiz_poll'])
 def handle_quiz_type_selection(call: types.CallbackQuery):
     user_id = call.from_user.id
     bot.answer_callback_query(call.id) # Acknowledge the button press
     
     if call.data == 'quiz_text':
-        user_states[user_id] = 'awaiting_text_quiz'
-        bot.send_message(
-            call.message.chat.id,
-            "🧠 *Create Text Quiz*\n\nSend the quiz in this format:\n`Question: Your question?`\n`A) Option1`\n`B) Option2`\n`C) Option3`\n`D) Option4`\n`Answer: A`\n\nOr send /cancel.",
-            parse_mode="Markdown"
-        )
+        # Start the conversational flow for a text quiz
+        user_states[user_id] = {'step': 'awaiting_text_quiz_question'}
+        bot.send_message(call.message.chat.id, "🧠 **New Text Quiz: Step 1 of 2**\n\nFirst, what is the question?\n\nOr send /cancel.", parse_mode="Markdown")
+
     elif call.data == 'quiz_poll':
-        # This can just redirect to the /quickquiz flow for simplicity
+        # This correctly redirects to the /quickquiz flow
         handle_quick_quiz_command(call.message)
 
 
-# This handler catches the reply for the text quiz
-@bot.message_handler(func=lambda msg: user_states.get(msg.from_user.id) == 'awaiting_text_quiz')
-def process_text_quiz(msg: types.Message):
+@bot.message_handler(func=lambda msg: user_states.get(msg.from_user.id, {}).get('step') == 'awaiting_text_quiz_question')
+def process_text_quiz_question(msg: types.Message):
     user_id = msg.from_user.id
-    if msg.text.lower() == '/cancel':
-        bot.send_message(msg.chat.id, "❌ Quiz creation cancelled.")
-        del user_states[user_id]
-        return
-    
+    # Save the question and move to the next step
+    user_states[user_id]['data'] = {'question': msg.text}
+    user_states[user_id]['step'] = 'awaiting_text_quiz_options'
+    bot.send_message(
+        msg.chat.id,
+        "✅ Question saved.\n\n"
+        "**Step 2 of 2**\n"
+        "Now send the options and answer in this format:\n"
+        "`A) Option1`\n`B) Option2`\n`C) Option3`\n`D) Option4`\n`Answer: A`",
+        parse_mode="Markdown"
+    )
+
+@bot.message_handler(func=lambda msg: user_states.get(msg.from_user.id, {}).get('step') == 'awaiting_text_quiz_options')
+def process_text_quiz_options_and_answer(msg: types.Message):
+    user_id = msg.from_user.id
     try:
-        # Your existing process_text_quiz logic here
+        question = user_states[user_id]['data']['question']
+        
         lines = msg.text.strip().split('\n')
-        if len(lines) < 6:
-            raise ValueError("Invalid format. Need question, 4 options, and answer")
+        if len(lines) < 5: raise ValueError("Invalid format. Need 4 options and 1 answer line.")
         
-        question = lines[0].replace('Question:', '').strip()
-        options = [line.strip() for line in lines[1:5]]
-        answer = lines[5].replace('Answer:', '').strip().upper()
+        options = [line.strip() for line in lines[0:4]]
+        answer = lines[4].replace('Answer:', '').strip().upper()
         
-        if answer not in ['A', 'B', 'C', 'D']:
-            raise ValueError("Answer must be A, B, C, or D")
+        if answer not in ['A', 'B', 'C', 'D']: raise ValueError("Answer must be A, B, C, or D.")
         
-        quiz_text = f"🧠 **Quiz Time!**\n\n❓ {question}\n\n"
-        for opt in options:
-            quiz_text += f"{opt}\n"
-        quiz_text += f"\n💭 Reply with your answer (A, B, C, or D)"
-        
+        quiz_text = f"🧠 **Quiz Time!**\n\n❓ {question}\n\n" + "\n".join(options) + "\n\n💭 Reply with your answer (A, B, C, or D)"
         bot.send_message(GROUP_ID, quiz_text, parse_mode="Markdown")
-        bot.send_message(msg.chat.id, f"✅ Quiz sent! Correct answer: {answer}")
+        bot.send_message(msg.chat.id, f"✅ Text quiz sent! The correct answer is {answer}.")
 
     except Exception as e:
         bot.send_message(msg.chat.id, f"❌ Error creating quiz: {e}. Please try again or /cancel.")
-        return # Don't clear state
+        return # Let user try again
 
-    del user_states[user_id]
-
-
+    # Clean up state on success
+    if user_id in user_states:
+        del user_states[user_id]
 # Add the handler for /mysheet
 @bot.message_handler(commands=['mysheet'])
 @admin_required
@@ -749,7 +862,20 @@ def handle_quick_quiz_command(msg: types.Message):
         "Or send /cancel to abort.",
         parse_mode="Markdown"
     )
-
+# ADD THIS NEW HANDLER
+@bot.message_handler(commands=['help'], func=bot_is_target)
+@membership_required
+def handle_user_help(msg: types.Message):
+    user_name = msg.from_user.first_name
+    help_text = (
+        f"👋 Hey {user_name}!\n\n"
+        "Here are the commands you can use:\n\n"
+        "• `/start` - Shows the main menu.\n"
+        "• `/todayquiz` - Displays details about today's scheduled quiz topic.\n"
+        "• `/feedback <your message>` - Send anonymous feedback to the admin.\n\n"
+        "You can also participate in any quizzes or polls posted in the group! 🚀"
+    )
+    bot.reply_to(msg, help_text)
 @bot.message_handler(commands=['setdailyreminder'], func=bot_is_target)
 @admin_required
 def handle_daily_reminder_command(msg: types.Message):
@@ -859,39 +985,6 @@ def process_admin_text_input(msg: types.Message):
 
     except Exception as e:
         bot.send_message(msg.chat.id, f"❌ Error processing input: {e}. Please try again or send /cancel.")
-        # We don't clear the state here, so the user can try again
-@bot.message_handler(commands=['createquiztext'])
-@admin_required
-def handle_text_quiz_command(msg: types.Message):
-    bot.send_message(
-        msg.chat.id,
-        "🧠 *Create Text Quiz*\n\nSend in format:\n`Question: Your question?`\n`A) Option1`\n`B) Option2`\n`C) Option3`\n`D) Option4`\n`Answer: A`\n\nType /cancel to abort",
-        parse_mode="Markdown"
-    )
-    bot.register_next_step_handler(msg, process_text_quiz)
-
-def process_text_quiz(msg: types.Message):
-    if msg.text and msg.text.lower() == '/cancel':
-        bot.send_message(msg.chat.id, "❌ Quiz creation cancelled.")
-        return
-    try:
-        lines = msg.text.strip().split('\n')
-        if len(lines) < 6:
-            raise ValueError("Invalid format")
-        
-        question = lines[0].replace('Question:', '').strip()
-        options = [line.strip() for line in lines[1:5]]
-        answer = lines[5].replace('Answer:', '').strip().upper()
-        
-        if answer not in ['A', 'B', 'C', 'D']:
-            raise ValueError("Answer must be A, B, C, or D")
-        
-        quiz_text = f"🧠 **Quiz Time!**\n\n❓ {question}\n\n" + "\n".join(options) + "\n\n💭 Reply with your answer (A, B, C, or D)"
-        bot.send_message(GROUP_ID, quiz_text, parse_mode="Markdown")
-        bot.send_message(msg.chat.id, f"✅ Text quiz sent! The correct answer is {answer}.")
-    except Exception as e:
-        bot.send_message(msg.chat.id, f"❌ Error creating quiz: Invalid format or other issue. {e}")
-
 @bot.message_handler(commands=['feedback'])
 @membership_required
 def handle_feedback_command(msg: types.Message):
@@ -914,52 +1007,6 @@ def handle_feedback_command(msg: types.Message):
     except Exception as e:
         bot.reply_to(msg, "❌ Failed to send feedback.")
         print(f"Feedback error: {e}")
-
-@bot.message_handler(commands=['quickquiz'])
-@admin_required
-def handle_quick_quiz_command(msg: types.Message):
-    bot.send_message(
-        msg.chat.id,
-        "🧠 *Quick Quiz*\n\nFormat: `Question | Option1 | Option2 | Option3 | Option4 | Correct(1-4)`\nExample: `What is 2+2? | 3 | 4 | 5 | 6 | 2`\n\nSend or /cancel:",
-        parse_mode="Markdown"
-    )
-    bot.register_next_step_handler(msg, process_quick_quiz)
-
-def process_quick_quiz(msg: types.Message):
-    global QUIZ_SESSIONS, QUIZ_PARTICIPANTS
-    if msg.text.startswith('/cancel'):
-        bot.send_message(msg.chat.id, "❌ Quiz creation cancelled.")
-        return
-    try:
-        parts = msg.text.split(' | ')
-        if len(parts) != 6:
-            raise ValueError("Need 6 parts: Q + 4 options + correct num")
-        
-        question, opt1, opt2, opt3, opt4, correct_num = parts
-        options = [opt1, opt2, opt3, opt4]
-        correct_idx = int(correct_num) - 1
-        if not (0 <= correct_idx <= 3):
-            raise ValueError("Correct answer must be between 1 and 4")
-        
-        poll = bot.send_poll(
-            GROUP_ID,
-            question=f"🧠 Quick Quiz: {question}",
-            options=options,
-            type='quiz',
-            correct_option_id=correct_idx,
-            explanation=f"✅ Correct answer: {options[correct_idx]}",
-            is_anonymous=False
-        )
-        
-        poll_id = poll.poll.id
-        QUIZ_SESSIONS[poll_id] = {'correct_option': correct_idx, 'start_time': datetime.datetime.now()}
-        QUIZ_PARTICIPANTS[poll_id] = {}
-        bot.send_message(msg.chat.id, f"✅ Quiz sent! Tracking participants (ID: {poll_id})")
-    except (ValueError, IndexError) as e:
-        bot.send_message(msg.chat.id, f"❌ Invalid format. Error: {e}")
-    except Exception as e:
-        bot.send_message(msg.chat.id, f"❌ Unexpected error: {e}")
-
 @bot.poll_answer_handler()
 def handle_poll_answers(poll_answer: types.PollAnswer):
     global QUIZ_PARTICIPANTS
@@ -1034,93 +1081,6 @@ def handle_study_tip_command(msg: types.Message):
     ]
     bot.send_message(GROUP_ID, random.choice(tips), parse_mode="Markdown")
     bot.send_message(msg.chat.id, "✅ Study tip sent!")
-
-@bot.message_handler(commands=['setdailyreminder'])
-@admin_required
-def handle_daily_reminder_command(msg: types.Message):
-    bot.send_message(
-        msg.chat.id,
-        "⏰ *Set Daily Reminder*\nFormat: `/setdailyreminder HH:MM Message`\nExample: `/setdailyreminder 19:00 Study time! 📚`",
-        parse_mode="Markdown"
-    )
-    bot.register_next_step_handler(msg, process_daily_reminder)
-
-def process_daily_reminder(msg: types.Message):
-    if msg.text.startswith('/cancel'):
-        bot.send_message(msg.chat.id, "❌ Reminder setup cancelled.")
-        return
-    try:
-        parts = msg.text.split(' ', 2)
-        if len(parts) < 3:
-            raise ValueError("Invalid format")
-        time_str, reminder_message = parts[1], parts[2]
-        hour, minute = map(int, time_str.split(':'))
-        
-        now = datetime.datetime.now()
-        reminder_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-        if reminder_time <= now:
-            reminder_time += datetime.timedelta(days=1)
-        
-        scheduled_messages.append({
-            'send_time': reminder_time,
-            'message': f"⏰ **Daily Reminder:** {reminder_message}",
-            'markdown': True,
-            'recurring': True
-        })
-        bot.send_message(msg.chat.id, f"✅ Daily reminder set for {time_str}!\nMessage: {reminder_message}")
-    except (ValueError, IndexError):
-        bot.send_message(msg.chat.id, "❌ Invalid format. Use: `/setdailyreminder HH:MM message`")
-    except Exception as e:
-        bot.send_message(msg.chat.id, f"❌ Error: {e}")
-
-@bot.message_handler(commands=['setquiz'])
-@admin_required
-def handle_set_quiz_details(msg: types.Message):
-    bot.send_message(
-        msg.chat.id,
-        "📝 *Set Today's Quiz*\n\nFormat: `/setquiz Time | Chapter | Level`\nExample: `/setquiz 8:00 PM | Chapter 5 | Medium`",
-        parse_mode="Markdown"
-    )
-    bot.register_next_step_handler(msg, process_quiz_details)
-
-def process_quiz_details(msg: types.Message):
-    if msg.text.startswith('/cancel'):
-        bot.send_message(msg.chat.id, "❌ Quiz setup cancelled.")
-        return
-    try:
-        parts = msg.text.split(' | ', 2)
-        if len(parts) < 3:
-            raise ValueError("Need time, chapter and level")
-        time, chapter, level = parts[0].strip(), parts[1].strip(), parts[2].strip()
-        TODAY_QUIZ_DETAILS.update({"time": time, "chapter": chapter, "level": level, "is_set": True})
-        
-        bot.send_message(
-            msg.chat.id,
-            f"✅ Today's quiz set!\n⏰ Time: {time}\n📚 Chapter: {chapter}\n📊 Level: {level}"
-        )
-    except (ValueError, IndexError):
-        bot.send_message(msg.chat.id, "❌ Invalid format. Please use `Time | Chapter | Level`")
-    except Exception as e:
-        bot.send_message(msg.chat.id, f"❌ Error: {e}")
-
-@bot.message_handler(commands=['setwelcome'])
-@admin_required
-def handle_set_welcome(msg: types.Message):
-    bot.send_message(
-        msg.chat.id,
-        "👋 *Set Welcome Message*\n\nUse {user_name} placeholder.\nExample: `Welcome {user_name}! Ready for today's quiz?`\n\nType /cancel to abort",
-        parse_mode="Markdown"
-    )
-    bot.register_next_step_handler(msg, process_welcome_message)
-
-def process_welcome_message(msg: types.Message):
-    global CUSTOM_WELCOME_MESSAGE
-    if msg.text.startswith('/cancel'):
-        bot.send_message(msg.chat.id, "❌ Welcome message change cancelled.")
-        return
-    CUSTOM_WELCOME_MESSAGE = msg.text
-    bot.send_message(msg.chat.id, "✅ Welcome message updated!")
-
 @bot.message_handler(content_types=['new_chat_members'])
 def handle_new_member(msg: types.Message):
     """
