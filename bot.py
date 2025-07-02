@@ -696,10 +696,9 @@ def handle_group_messages(msg: types.Message):
     #=== handler for new members ====
     @bot.message_handler(content_types=['new_chat_members'])
 def handle_new_member(msg: types.Message):
-    """Welcomes new members to the group with a custom message."""
     new_members = msg.new_chat_members
     for member in new_members:
-        # Avoid welcoming the bot itself if it's added to a group
+       
         if member.is_bot:
             continue
             
