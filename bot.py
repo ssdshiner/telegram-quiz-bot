@@ -1090,15 +1090,14 @@ def handle_new_member(msg: types.Message):
 @bot.message_handler(func=lambda message: bot_is_target(message))
 def handle_unknown_messages(msg: types.Message):
     """
-    This handler catches any message that is specifically for the bot but is not a recognized command.
-    It uses the `bot_is_target` helper to ensure it only triggers in private chat or when mentioned in a group.
-    It will NOT trigger on general group chat messages or un-mentioned commands.
+    This handler catches any message for the bot that isn't a recognized command.
+    It now uses send_message instead of reply_to to be more robust.
     """
-    # We already know the message is targeted at the bot, so we can just reply.
+    # We already know the message is targeted at the bot.
     if is_admin(msg.from_user.id):
-        bot.reply_to(msg, "🤔 Command not recognized. Use /adminhelp for a list of my commands.")
+        bot.send_message(msg.chat.id, "🤔 Command not recognized. Use /adminhelp for a list of my commands.")
     else:
-        bot.reply_to(msg, "❌ I don't recognize that command. Please use start command to see your options.")
+        bot.send_message(msg.chat.id, "❌ I don't recognize that command. Please use /suru to see your options.")
 
 # =============================================================================
 # 9. MAIN EXECUTION BLOCK (Calls the new load_data function)
