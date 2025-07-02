@@ -203,12 +203,27 @@ def create_main_menu_keyboard():
     markup.add(quiz_button)
     return markup
 
+def bot_is_target(message: types.Message):
+    """
+    Returns True if the message is in a private chat OR if the bot is
+    mentioned in a group chat. This is the main filter for commands.
+    """
+    # It's a private chat, so the bot is always the target.
+    if message.chat.type == "private":
+        return True
+    
+    # It's a group chat, so check for mention.
+    if is_group_message(message) and is_bot_mentioned(message):
+        return True
+        
+    # Otherwise, the bot should ignore the message.
+    return False
 
 # =============================================================================
 # 5. DATA PERSISTENCE WITH SUPABASE *** THIS SECTION IS REPLACED ***
 # =============================================================================
 def load_data():
-    """Loads bot state from Supabase."""
+    """Loads bot state from Supabase in a safe and robust way."""
     if not supabase:
         print("WARNING: Supabase client not available. Skipping data load.")
         return
@@ -218,30 +233,43 @@ def load_data():
     try:
         # Fetch all rows from the bot_state table
         response = supabase.table('bot_state').select("*").execute()
-        db_data = response.data
         
-        # Convert list of rows into a key-value dictionary for easy access
-        state = {item['key']: item['value'] for item in db_data}
-        
-        # Load scheduled messages and deserialize datetimes
-        loaded_messages = state.get('scheduled_messages', [])
-        deserialized_messages = []
-        for msg in loaded_messages:
-            try:
-                msg['send_time'] = datetime.datetime.strptime(msg['send_time'], '%Y-%m-%d %H:%M:%S')
-                deserialized_messages.append(msg)
-            except (ValueError, TypeError): continue # Skip malformed entries
-        scheduled_messages = deserialized_messages
-        
-        # Load other data, using .get() with a default value to prevent errors
-        TODAY_QUIZ_DETAILS = state.get('today_quiz_details', TODAY_QUIZ_DETAILS)
-        CUSTOM_WELCOME_MESSAGE = state.get('custom_welcome_message', CUSTOM_WELCOME_MESSAGE)
-        QUIZ_SESSIONS = state.get('quiz_sessions', QUIZ_SESSIONS)
-        QUIZ_PARTICIPANTS = state.get('quiz_participants', QUIZ_PARTICIPANTS)
-        
-        print("✅ Data successfully loaded from Supabase.")
+        # DEFENSIVE CHECK: The new library nests the data one level deeper.
+        # We also check if the response even has data.
+        if hasattr(response, 'data') and response.data:
+            db_data = response.data
+            
+            # Convert list of rows into a key-value dictionary for easy access
+            state = {item['key']: item['value'] for item in db_data}
+            
+            # Load scheduled messages and deserialize datetimes
+            loaded_messages = state.get('scheduled_messages', [])
+            deserialized_messages = []
+            for msg in loaded_messages:
+                try:
+                    # Ensure the 'send_time' key exists before trying to access it
+                    if 'send_time' in msg:
+                        msg['send_time'] = datetime.datetime.strptime(msg['send_time'], '%Y-%m-%d %H:%M:%S')
+                        deserialized_messages.append(msg)
+                except (ValueError, TypeError): 
+                    continue # Skip malformed entries
+            scheduled_messages = deserialized_messages
+            
+            # Load other data, using .get() with a default value to prevent errors
+            TODAY_QUIZ_DETAILS = state.get('today_quiz_details', TODAY_QUIZ_DETAILS)
+            CUSTOM_WELCOME_MESSAGE = state.get('custom_welcome_message', CUSTOM_WELCOME_MESSAGE)
+            QUIZ_SESSIONS = state.get('quiz_sessions', QUIZ_SESSIONS)
+            QUIZ_PARTICIPANTS = state.get('quiz_participants', QUIZ_PARTICIPANTS)
+            
+            print("✅ Data successfully loaded from Supabase.")
+        else:
+            # This will be logged the very first time the bot runs with an empty DB
+            print("ℹ️ No data found in Supabase table 'bot_state'. Starting with fresh data.")
+
     except Exception as e:
         print(f"❌ Error loading data from Supabase: {e}")
+        # Print the full traceback for better debugging
+        traceback.print_exc()
 
 def save_data():
     """Saves bot state to Supabase."""
@@ -259,18 +287,18 @@ def save_data():
 
         # Prepare data in the format Supabase expects: a list of dictionaries
         data_to_upsert = [
-            {'key': 'scheduled_messages', 'value': serializable_messages},
-            {'key': 'today_quiz_details', 'value': TODAY_QUIZ_DETAILS},
-            {'key': 'custom_welcome_message', 'value': CUSTOM_WELCOME_MESSAGE},
-            {'key': 'quiz_sessions', 'value': QUIZ_SESSIONS},
-            {'key': 'quiz_participants', 'value': QUIZ_PARTICIPANTS},
+            {'key': 'scheduled_messages', 'value': json.dumps(serializable_messages)},
+            {'key': 'today_quiz_details', 'value': json.dumps(TODAY_QUIZ_DETAILS)},
+            {'key': 'custom_welcome_message', 'value': CUSTOM_WELCOME_MESSAGE}, # Welcome msg is a string, no need for dumps
+            {'key': 'quiz_sessions', 'value': json.dumps(QUIZ_SESSIONS)},
+            {'key': 'quiz_participants', 'value': json.dumps(QUIZ_PARTICIPANTS)},
         ]
         
         # 'upsert' will INSERT new keys and UPDATE existing ones based on the primary key ('key')
         supabase.table('bot_state').upsert(data_to_upsert).execute()
     except Exception as e:
         print(f"❌ Error saving data to Supabase: {e}")
-
+        traceback.print_exc()
 # =============================================================================
 # 6. BACKGROUND SCHEDULER (Calls the new save_data function)
 # =============================================================================
@@ -350,13 +378,11 @@ def health_check():
 # 8. TELEGRAM BOT HANDLERS
 # =============================================================================
 
-@bot.message_handler(commands=['start'])
+@bot.message_handler(commands=['start'], func=bot_is_target)
 def on_start(msg: types.Message):
-    if is_group_message(msg) and not is_bot_mentioned(msg):
-        return
-    
+    # No need for the old check, the decorator handles it.
     if check_membership(msg.from_user.id):
-        welcome_text = f"✅ Welcome, {msg.from_user.first_name}! Use the buttons below."
+        welcome_text = f"✅ Welcome, {msg.from_user.first_name}! Use the buttons below to get started."
         if is_group_message(msg):
             welcome_text += "\n\n💡 *Tip: For a better experience, interact with me in a private chat!*"
         bot.send_message(msg.chat.id, welcome_text, reply_markup=create_main_menu_keyboard(), parse_mode="Markdown")
@@ -864,20 +890,28 @@ def process_welcome_message(msg: types.Message):
 
 @bot.message_handler(content_types=['new_chat_members'])
 def handle_new_member(msg: types.Message):
+    """
+    Welcomes new members to the group, but ignores bots being added.
+    """
     for member in msg.new_chat_members:
         if not member.is_bot:
             welcome_text = CUSTOM_WELCOME_MESSAGE.format(user_name=member.first_name)
             bot.send_message(msg.chat.id, welcome_text, parse_mode="Markdown")
 
-@bot.message_handler(func=lambda message: True)
-def handle_other_messages(msg: types.Message):
-    if is_group_message(msg) and not is_bot_mentioned(msg):
-        return
-    if is_admin(msg.from_user.id):
-        bot.reply_to(msg, "🤔 Command not recognized. Use /adminhelp")
-    else:
-        bot.reply_to(msg, "❌ Invalid command. Use /start for help")
+# --- Fallback Handler (Must be the VERY LAST message handler) ---
 
+@bot.message_handler(func=lambda message: bot_is_target(message))
+def handle_unknown_messages(msg: types.Message):
+    """
+    This handler catches any message that is specifically for the bot but is not a recognized command.
+    It uses the `bot_is_target` helper to ensure it only triggers in private chat or when mentioned in a group.
+    It will NOT trigger on general group chat messages or un-mentioned commands.
+    """
+    # We already know the message is targeted at the bot, so we can just reply.
+    if is_admin(msg.from_user.id):
+        bot.reply_to(msg, "🤔 Command not recognized. Use /adminhelp for a list of my commands.")
+    else:
+        bot.reply_to(msg, "❌ I don't recognize that command. Please use /start to see your options.")
 
 # =============================================================================
 # 9. MAIN EXECUTION BLOCK (Calls the new load_data function)
