@@ -1125,8 +1125,7 @@ url=f"https://{SERVER_URL}/{BOT_TOKEN}")
 if __name__ == "__main__":
     print("🤖 Starting the bot...")
     load_data()
-    
-    # Check and create header row in Google Sheet if empty
+
     try:
         sheet = get_gsheet()
         if sheet and len(sheet.get_all_values()) < 1:
@@ -1135,22 +1134,15 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"Initial sheet check failed: {e}")
 
-    # Start the background worker thread
     scheduler_thread = threading.Thread(target=background_worker, daemon=True)
     scheduler_thread.start()
-    
-    # Set up the Telegram webhook
+
     print("Setting up webhook for the bot...")
     bot.remove_webhook()
     time.sleep(1)
     bot.set_webhook(url=f"https://{SERVER_URL}/{BOT_TOKEN}")
     print(f"Webhook is set to https://{SERVER_URL}")
-    
-    # Get the port from the environment variable (standard for hosting services)
-    port = int(os.environ.get("PORT", 8080))
-    
-    # Start the Flask server (This should be the very last line)
-    app.run(host="0.0.0.0", port=port, debug=False)
+
 
 
 # === DATA PERSISTENCE ===
