@@ -1072,29 +1072,304 @@ def handle_announce_winners(msg: types.Message):
 @bot.message_handler(commands=['motivate'])
 @admin_required
 def handle_motivation_command(msg: types.Message):
+    """Sends a powerful, context-rich, and extensive motivational quote for CA students."""
+    
     quotes = [
-        "💪 *Success is not final, failure is not fatal*",
-        "🌟 *The expert was once a beginner*",
-        "🎯 *Don't watch the clock; do what it does. Keep going*",
-        "🚀 *The future belongs to those who believe in dreams*",
-        "📈 *Success is small efforts repeated daily*"
+        # ===============================================
+        # --- Hinglish & Relatable Quotes for CA Students ---
+        # ===============================================
+        "📖 Books se ishq karoge, toh ICAI bhi tumse pyaar karega. Result dekh lena!",
+        "😴 Sapne wo nahi jo sone par aate hain, sapne wo hain jo tumhein sone nahi dete... especially during exam season!",
+        "✍️ Har attempt ek naya 'Provision' hai, bas 'Amendment' ke saath taiyaar raho!",
+        "Don't tell people your plans. Show them your results. Aur result ke din, show them your ICAI certificate!",
+        "The goal is not to be better than anyone else, but to be better than you were yesterday. Kal se ek section toh zyada yaad kar hi sakte ho!",
+        "Ye 'Study Material' ka bojh nahi, Rank-holder banne ka raasta hai. Uthao aur aage badho!",
+        "Thoda aur padh le, baad mein 'Exemption' ka maza hi kuch aur hoga!",
+        "CA banne ka safar ek marathon hai, 100-meter race nahi. Stamina banaye rakho!",
+        "Jis din result aayega, ye saari raaton ki neend qurbaani safal ho jaayegi. Keep hustling!",
+        "Confidence is key. Aur confidence aata hai Mock Test dene se. Darr ke aage jeet hai!",
+        "Duniya 'turnover' dekhti hai, tum 'net profit' pe focus karo. Quality study matters!",
+        "Social media ka 'scroll' nahi, Bare Act ka 'scroll' karo. Zyada 'valuable' hai.",
+        "Har 'Standard on Auditing' tumhari professional life ka standard set karega. Dhyan se padho!",
+        "Procrastination is the thief of time... and attempts. Aaj ka kaam kal par mat daalo.",
+        "Result ke din 'party' karni hai ya 'pachtana' hai, choice aaj ki mehnat par depend karti hai.",
+
+        # ===============================================
+        # --- Subject-Specific Motivation ---
+        # ===============================================
+        "⚖️ **Law:** Life is like a 'Bare Act'. Thoda complicated, but har 'section' ka ek matlab hai. Keep reading!",
+        "📊 **Accounts:** Zindagi ko balance sheet ki tarah balance karna seekho. Assets (Knowledge) badhao, Liabilities (Doubts) ghatao.",
+        "🧾 **Taxation:** Don't let 'due dates' scare you. Plan your studies like you plan your taxes - efficiently and on time!",
+        "🛡️ **Audit:** Har galti ek 'misstatement' hai. 'Verify' karo, 'rectify' karo, aur aage badho. That's the spirit of an auditor!",
+        "💰 **Costing:** Har minute ki 'cost' hai. Invest your time wisely for the best 'return' on your rank!",
+        "📈 **Financial Management:** Apne 'Portfolio' of knowledge ko diversify karo, risk kam hoga aur rank ka 'return' badhega.",
+        "📉 **Economics:** Demand for CAs is always high. Supply your best efforts to clear the exam!",
+        "🤝 **Ethics:** Your integrity is your biggest asset. Study with honesty, practice with honesty.",
+        "📝 **Advanced Accounting:** Har 'AS' aur 'Ind AS' ek puzzle hai. Solve karte jao, expert bante jao.",
+        "💼 **Corporate Law:** 'Memorandum' aur 'Articles' sirf companies ke nahi, apne study plan ke bhi banao. Clarity rahegi!",
+        "🔢 **GST:** Zindagi mein itne 'credits' kamao ki 'output tax liability' (failure) hamesha zero rahe.",
+        "🌍 **International Tax:** Sirf desh mein nahi, videsh mein bhi naam karna hai. Har 'DTAA' ek naya door open karta hai.",
+        "⚙️ **Strategic Management:** Sirf padhna nahi, 'strategize' karna bhi zaroori hai. Plan your chapters, win the exam.",
+        "📑 **Company Law:** Har 'resolution' jo tum pass karte ho, tumhe pass karne ke closer le jaata hai.",
+        "💹 **SFM:** Derivatives jitne complex lagte hain, utne hote nahi. Bas 'underlying asset' (concept) ko samajh lo.",
+
+        # ===============================================
+        # --- Gita Shlokas with Meaning ---
+        # ===============================================
+        (
+            "🕉️ *Shloka from the Gita:*\n"
+            "कर्मण्येवाधिकारस्ते मा फलेषु कदाचन |\n"
+            "मा कर्मफलहेतुर्भूर्मा ते सङ्गोऽस्त्वकर्मणि ||\n\n"
+            "**Meaning:** Tumhara adhikaar sirf apne karm (padhai) par hai, uske phal (result) par nahi. Isliye, result ki chinta kiye bina apna best do!"
+        ),
+        (
+            "🕉️ *Shloka from the Gita:*\n"
+            "योगस्थः कुरु कर्माणि सङ्गं त्यक्त्वा धनञ्जय |\n"
+            "सिद्ध्यसिद्ध्योः समो भूत्वा समत्वं योग उच्यते ||\n\n"
+            "**Meaning:** Success (pass) aur failure (fail) mein samaan bhav rakho. Apni padhai par focus karo, attachment ke bina. Yahi asli yoga (balance) hai."
+        ),
+        (
+            "🕉️ *Shloka from the Gita:*\n"
+            "उद्धरेदात्मनात्मानं नात्मानमवसादयेत् |\n"
+            "आत्मैव ह्यात्मनो बन्धुरात्मैव रिपुरात्मनः ||\n\n"
+            "**Meaning:** Insaan ko apna uddhar khud karna chahiye. Tum khud ke sabse acche dost ho, aur khud ke hi sabse bade dushman. Choose to be your best friend!"
+        ),
+        (
+            "🕉️ *Shloka from the Gita:*\n"
+            "श्रद्धावान् लभते ज्ञानं तत्परः संयतेन्द्रियः |\n"
+            "ज्ञानं लब्ध्वा परां शान्तिमचिरेणाधिगच्छति ||\n\n"
+            "**Meaning:** Jo insaan poori shraddha (faith) aur control ke saath gyaan praapt karta hai, usse hi shaanti milti hai. Apni padhai par vishwaas rakho."
+        ),
+        (
+            "🕉️ *Shloka from the Gita:*\n"
+            "नियतं कुरु कर्म त्वं कर्म ज्यायो ह्यकर्मणः |\n"
+            "शरीरयात्रापि च ते न प्रसिद्धयेदकर्मणः ||\n\n"
+            "**Meaning:** Apna nirdharit kaam (prescribed duty/studies) karte raho, kyunki kuch na karne se kuch karna hamesha behtar hai."
+        ),
+        (
+            "🕉️ *Shloka from the Gita:*\n"
+            "यद्यदाचरति श्रेष्ठस्तत्तदेवेतरो जनः |\n"
+            "स यत्प्रमाणं कुरुते लोकस्तदनुवर्तते ||\n\n"
+            "**Meaning:** Shreshth (great) log jaisa aacharan karte hain, baaki log bhi waisa hi karte hain. Be the 'Rank-holder' that others look up to."
+        ),
+        (
+            "🕉️ *Shloka from the Gita:*\n"
+            "नास्ति बुद्धिरयुक्तस्य न चायुक्तस्य भावना |\n"
+            "न चाभावयतः शान्तिरशान्तस्य कुतः सुखम् ||\n\n"
+            "**Meaning:** Jiska mann aur indriyaan (senses) control mein nahi, uski buddhi sthir nahi ho sakti. Aur bina sthir buddhi ke, shaanti aur sukh nahi mil sakte. Focus is everything."
+        ),
+        (
+            "🕉️ *Shloka from the Gita:*\n"
+            "ध्यायतो विषयान्पुंसः सङ्गस्तेषूपजायते |\n"
+            "सङ्गात्संजायते कामः कामात्क्रोधोऽभिजायते ||\n\n"
+            "**Meaning:** Distractions ke baare mein sochne se attachment hota hai, attachment se iccha (desire) aur iccha poori na hone par krodh (anger) aata hai. Cut the distractions."
+        ),
+        (
+            "🕉️ *Shloka from the Gita:*\n"
+            "हतो वा प्राप्स्यसि स्वर्गं जित्वा वा भोक्ष्यसे महीम् |\n"
+            "तस्मादुत्तिष्ठ कौन्तेय युद्धाय कृतनिश्चयः ||\n\n"
+            "**Meaning:** Agar tum is yuddh (exam) mein haare, toh bhi seekh milegi. Agar jeete, toh poori duniya (success) tumhari hai. Isliye, utho aur ladho!"
+        ),
+        (
+            "🕉️ *Shloka from the Gita:*\n"
+            "संशयात्मा विनश्यति |\n\n"
+            "**Meaning:** Jo sandeh (doubt) karta hai, uska vinash ho jaata hai. Apne aap par aur apni mehnat par kabhi doubt mat karna."
+        ),
+
+        # ===============================================
+        # --- Quotes from Famous Personalities ---
+        # ===============================================
+        "\"The future belongs to those who believe in the beauty of their dreams.\" - **Eleanor Roosevelt**",
+        "\"Success is not final, failure is not fatal: it is the courage to continue that counts.\" - **Winston Churchill**",
+        "\"You have to dream before your dreams can come true.\" - **A. P. J. Abdul Kalam**",
+        "\"Arise, awake, and stop not till the goal is reached.\" - **Swami Vivekananda**",
+        "\"The only way to do great work is to love what you do.\" - **Steve Jobs**",
+        "\"I find that the harder I work, the more luck I seem to have.\" - **Thomas Jefferson**",
+        "\"Our greatest weakness lies in giving up. The most certain way to succeed is always to try just one more time.\" - **Thomas A. Edison**",
+        "\"It does not matter how slowly you go as long as you do not stop.\" - **Confucius**",
+        "\"Believe you can and you're halfway there.\" - **Theodore Roosevelt**",
+        "\"An investment in knowledge pays the best interest.\" - **Benjamin Franklin**",
+        "\"The secret of getting ahead is getting started.\" - **Mark Twain**",
+        "\"I am not a product of my circumstances. I am a product of my decisions.\" - **Stephen Covey**",
+        "\"Strive for progress, not perfection.\" - **Unknown**",
+        "\"The expert in anything was once a beginner.\" - **Helen Hayes**",
+        "\"The journey of a thousand miles begins with a single step.\" - **Lao Tzu**"
     ]
+    
+    # Send a random quote from the master list
     bot.send_message(GROUP_ID, random.choice(quotes), parse_mode="Markdown")
-    bot.send_message(msg.chat.id, "✅ Motivation sent!")
+    bot.send_message(msg.chat.id, "✅ Motivation sent to the group!")
 
 @bot.message_handler(commands=['studytip'])
 @admin_required
 def handle_study_tip_command(msg: types.Message):
+    """Sends a useful, science-backed study tip or fact, tailored for CA Inter students."""
+    
     tips = [
-        "📚 **Study Tip:** Use Pomodoro technique - 25 min focus, 5 min break",
-        "🎯 **Focus Tip:** Remove distractions during study sessions",
-        "🧠 **Memory Tip:** Teach others to reinforce learning",
-        "⏰ **Time Tip:** Study hardest subjects when most alert"
+        # ===============================================
+        # --- Advanced Scientific Study Techniques ---
+        # ===============================================
+        (
+            "🧠 **Technique: The Feynman Method for Law & Audit**\n\n"
+            "1. Isolate a Section/SA. 2. Explain it aloud to a non-commerce friend. 3. Pinpoint where you get stuck or use jargon—that's your weak spot. 4. Re-read and simplify your explanation. This builds true conceptual clarity, which is what ICAI tests."
+        ),
+        (
+            "🔄 **Technique: Active Recall for Theory**\n\n"
+            "Instead of re-reading, close the book and actively retrieve the information. For example, ask yourself: 'What are the key provisions of Section 141(3)?' This mental struggle creates stronger neural pathways than passive reading."
+        ),
+        (
+            "🗓️ **Technique: Spaced Repetition for Retention**\n\n"
+            "Review a concept at increasing intervals (e.g., Day 1, Day 3, Day 7, Day 21). This scientifically proven method moves information from your short-term to your long-term memory, crucial for retaining the vast CA syllabus."
+        ),
+        (
+            "🧩 **Technique: Interleaving for Practical Subjects**\n\n"
+            "Instead of solving 10 problems of the same type, solve one problem each from different chapters (e.g., Amalgamation, Internal Reconstruction, Cash Flow). This forces your brain to learn *how* to identify the right method, not just *how* to apply it."
+        ),
+        (
+            "🔗 **Technique: Chunking for Large Chapters**\n\n"
+            "Break down a large chapter like 'Capital Budgeting' into smaller, manageable 'chunks' (e.g., Payback Period, NPV, IRR). Master each chunk individually before connecting them. This prevents feeling overwhelmed and improves comprehension."
+        ),
+        (
+            "📝 **Technique: Dual Coding**\n\n"
+            "Combine verbal materials with visual ones. When studying a complex provision in Law, draw a simple flowchart or diagram next to it. This creates two ways for your brain to recall the information, significantly boosting memory."
+        ),
+        (
+            "🤔 **Technique: Elaborative Interrogation**\n\n"
+            "As you study, constantly ask yourself 'Why?' For example, 'Why is this accounting treatment required by Ind AS 115?' This forces you to find the underlying logic, leading to a deeper understanding beyond simple memorization."
+        ),
+        (
+            "✍️ **Technique: Self-Explanation**\n\n"
+            "After reading a paragraph or solving a problem, explain to yourself, step-by-step, how the conclusion was reached. Vocalizing the process solidifies the concept and exposes any gaps in your logic."
+        ),
+        (
+            "📖 **Technique: SQ3R Method for Textbooks**\n\n"
+            "**S**urvey (skim the chapter), **Q**uestion (turn headings into questions), **R**ead (read to answer the questions), **R**ecite (summarize what you read), **R**eview (go over it again). This structured approach improves reading comprehension and retention."
+        ),
+        (
+            "💡 **Technique: Mind Palace (Method of Loci)**\n\n"
+            "For lists (like features of a partnership or steps in an audit), associate each item with a specific location in a familiar place (like your house). To recall the list, you mentally 'walk' through your house. It's a powerful mnemonic device."
+        ),
+        (
+            "⏳ **Technique: Parkinson's Law for Productivity**\n\n"
+            "Parkinson's Law states that 'work expands to fill the time available for its completion.' Instead of saying 'I will study Accounts today,' say 'I will finish the Amalgamation chapter in the next 3 hours.' Setting aggressive deadlines increases focus."
+        ),
+        (
+            "🎯 **Technique: The 5-Minute Rule**\n\n"
+            "To beat procrastination, commit to studying a difficult subject for just 5 minutes. Often, the hardest part is starting. After 5 minutes, you'll likely have the momentum to continue for much longer."
+        ),
+
+        # ===============================================
+        # --- Essential Health & Brain Facts ---
+        # ===============================================
+        (
+            "😴 **Fact: Sleep Consolidates Memory**\n\n"
+            "During deep sleep (NREM stage 3), your brain transfers memories from the temporary hippocampus to the permanent neocortex. Sacrificing sleep for cramming is scientifically counterproductive."
+        ),
+        (
+            "💧 **Fact: Dehydration Shrinks Your Brain**\n\n"
+            "Even mild dehydration can temporarily shrink brain tissue, impairing concentration and memory. Aim for 2-3 liters of water daily. A hydrated brain is a high-performing brain."
+        ),
+        (
+            "🏃‍♂️ **Fact: Exercise Creates New Brain Cells**\n\n"
+            "Aerobic exercise promotes neurogenesis—the creation of new neurons—in the hippocampus, a brain region vital for learning. A 30-minute workout can be more beneficial than an extra hour of passive reading."
+        ),
+        (
+            "🥜 **Fact: Omega-3s are Brain Building Blocks**\n\n"
+            "Your brain is nearly 60% fat. Omega-3 fatty acids (found in walnuts, flaxseeds) are essential for building brain and nerve cells. They are literally the raw materials for a smarter brain."
+        ),
+        (
+            "☀️ **Fact: Sunlight Boosts Serotonin & Vitamin D**\n\n"
+            "A 15-minute walk in morning sunlight boosts serotonin (improves mood) and produces Vitamin D (linked to cognitive function). Don't be a cave-dweller during study leave."
+        ),
+        (
+            "🧘 **Fact: Meditation Thickens the Prefrontal Cortex**\n\n"
+            "Regular mindfulness meditation has been shown to increase grey matter density in the prefrontal cortex, the area responsible for focus, planning, and impulse control. Just 10 minutes a day can make a difference."
+        ),
+        (
+            "☕ **Fact: Strategic Use of Caffeine**\n\n"
+            "Caffeine blocks adenosine, a sleep-inducing chemical. It's most effective when used strategically for specific, high-focus tasks, not constantly. Avoid it 6-8 hours before bedtime as it disrupts sleep quality."
+        ),
+        (
+            "🎶 **Fact: The 'Mozart Effect' is a Myth, But...**\n\n"
+            "Listening to classical music doesn't make you smarter. However, listening to instrumental music (without lyrics) can help block out distracting noises and improve focus for some individuals. Experiment to see if it works for you."
+        ),
+        (
+            "🌿 **Fact: Nature Reduces Mental Fatigue**\n\n"
+            "Studies show that even looking at pictures of nature or having a plant on your desk can restore attention and reduce mental fatigue. Take short breaks to look out a window or walk in a park."
+        ),
+        (
+            "😂 **Fact: Laughter Reduces Stress Hormones**\n\n"
+            "A good laugh reduces levels of cortisol and epinephrine (stress hormones) and releases endorphins. Taking a short break to watch a funny video can genuinely reset your brain for the next study session."
+        ),
+        (
+            "📱 **Fact: Blue Light from Screens Disrupts Sleep**\n\n"
+            "The blue light emitted from phones and laptops suppresses the production of melatonin, the hormone that regulates sleep. Stop using screens at least 60-90 minutes before you plan to sleep."
+        ),
+        (
+            "🥦 **Fact: Gut Health Affects Brain Health**\n\n"
+            "The gut-brain axis is a real thing. A healthy diet rich in fiber and probiotics (like yogurt) can reduce brain fog and improve mood and cognitive function. Junk food literally slows your brain down."
+        ),
+
+        # ===============================================
+        # --- ICAI Exam & Strategy Insights ---
+        # ===============================================
+        (
+            "✍️ **Strategy: The First 15 Minutes are Golden**\n\n"
+            "Use the reading time to select your 100 marks and sequence your answers. Prioritize questions you are 100% confident in. A strong start builds momentum and secures passing marks early."
+        ),
+        (
+            "🤔 **Insight: ICAI Tests 'Why', Not Just 'What'**\n\n"
+            "For every provision, ask 'Why does this exist? What problem does it solve?' This conceptual clarity is the key to cracking case-study based questions, which are becoming more common."
+        ),
+        (
+            "📝 **Strategy: Presentation is a Force Multiplier**\n\n"
+            "In Law and Audit, structure your answers: 1. Relevant Provision, 2. Facts of the Case, 3. Analysis, 4. Conclusion. Underline keywords. This can fetch you 2 extra marks per question."
+        ),
+        (
+            "🧘 **Insight: Performance Under Pressure**\n\n"
+            "The CA exam is a test of mental toughness. Practice solving full 3-hour mock papers in a timed, exam-like environment. This trains your brain to handle pressure and manage time effectively on the final day."
+        ),
+        (
+            "📜 **Fact: Quoting Section Numbers**\n\n"
+            "**Rule:** If you are 110% sure, quote it. If there is a 1% doubt, write 'As per the relevant provisions of the Companies Act, 2013...' and explain the provision correctly. You will still get full marks for the concept."
+        ),
+        (
+            "📑 **Insight: Use ICAI's Language**\n\n"
+            "Try to incorporate keywords and phrases from the ICAI Study Material into your answers. Examiners are familiar with this language, and using it shows you have studied from the source material."
+        ),
+        (
+            "⏰ **Strategy: The A-B-C Analysis**\n\n"
+            "Categorize all chapters into: **A** (Most Important, High Weightage), **B** (Important, Average Weightage), and **C** (Less Important, Low Weightage). Allocate your study time accordingly, ensuring 100% coverage of Category A."
+        ),
+        (
+            "🧐 **Insight: Pay Attention to RTPs, MTPs, and Past Papers**\n\n"
+            "ICAI often repeats concepts or question patterns from these resources. Solving the last 5 attempts' papers is non-negotiable. It's the best way to understand the examiner's mindset."
+        ),
+        (
+            "✒️ **Strategy: The Importance of Working Notes**\n\n"
+            "In practical subjects like Accounts and Costing, working notes carry marks. Make them neat, clear, and properly referenced in your main answer. They are not 'rough work'."
+        ),
+        (
+            "❌ **Insight: Negative Marking in MCQs**\n\n"
+            "For the 30-mark MCQ papers, there is NO negative marking. This means you must attempt all 30 questions, even if you have to make an educated guess. Leaving an MCQ blank is a lost opportunity."
+        ),
+        (
+            "🔚 **Strategy: The Last Month Revision**\n\n"
+            "The final month should be dedicated solely to revision and mock tests. Do not pick up any new topic in the last 30 days. Consolidating what you already know is far more important."
+        ),
+        (
+            "🤝 **Insight: Group Study for Doubts Only**\n\n"
+            "Use study groups strategically. They are excellent for clearing specific doubts but terrible for learning a new chapter from scratch. Study alone, but discuss and solve doubts in a group."
+        )
     ]
-    bot.send_message(GROUP_ID, random.choice(tips), parse_mode="Markdown")
-    bot.send_message(msg.chat.id, "✅ Study tip sent!")
+    
+    # Send a random tip from the master list
+    tip = random.choice(tips)
+    bot.send_message(GROUP_ID, tip, parse_mode="Markdown")
+    bot.send_message(msg.chat.id, "✅ Study tip sent to the group!")
+
 # =============================================================================
-# 8.8. QUIZ MARATHON FEATURE (from Google Sheets) - WITH SCORING & EXPLANATIONS
+# 8.8. QUIZ MARATHON FEATURE (from Google Sheets) - WITH SCORING, EXPLANATIONS & STOP
 # =============================================================================
 
 @bot.message_handler(commands=['quizmarathon'])
@@ -1102,7 +1377,7 @@ def handle_study_tip_command(msg: types.Message):
 def handle_quiz_marathon_command(msg: types.Message):
     """Starts the setup for a Quiz Marathon."""
     if MARATHON_STATE.get('is_running'):
-        bot.send_message(msg.chat.id, "⚠️ A Quiz Marathon is already in progress. Please wait for it to finish.")
+        bot.send_message(msg.chat.id, "⚠️ A Quiz Marathon is already in progress. Use /roko to stop it first.")
         return
 
     prompt = bot.send_message(
@@ -1135,23 +1410,35 @@ def process_marathon_duration_and_start(msg: types.Message):
     except Exception as e:
         bot.send_message(msg.chat.id, f"❌ An error occurred: {e}")
 
+@bot.message_handler(commands=['roko']) # <-- COMMAND NAME CHANGED HERE
+@admin_required
+def handle_stop_marathon_command(msg: types.Message):
+    """Forcefully stops a running Quiz Marathon."""
+    global MARATHON_STATE
+    if not MARATHON_STATE.get('is_running'):
+        bot.send_message(msg.chat.id, "🤷‍♀️ There is no quiz marathon currently running.")
+        return
+
+    # Set the flag to false, the running thread will pick this up
+    MARATHON_STATE['is_running'] = False
+    bot.send_message(msg.chat.id, "🛑 Stopping the marathon... It will end after the current question finishes.")
+
 def run_quiz_marathon(admin_chat_id, duration_per_question):
-    """The main logic for the quiz marathon with scoring and explanations."""
+    """The main logic for the quiz marathon. It can now be stopped mid-way."""
     global MARATHON_STATE
     
     try:
         # 1. Set marathon state
         MARATHON_STATE = {
             'is_running': True,
-            'scores': {}, # {user_id: {'name': "Saurabh", 'score': 0}}
+            'scores': {},
             'current_poll_id': None,
             'current_correct_index': None
         }
 
-        # 2. Fetch questions from Google Sheet
+        # 2. Fetch questions
         sheet = get_gsheet()
         if not sheet: raise Exception("Could not connect to Google Sheets.")
-        
         questions_list = sheet.get_all_records()
         if not questions_list: raise Exception("The Google Sheet is empty.")
         
@@ -1161,31 +1448,33 @@ def run_quiz_marathon(admin_chat_id, duration_per_question):
 
         # 3. Loop through questions
         for i, quiz_data in enumerate(questions_list):
+            if not MARATHON_STATE.get('is_running'):
+                bot.send_message(GROUP_ID, "🏃‍♂️💨 The marathon was stopped by the admin!")
+                break # Exit the loop if stop command was issued
+
             question_text = quiz_data.get('Question', 'No Question Text')
             options = [str(quiz_data.get('A')), str(quiz_data.get('B')), str(quiz_data.get('C')), str(quiz_data.get('D'))]
             correct_letter = str(quiz_data.get('Correct', '')).upper()
             correct_index = ['A', 'B', 'C', 'D'].index(correct_letter)
-            explanation = quiz_data.get('Explanation', '') # <-- GET EXPLANATION
+            explanation = quiz_data.get('Explanation', '')
             
             bot.send_message(GROUP_ID, f"➡️ Question {i+1} of {total_questions}...")
             
             poll = bot.send_poll(
-                chat_id=GROUP_ID,
-                question=question_text,
-                options=options,
-                type='quiz',
-                correct_option_id=correct_index,
-                is_anonymous=False,
-                open_period=duration_per_question,
-                explanation=explanation, # <-- ADD EXPLANATION TO POLL
-                explanation_parse_mode="Markdown" # <-- ALLOW FORMATTING
+                chat_id=GROUP_ID, question=question_text, options=options,
+                type='quiz', correct_option_id=correct_index, is_anonymous=False,
+                open_period=duration_per_question, explanation=explanation,
+                explanation_parse_mode="Markdown"
             )
-            # Store current poll info for scoring
             MARATHON_STATE['current_poll_id'] = poll.poll.id
             MARATHON_STATE['current_correct_index'] = correct_index
             
-            time.sleep(duration_per_question + 2) # Wait for poll to close
-
+            # Wait for the poll to finish, but check for the stop signal every second
+            for _ in range(duration_per_question + 2):
+                if not MARATHON_STATE.get('is_running'):
+                    break # Break inner sleep loop
+                time.sleep(1)
+        
         # 4. Announce results
         bot.send_message(GROUP_ID, "🎉 **Marathon Finished!** 🎉\n\nCalculating the results, please wait...", parse_mode="Markdown")
         time.sleep(2)
@@ -1206,21 +1495,16 @@ def announce_marathon_results(admin_chat_id):
         bot.send_message(GROUP_ID, "🤔 It seems no one participated in the marathon.")
         return
 
-    # Sort participants by score (highest first)
     sorted_participants = sorted(scores.items(), key=lambda item: item[1]['score'], reverse=True)
-
-    # Build the result message
     result_text = "🏆 **Marathon Leaderboard** 🏆\n"
     medals = ["🥇", "🥈", "🥉"]
-    for i, (user_id, data) in enumerate(sorted_participants[:10]): # Top 10
+    for i, (user_id, data) in enumerate(sorted_participants[:10]):
         rank = medals[i] if i < 3 else f" {i+1}."
-        # Display score as "X correct answers"
         result_text += f"\n{rank} {data['name']} – *{data['score']} correct*"
     
     bot.send_message(GROUP_ID, result_text, parse_mode="Markdown")
     bot.send_message(admin_chat_id, "✅ Marathon results have been announced.")
 
-# We need to modify the poll_answer_handler to support the marathon
 @bot.poll_answer_handler()
 def handle_poll_answers(poll_answer: types.PollAnswer):
     """Handles answers for BOTH quick quizzes and the new marathon."""
@@ -1229,31 +1513,21 @@ def handle_poll_answers(poll_answer: types.PollAnswer):
     poll_id = poll_answer.poll_id
     user = poll_answer.user
     
-    # --- Logic for Marathon Quiz ---
     if MARATHON_STATE.get('is_running') and poll_id == MARATHON_STATE.get('current_poll_id'):
-        # Check if the user's answer is correct
-        if poll_answer.option_ids: # Check if user provided an answer
+        if poll_answer.option_ids:
             selected_option = poll_answer.option_ids[0]
             correct_option = MARATHON_STATE.get('current_correct_index')
-            
             if selected_option == correct_option:
-                # Initialize user score if not present
                 if user.id not in MARATHON_STATE['scores']:
                     MARATHON_STATE['scores'][user.id] = {'name': user.first_name, 'score': 0}
-                
-                # Increment score for correct answer
                 MARATHON_STATE['scores'][user.id]['score'] += 1
                 print(f"Correct answer from {user.first_name}! New score: {MARATHON_STATE['scores'][user.id]['score']}")
-
-    # --- Logic for old Quick Quiz (from Supabase) ---
     elif poll_id in QUIZ_SESSIONS:
         if poll_answer.option_ids:
             selected_option = poll_answer.option_ids[0]
             is_correct = (selected_option == QUIZ_SESSIONS[poll_id]['correct_option'])
-            
             if poll_id not in QUIZ_PARTICIPANTS:
                 QUIZ_PARTICIPANTS[poll_id] = {}
-                
             QUIZ_PARTICIPANTS[poll_id][user.id] = {
                 'user_name': user.first_name,
                 'is_correct': is_correct,
@@ -1261,7 +1535,6 @@ def handle_poll_answers(poll_answer: types.PollAnswer):
             }
         elif user.id in QUIZ_PARTICIPANTS.get(poll_id, {}):
             del QUIZ_PARTICIPANTS[poll_id][user.id]
-
 @bot.message_handler(content_types=['new_chat_members'])
 def handle_new_member(msg: types.Message):
     """
