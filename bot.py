@@ -372,11 +372,11 @@ last_quiz_posted_hour = -1
 
 def background_worker():
     """
-    This function runs continuously in the background to handle scheduled tasks
-    like sending reminders, closing polls, posting automated quizzes, and saving data.
+    This function runs continuously to handle scheduled tasks.
+    It's now more robust and handles timezone issues correctly.
     """
     global last_quiz_posted_hour
-    
+
     while True:
         try:
             # Use a consistent timezone (IST) for all time-based operations
@@ -385,7 +385,6 @@ def background_worker():
             current_hour = current_time_ist.hour
 
             # --- Automated Bi-Hourly Quiz Trigger ---
-            # Posts a quiz every 2 hours (0, 2, 4, ..., 22)
             is_quiz_time = (current_hour % 2 == 0)
             if is_quiz_time and last_quiz_posted_hour != current_hour:
                 print(f"⏰ It's {current_hour}:00 IST, time for a bi-hourly quiz! Posting...")
@@ -393,15 +392,13 @@ def background_worker():
                 last_quiz_posted_hour = current_hour
 
             # --- Process Scheduled Messages & Reminders ---
-            # We need a copy to modify the list while iterating
             messages_to_process = scheduled_messages[:]
             for msg_details in messages_to_process:
-                # Ensure send_time is timezone-aware for correct comparison
                 send_time = msg_details['send_time']
+                # Make the stored time timezone-aware before comparing
                 if not send_time.tzinfo:
-                     # If it's a naive datetime, assume it was meant to be in IST
-                     send_time = send_time.replace(tzinfo=ist_tz)
-                
+                    send_time = send_time.replace(tzinfo=ist_tz)
+
                 if current_time_ist >= send_time:
                     try:
                         bot.send_message(
@@ -410,31 +407,30 @@ def background_worker():
                             parse_mode="Markdown" if msg_details.get('markdown') else None
                         )
                         print(f"✅ Sent scheduled message: {msg_details['message'][:50]}...")
+
+                        # IMPORTANT: Only modify after successful sending
+                        if not msg_details.get('recurring', False):
+                            scheduled_messages.remove(msg_details)
+                        else:
+                            msg_details['send_time'] += datetime.timedelta(days=1)
+
                     except Exception as e:
                         print(f"❌ Failed to send scheduled message: {e}")
-                    
-                    # Handle recurring and one-time messages
-                    if not msg_details.get('recurring', False):
-                        scheduled_messages.remove(msg_details)
-                    else:
-                        # If it's a recurring daily message, schedule it for the next day
-                        msg_details['send_time'] += datetime.timedelta(days=1)
+                        report_error_to_admin(f"Failed to send scheduled message ID {msg_details.get('id', 'N/A')}: {e}")
 
             # --- Process and Close Active Polls ---
             polls_to_process = active_polls[:]
             for poll in polls_to_process:
-                # Ensure close_time is timezone-aware
                 close_time = poll.get('close_time')
                 if isinstance(close_time, datetime.datetime):
                     if not close_time.tzinfo:
                         close_time = close_time.replace(tzinfo=ist_tz)
-                    
+
                     if current_time_ist >= close_time:
                         try:
                             bot.stop_poll(poll['chat_id'], poll['message_id'])
                             print(f"✅ Closed poll {poll['message_id']}.")
                         except Exception as e:
-                            # This can happen if the poll was manually closed, which is fine.
                             print(f"⚠️ Could not stop poll {poll['message_id']}: {e}")
                         active_polls.remove(poll)
 
@@ -445,10 +441,9 @@ def background_worker():
             tb_string = traceback.format_exc()
             print(f"❌ Error in background_worker:\n{tb_string}")
             report_error_to_admin(tb_string)
-            
+
         # Wait for 30 seconds before the next cycle
         time.sleep(30)
-
 # =============================================================================
 # 7. FLASK WEB SERVER & WEBHOOK
 # =============================================================================
@@ -950,7 +945,40 @@ def process_text_quiz(msg: types.Message):
         bot.send_message(msg.chat.id, f"✅ Text quiz sent! The correct answer is {answer}.")
     except Exception as e:
         bot.send_message(msg.chat.id, f"❌ Error creating quiz: {e}. Please check the format and try again.")
+@bot.message_handler(commands=['announce'])
+@admin_required
+def handle_announce_command(msg: types.Message):
+    """Starts the announcement process."""
+    prompt = bot.send_message(msg.chat.id, "📣 Type the announcement message, or /cancel.")
+    bot.register_next_step_handler(prompt, process_announcement_message)
 
+def process_announcement_message(msg: types.Message):
+    """Processes the admin's text and sends it as an announcement."""
+    if msg.text and msg.text.lower() == '/cancel':
+        bot.send_message(msg.chat.id, "❌ Announcement cancelled.")
+        return
+    try:
+        announcement_text = f"📢 **ANNOUNCEMENT**\n\n{msg.text}"
+        bot.send_message(GROUP_ID, announcement_text, parse_mode="Markdown")
+        bot.send_message(msg.chat.id, "✅ Announcement sent!")
+    except Exception as e:
+        # Give a helpful error if the admin messes up markdown formatting
+        if "can't parse entities" in str(e):
+            bot.send_message(msg.chat.id, "❌ Formatting error in your message. Please fix bold/italics and try again.")
+        else:
+            bot.send_message(msg.chat.id, f"❌ Failed to send announcement: {e}")
+@bot.message_handler(commands=['cancel'])
+@admin_required
+def handle_cancel_command(msg: types.Message):
+    """Handles the /cancel command globally."""
+    user_id = msg.from_user.id
+    if user_id in user_states:
+        # If the user was in a multi-step process, clear their state
+        del user_states[user_id]
+        bot.send_message(msg.chat.id, "✅ Operation cancelled.")
+    else:
+        # If they were not in any process, inform them
+        bot.send_message(msg.chat.id, "🤷‍♀️ Nothing to cancel. You were not in the middle of any operation.")
 @bot.message_handler(commands=['feedback'])
 @membership_required
 def handle_feedback_command(msg: types.Message):
