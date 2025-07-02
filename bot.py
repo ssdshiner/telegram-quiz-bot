@@ -514,7 +514,7 @@ def handle_help_command(msg: types.Message):
         "📝 `/createquiztext` - Create text quiz\n"
         "⚡ `/quickquiz` - Create poll quiz\n"
         "✏️ `/randomquiz` - random quiz bhejo\n"
-        "🏃‍♂️ `/quizmarathon` - Start a quiz series from Google Sheet\n"
+        "🏃 `/quizmarathon` - Start a quiz series from Google Sheet\n"
         "📄 `/mysheet` - Google Sheet link\n"
         "❌ `/deletemessage` - Delete messages\n"
         "🏆 `/announcewinners` - Announce quiz winners\n"
@@ -1094,14 +1094,13 @@ def handle_study_tip_command(msg: types.Message):
     bot.send_message(GROUP_ID, random.choice(tips), parse_mode="Markdown")
     bot.send_message(msg.chat.id, "✅ Study tip sent!")
 # =============================================================================
-# 8.8. QUIZ MARATHON FEATURE (from Google Sheets)
+# 8.8. QUIZ MARATHON FEATURE (from Google Sheets) - WITH SCORING & EXPLANATIONS
 # =============================================================================
 
 @bot.message_handler(commands=['quizmarathon'])
 @admin_required
 def handle_quiz_marathon_command(msg: types.Message):
     """Starts the setup for a Quiz Marathon."""
-    # Check if a marathon is already running
     if MARATHON_STATE.get('is_running'):
         bot.send_message(msg.chat.id, "⚠️ A Quiz Marathon is already in progress. Please wait for it to finish.")
         return
@@ -1128,7 +1127,6 @@ def process_marathon_duration_and_start(msg: types.Message):
 
         bot.send_message(msg.chat.id, f"✅ Okay, each question will last for {duration} seconds. Starting the marathon in the group...")
         
-        # Run the marathon in a separate thread to avoid blocking the bot
         marathon_thread = threading.Thread(target=run_quiz_marathon, args=(msg.chat.id, duration))
         marathon_thread.start()
 
@@ -1138,15 +1136,16 @@ def process_marathon_duration_and_start(msg: types.Message):
         bot.send_message(msg.chat.id, f"❌ An error occurred: {e}")
 
 def run_quiz_marathon(admin_chat_id, duration_per_question):
-    """The main logic for the quiz marathon."""
+    """The main logic for the quiz marathon with scoring and explanations."""
     global MARATHON_STATE
     
     try:
         # 1. Set marathon state
         MARATHON_STATE = {
             'is_running': True,
-            'scores': {}, # {user_id: {name: "Saurabh", score: 0}}
-            'current_poll_id': None
+            'scores': {}, # {user_id: {'name': "Saurabh", 'score': 0}}
+            'current_poll_id': None,
+            'current_correct_index': None
         }
 
         # 2. Fetch questions from Google Sheet
@@ -1163,14 +1162,13 @@ def run_quiz_marathon(admin_chat_id, duration_per_question):
         # 3. Loop through questions
         for i, quiz_data in enumerate(questions_list):
             question_text = quiz_data.get('Question', 'No Question Text')
-            options = [quiz_data.get('A'), quiz_data.get('B'), quiz_data.get('C'), quiz_data.get('D')]
-            correct_letter = quiz_data.get('Correct', '').upper()
+            options = [str(quiz_data.get('A')), str(quiz_data.get('B')), str(quiz_data.get('C')), str(quiz_data.get('D'))]
+            correct_letter = str(quiz_data.get('Correct', '')).upper()
             correct_index = ['A', 'B', 'C', 'D'].index(correct_letter)
+            explanation = quiz_data.get('Explanation', '') # <-- GET EXPLANATION
             
-            # Announce the next question
             bot.send_message(GROUP_ID, f"➡️ Question {i+1} of {total_questions}...")
             
-            # Post the poll
             poll = bot.send_poll(
                 chat_id=GROUP_ID,
                 question=question_text,
@@ -1178,15 +1176,18 @@ def run_quiz_marathon(admin_chat_id, duration_per_question):
                 type='quiz',
                 correct_option_id=correct_index,
                 is_anonymous=False,
-                open_period=duration_per_question
+                open_period=duration_per_question,
+                explanation=explanation, # <-- ADD EXPLANATION TO POLL
+                explanation_parse_mode="Markdown" # <-- ALLOW FORMATTING
             )
+            # Store current poll info for scoring
             MARATHON_STATE['current_poll_id'] = poll.poll.id
+            MARATHON_STATE['current_correct_index'] = correct_index
             
-            # Wait for the poll to finish
-            time.sleep(duration_per_question + 2) # Add 2 extra seconds buffer
+            time.sleep(duration_per_question + 2) # Wait for poll to close
 
         # 4. Announce results
-        bot.send_message(GROUP_ID, "🎉 **Marathon Finished!** 🎉\n\nCalculating the results, please wait...")
+        bot.send_message(GROUP_ID, "🎉 **Marathon Finished!** 🎉\n\nCalculating the results, please wait...", parse_mode="Markdown")
         time.sleep(2)
         announce_marathon_results(admin_chat_id)
 
@@ -1196,10 +1197,10 @@ def run_quiz_marathon(admin_chat_id, duration_per_question):
         bot.send_message(admin_chat_id, f"❌ {error_message}")
     finally:
         # 5. Reset state
-        MARATHON_STATE = {'is_running': False}
+        MARATHON_STATE = {}
 
 def announce_marathon_results(admin_chat_id):
-    """Calculates and announces the marathon winners."""
+    """Calculates and announces the marathon winners with scores."""
     scores = MARATHON_STATE.get('scores', {})
     if not scores:
         bot.send_message(GROUP_ID, "🤔 It seems no one participated in the marathon.")
@@ -1209,11 +1210,12 @@ def announce_marathon_results(admin_chat_id):
     sorted_participants = sorted(scores.items(), key=lambda item: item[1]['score'], reverse=True)
 
     # Build the result message
-    result_text = "🏆 **Marathon Leaderboard** �\n"
+    result_text = "🏆 **Marathon Leaderboard** 🏆\n"
     medals = ["🥇", "🥈", "🥉"]
     for i, (user_id, data) in enumerate(sorted_participants[:10]): # Top 10
         rank = medals[i] if i < 3 else f" {i+1}."
-        result_text += f"\n{rank} {data['name']} - *{data['score']} points*"
+        # Display score as "X correct answers"
+        result_text += f"\n{rank} {data['name']} – *{data['score']} correct*"
     
     bot.send_message(GROUP_ID, result_text, parse_mode="Markdown")
     bot.send_message(admin_chat_id, "✅ Marathon results have been announced.")
@@ -1229,29 +1231,26 @@ def handle_poll_answers(poll_answer: types.PollAnswer):
     
     # --- Logic for Marathon Quiz ---
     if MARATHON_STATE.get('is_running') and poll_id == MARATHON_STATE.get('current_poll_id'):
-        if poll_answer.option_ids: # If user selected an answer
-            # Initialize user score if not present
-            if user.id not in MARATHON_STATE['scores']:
-                MARATHON_STATE['scores'][user.id] = {'name': user.first_name, 'score': 0}
+        # Check if the user's answer is correct
+        if poll_answer.option_ids: # Check if user provided an answer
+            selected_option = poll_answer.option_ids[0]
+            correct_option = MARATHON_STATE.get('current_correct_index')
             
-            # The 'correct_option_id' is stored in the poll object itself, not our state.
-            # We don't need to check correctness here, Telegram does it.
-            # We just give a point for participation. For more complex scoring, this would change.
-            # For simplicity, let's assume every correct answer gives 10 points.
-            # NOTE: The API doesn't tell us IF the answer was correct in poll_answer.
-            # A more advanced system would store the poll object and check against it.
-            # For now, we'll keep it simple. Let's handle scoring in a different way.
-            # We will handle scoring inside the `run_quiz_marathon` loop after each poll closes.
-            # This handler will just be for the old quick quiz for now.
-            pass # We will add marathon scoring logic later if needed.
+            if selected_option == correct_option:
+                # Initialize user score if not present
+                if user.id not in MARATHON_STATE['scores']:
+                    MARATHON_STATE['scores'][user.id] = {'name': user.first_name, 'score': 0}
+                
+                # Increment score for correct answer
+                MARATHON_STATE['scores'][user.id]['score'] += 1
+                print(f"Correct answer from {user.first_name}! New score: {MARATHON_STATE['scores'][user.id]['score']}")
 
-    # --- Logic for old Quick Quiz ---
+    # --- Logic for old Quick Quiz (from Supabase) ---
     elif poll_id in QUIZ_SESSIONS:
         if poll_answer.option_ids:
             selected_option = poll_answer.option_ids[0]
             is_correct = (selected_option == QUIZ_SESSIONS[poll_id]['correct_option'])
             
-            # Ensure the nested dictionary exists
             if poll_id not in QUIZ_PARTICIPANTS:
                 QUIZ_PARTICIPANTS[poll_id] = {}
                 
@@ -1261,9 +1260,8 @@ def handle_poll_answers(poll_answer: types.PollAnswer):
                 'answered_at': datetime.datetime.now()
             }
         elif user.id in QUIZ_PARTICIPANTS.get(poll_id, {}):
-            # User retracted their vote
             del QUIZ_PARTICIPANTS[poll_id][user.id]
-�
+
 @bot.message_handler(content_types=['new_chat_members'])
 def handle_new_member(msg: types.Message):
     """
