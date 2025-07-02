@@ -14,6 +14,7 @@ from flask import Flask, request
 from telebot import TeleBot, types
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import timezone, timedelta
+from supabase import create_client, Client # <-- ADDED FOR SUPABASE
 
 # =============================================================================
 # 2. CONFIGURATION & INITIALIZATION
@@ -30,9 +31,9 @@ BOT_USERNAME = "Rising_quiz_bot"  # Your specified bot username
 # Environment variables for Google Sheets
 GOOGLE_SHEETS_CREDENTIALS_PATH = os.getenv('GOOGLE_SHEETS_CREDENTIALS_PATH')
 GOOGLE_SHEET_KEY = os.getenv('GOOGLE_SHEET_KEY')
-
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 # --- Type Casting with Error Handling ---
-# We do this after the initial getenv calls to ensure we have integers where needed.
 try:
     GROUP_ID = int(GROUP_ID_STR) if GROUP_ID_STR else None
     ADMIN_USER_ID = int(ADMIN_USER_ID_STR) if ADMIN_USER_ID_STR else None
@@ -43,7 +44,15 @@ except (ValueError, TypeError):
 # --- Bot and Flask App Initialization ---
 bot = TeleBot(BOT_TOKEN, threaded=False)
 app = Flask(__name__)
-
+# --- Supabase Client Initialization ---
+supabase: Client = None
+try:
+    if not (SUPABASE_URL and SUPABASE_KEY):
+        raise ValueError("SUPABASE_URL and SUPABASE_KEY environment variables must be set.")
+    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+    print("✅ Successfully initialized Supabase client.")
+except Exception as e:
+    print(f"❌ FATAL: Could not initialize Supabase client. Error: {e}")
 # --- Global In-Memory Storage ---
 scheduled_messages = []
 active_polls = []
@@ -196,65 +205,75 @@ def create_main_menu_keyboard():
 
 
 # =============================================================================
-# 5. DATA PERSISTENCE (LOCAL TESTING & SCHEDULER)
+# 5. DATA PERSISTENCE WITH SUPABASE *** THIS SECTION IS REPLACED ***
 # =============================================================================
-# IMPORTANT: Render's free tier has an ephemeral filesystem. This means bot_data.json
-# will be DELETED on every restart or redeploy. This is mainly for local testing.
-# For persistent data on Render, use a database like Redis or ElephantSQL.
-
 def load_data():
-    """Loads bot state from a JSON file."""
-    global scheduled_messages, TODAY_QUIZ_DETAILS, CUSTOM_WELCOME_MESSAGE, active_polls, QUIZ_SESSIONS, QUIZ_PARTICIPANTS
+    """Loads bot state from Supabase."""
+    if not supabase:
+        print("WARNING: Supabase client not available. Skipping data load.")
+        return
+        
+    global scheduled_messages, TODAY_QUIZ_DETAILS, CUSTOM_WELCOME_MESSAGE, QUIZ_SESSIONS, QUIZ_PARTICIPANTS
+    print("Loading data from Supabase...")
     try:
-        with open("bot_data.json", "r") as f:
-            data = json.load(f)
-            # Deserialize datetimes correctly
-            deserialized_messages = []
-            for msg in data.get("scheduled_messages", []):
-                try:
-                    msg['send_time'] = datetime.datetime.strptime(msg['send_time'], '%Y-%m-%d %H:%M:%S')
-                    deserialized_messages.append(msg)
-                except (ValueError, TypeError):
-                    continue # Skip invalid entries
-            scheduled_messages = deserialized_messages
-            
-            TODAY_QUIZ_DETAILS = data.get("TODAY_QUIZ_DETAILS", TODAY_QUIZ_DETAILS)
-            CUSTOM_WELCOME_MESSAGE = data.get("CUSTOM_WELCOME_MESSAGE", CUSTOM_WELCOME_MESSAGE)
-            active_polls = data.get("active_polls", []) # Note: Datetimes for polls are not restored.
-            QUIZ_SESSIONS = data.get("QUIZ_SESSIONS", {})
-            QUIZ_PARTICIPANTS = data.get("QUIZ_PARTICIPANTS", {})
-        print("✅ Data loaded from bot_data.json")
-    except (FileNotFoundError, json.JSONDecodeError):
-        print("ℹ️ No saved data file found. Starting with fresh data.")
+        # Fetch all rows from the bot_state table
+        response = supabase.table('bot_state').select("*").execute()
+        db_data = response.data
+        
+        # Convert list of rows into a key-value dictionary for easy access
+        state = {item['key']: item['value'] for item in db_data}
+        
+        # Load scheduled messages and deserialize datetimes
+        loaded_messages = state.get('scheduled_messages', [])
+        deserialized_messages = []
+        for msg in loaded_messages:
+            try:
+                msg['send_time'] = datetime.datetime.strptime(msg['send_time'], '%Y-%m-%d %H:%M:%S')
+                deserialized_messages.append(msg)
+            except (ValueError, TypeError): continue # Skip malformed entries
+        scheduled_messages = deserialized_messages
+        
+        # Load other data, using .get() with a default value to prevent errors
+        TODAY_QUIZ_DETAILS = state.get('today_quiz_details', TODAY_QUIZ_DETAILS)
+        CUSTOM_WELCOME_MESSAGE = state.get('custom_welcome_message', CUSTOM_WELCOME_MESSAGE)
+        QUIZ_SESSIONS = state.get('quiz_sessions', QUIZ_SESSIONS)
+        QUIZ_PARTICIPANTS = state.get('quiz_participants', QUIZ_PARTICIPANTS)
+        
+        print("✅ Data successfully loaded from Supabase.")
     except Exception as e:
-        print(f"❌ Error loading data: {e}")
+        print(f"❌ Error loading data from Supabase: {e}")
 
 def save_data():
-    """Saves bot state to a JSON file."""
-    data_to_save = {
-        "scheduled_messages": [],
-        "TODAY_QUIZ_DETAILS": TODAY_QUIZ_DETAILS,
-        "CUSTOM_WELCOME_MESSAGE": CUSTOM_WELCOME_MESSAGE,
-        "active_polls": active_polls,
-        "QUIZ_SESSIONS": QUIZ_SESSIONS,
-        "QUIZ_PARTICIPANTS": QUIZ_PARTICIPANTS
-    }
-    # Serialize datetimes to strings
-    for msg in scheduled_messages:
-        msg_copy = msg.copy()
-        msg_copy['send_time'] = msg_copy['send_time'].strftime('%Y-%m-%d %H:%M:%S')
-        data_to_save["scheduled_messages"].append(msg_copy)
+    """Saves bot state to Supabase."""
+    if not supabase:
+        print("WARNING: Supabase client not available. Skipping data save.")
+        return
 
     try:
-        with open("bot_data.json", "w") as f:
-            json.dump(data_to_save, f, indent=4)
+        # Serialize datetimes for scheduled messages before saving
+        serializable_messages = []
+        for msg in scheduled_messages:
+            msg_copy = msg.copy()
+            msg_copy['send_time'] = msg_copy['send_time'].strftime('%Y-%m-%d %H:%M:%S')
+            serializable_messages.append(msg_copy)
+
+        # Prepare data in the format Supabase expects: a list of dictionaries
+        data_to_upsert = [
+            {'key': 'scheduled_messages', 'value': serializable_messages},
+            {'key': 'today_quiz_details', 'value': TODAY_QUIZ_DETAILS},
+            {'key': 'custom_welcome_message', 'value': CUSTOM_WELCOME_MESSAGE},
+            {'key': 'quiz_sessions', 'value': QUIZ_SESSIONS},
+            {'key': 'quiz_participants', 'value': QUIZ_PARTICIPANTS},
+        ]
+        
+        # 'upsert' will INSERT new keys and UPDATE existing ones based on the primary key ('key')
+        supabase.table('bot_state').upsert(data_to_upsert).execute()
     except Exception as e:
-        print(f"❌ Error saving data: {e}")
+        print(f"❌ Error saving data to Supabase: {e}")
 
 # =============================================================================
-# 6. BACKGROUND SCHEDULER
+# 6. BACKGROUND SCHEDULER (Calls the new save_data function)
 # =============================================================================
-
 def background_worker():
     """A background thread to handle scheduled tasks."""
     print("Background worker thread started.")
@@ -861,29 +880,24 @@ def handle_other_messages(msg: types.Message):
 
 
 # =============================================================================
-# 9. MAIN EXECUTION BLOCK
+# 9. MAIN EXECUTION BLOCK (Calls the new load_data function)
 # =============================================================================
-
 if __name__ == "__main__":
     print("🤖 Initializing bot...")
     
     # --- Verify Environment Variables ---
-    required_vars = ['BOT_TOKEN', 'SERVER_URL', 'GROUP_ID', 'WEBAPP_URL', 'ADMIN_USER_ID', 'GOOGLE_SHEETS_CREDENTIALS_PATH', 'GOOGLE_SHEET_KEY']
-    missing_vars = [var for var in required_vars if not os.getenv(var)]
-    if missing_vars:
-        raise Exception(f"❌ FATAL: Missing critical environment variables: {', '.join(missing_vars)}")
-    if not GROUP_ID or not ADMIN_USER_ID:
-        raise Exception("❌ FATAL: GROUP_ID or ADMIN_USER_ID is not a valid integer.")
-            
+    required_vars = ['BOT_TOKEN', 'SERVER_URL', 'GROUP_ID', 'ADMIN_USER_ID', 'SUPABASE_URL', 'SUPABASE_KEY']
+    if any(not os.getenv(var) for var in required_vars):
+        raise Exception("❌ FATAL: One or more critical environment variables are missing.")
     print("✅ All required environment variables are loaded.")
 
-    # --- Load previous state if available (for local testing) ---
+    # --- Load persistent state from Supabase ---
     load_data()
     
     # --- Initialize Google Sheet ---
     initialize_gsheet()
     
-    # --- Start the background task scheduler in a separate thread ---
+    # --- Start the background task scheduler ---
     scheduler_thread = threading.Thread(target=background_worker, daemon=True)
     scheduler_thread.start()
     
