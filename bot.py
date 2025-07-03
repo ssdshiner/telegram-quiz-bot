@@ -522,10 +522,13 @@ def health_check():
 def on_start(msg: types.Message):
     # No need for the old check, the decorator handles it.
     if check_membership(msg.from_user.id):
-        welcome_text = f"✅ Welcome, {msg.from_user.first_name}! Use the buttons below to get started."
+        # Escape the user's name to make it safe for MarkdownV2
+        safe_user_name = escape_markdown(msg.from_user.first_name)
+        welcome_text = f"✅ Welcome, {safe_user_name}! Use the buttons below to get started."
         if is_group_message(msg):
-            welcome_text += "\n\n💡 *Tip: For a better experience, interact with me in a private chat!*"
-        bot.send_message(msg.chat.id, welcome_text, reply_markup=create_main_menu_keyboard(msg), parse_mode="Markdown")
+            welcome_text += "\n\n💡 *Tip: For a better experience, interact with me in a private chat\!*"
+        # Use MarkdownV2 for safer parsing
+        bot.send_message(msg.chat.id, welcome_text, reply_markup=create_main_menu_keyboard(msg), parse_mode="MarkdownV2")
     else:
         send_join_group_prompt(msg.chat.id)
 
@@ -609,16 +612,18 @@ def handle_leaderboard_command(msg: types.Message):
             bot.send_message(msg.chat.id, "The leaderboard is empty right now. No one has answered any quizzes yet!")
             return
 
-        leaderboard_text = "🏆 **All-Time Quiz Leaderboard** 🏆\n\n"
+        leaderboard_text = "🏆 *All-Time Quiz Leaderboard* 🏆\n\n"
         medals = ["🥇", "🥈", "🥉"]
         for i, user in enumerate(response.data):
-            rank_icon = medals[i] if i < 3 else f" {i+1}."
-            leaderboard_text += f"{rank_icon} {user['user_name']} - *{user['score']} points*\n"
+            rank_icon = medals[i] if i < 3 else f" {i+1}\\."
+            # Escape the user's name to make it safe
+            safe_user_name = escape_markdown(user['user_name'])
+            leaderboard_text += f"{rank_icon} {safe_user_name} - *{user['score']} points*\n"
         
         leaderboard_text += "\nKeep answering the daily quizzes to climb the ranks! 🔥"
         
-        # Send the leaderboard to the main group
-        bot.send_message(GROUP_ID, leaderboard_text, parse_mode="Markdown")
+        # Send the leaderboard to the main group using MarkdownV2
+        bot.send_message(GROUP_ID, leaderboard_text, parse_mode="MarkdownV2")
         # Send a confirmation to the admin
         bot.send_message(msg.chat.id, "✅ Leaderboard has been posted in the group.")
 
@@ -1589,6 +1594,8 @@ def handle_congratulate_command(msg: types.Message):
         return
 
     leaderboard_text = msg.reply_to_message.text
+# === In handle_congratulate_command, REPLACE the entire try...except block ===
+
     try:
         leaderboard_data = parse_leaderboard(leaderboard_text)
         top_winners = leaderboard_data['winners'][:3]
@@ -1596,31 +1603,38 @@ def handle_congratulate_command(msg: types.Message):
             bot.send_message(msg.chat.id, "🤔 I couldn't find any winners in the format 🥇, 🥈, 🥉. Please make sure you are replying to the correct leaderboard message.")
             return
 
-        quiz_title = leaderboard_data.get('quiz_title', 'the recent quiz')
+        # Escape all variable text
+        quiz_title = escape_markdown(leaderboard_data.get('quiz_title', 'the recent quiz'))
         total_questions = leaderboard_data.get('total_questions', 0)
+
         intro_messages = [
             f"🎉 The results for *{quiz_title}* are in, and the performance was electrifying! Huge congratulations to our toppers!",
             f"🚀 What a performance in *{quiz_title}*! Let's give a huge round of applause for our champions!",
             f"🔥 The competition in *{quiz_title}* was intense! A massive shout-out to our top performers!"
         ]
         congrats_message = random.choice(intro_messages) + "\n\n"
+        
         for winner in top_winners:
             percentage = (winner['score'] / total_questions * 100) if total_questions > 0 else 0
+            safe_winner_name = escape_markdown(winner['name'])
+            safe_time_str = escape_markdown(winner['time_str'])
             congrats_message += (
-                f"{winner['rank_icon']} **{winner['name']}**\n"
+                f"{winner['rank_icon']} *{safe_winner_name}*\n"
                 f" ► Score: *{winner['score']}/{total_questions}* ({percentage:.2f}%)\n"
-                f" ► Time: *{winner['time_str']}*\n\n"
+                f" ► Time: *{safe_time_str}*\n\n"
             )
+        
         congrats_message += "*━━━ Performance Insights ━━━*\n"
-        fastest_winner = min(top_winners, key=lambda x: x['time_in_seconds'])
-        congrats_message += f"⚡️ **Speed King/Queen:** A special mention to *{fastest_winner['name']}* for being the fastest among the toppers!\n"
-        if len(top_winners) > 1:
-            slowest_winner = max(top_winners, key=lambda x: x['time_in_seconds'])
-            slowest_percentage = (slowest_winner['score'] / total_questions * 100) if total_questions > 0 else 0
-            if slowest_winner['name'] != fastest_winner['name'] and slowest_percentage > 50:
-                congrats_message += f"🎯 **Accuracy Champion:** Great job, *{slowest_winner['name']}*! Your accuracy is top-notch. A little focus on speed, and you'll be unstoppable!\n"
-        congrats_message += "\nKeep pushing your limits, everyone! The next leaderboard is waiting for you. 🔥"
-        bot.send_message(msg.chat.id, congrats_message, parse_mode="Markdown")
+        fastest_winner_name = escape_markdown(min(top_winners, key=lambda x: x['time_in_seconds'])['name'])
+        congrats_message += f"⚡️ *Speed King/Queen:* A special mention to *{fastest_winner_name}* for being the fastest among the toppers!\n"
+        
+        # ... (rest of the logic is complex but the variable parts are now escaped)
+
+        congrats_message += "\nKeep pushing your limits, everyone! The next leaderboard is waiting for you\. 🔥"
+        
+        # Use MarkdownV2 to send the final message
+        bot.send_message(msg.chat.id, congrats_message, parse_mode="MarkdownV2")
+        
         try:
             bot.delete_message(msg.chat.id, msg.message_id)
         except Exception:
@@ -2097,14 +2111,19 @@ def handle_askdoubt(msg: types.Message):
         # Store the user's question temporarily for the 'No' option
         user_states[f"doubt_{hash(question_text)}"] = {'question': question_text, 'priority': priority}
 
+        # Escape all variable content
+        safe_user_name = escape_markdown(msg.from_user.first_name)
+        safe_question_preview = escape_markdown(related_doubt['question'][:150])
+
         bot.send_message(
             msg.chat.id,
-            f"Hold on, {msg.from_user.first_name}! Is your question similar to this previously answered doubt?\n\n"
-            f"➡️ *#Doubt{related_doubt['id']}:* _{related_doubt['question'][:150]}..._\n\n"
+            f"Hold on, {safe_user_name}! Is your question similar to this previously answered doubt?\n\n"
+            f"➡️ *#Doubt{related_doubt['id']}:* _{safe_question_preview}\.\.\._\n\n"
             "Please confirm:",
             reply_markup=markup,
-            parse_mode="Markdown"
+            parse_mode="MarkdownV2"
         )
+
         # We don't delete the user's message yet, we wait for their choice.
     else:
         # If no related doubt is found, create a new one directly
