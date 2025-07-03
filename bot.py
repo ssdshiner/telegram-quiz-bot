@@ -206,7 +206,8 @@ def send_join_group_prompt(chat_id):
     )
     bot.send_message(
         chat_id,
-        "❌ *Access Denied\!*\n\nYou must be a member of our group to use this bot\.\n\nPlease join and then click 'Re\-Verify' or type /suru\.",
+        # The '!' characters are now escaped with '\'
+        "❌ *Access Denied\!* \n\nYou must be a member of our group to use this bot\.\n\nPlease join and then click 'Re\-Verify' or type /suru\.",
         reply_markup=markup,
         parse_mode="MarkdownV2"
     )
@@ -2099,7 +2100,6 @@ def announce_marathon_results(admin_chat_id):
     
     bot.send_message(GROUP_ID, result_text, parse_mode="Markdown")
     bot.send_message(admin_chat_id, "✅ Marathon results have been announced.")
-
 @bot.message_handler(content_types=['new_chat_members'])
 def handle_new_member(msg: types.Message):
     """
@@ -2107,9 +2107,10 @@ def handle_new_member(msg: types.Message):
     """
     for member in msg.new_chat_members:
         if not member.is_bot:
-            welcome_text = CUSTOM_WELCOME_MESSAGE.format(user_name=member.first_name)
-            bot.send_message(msg.chat.id, welcome_text, parse_mode="Markdown")
-
+            # We now use a direct string, not a variable.
+            welcome_text = f"Hey {member.first_name}! 👋 Welcome to the group. Be ready for the quiz at 8 PM! 🚀"
+            # IMPORTANT: We remove parse_mode="Markdown" to avoid errors with user names.
+            bot.send_message(msg.chat.id, welcome_text)
 # --- Fallback Handler (Must be the VERY LAST message handler) ---
 
 @bot.message_handler(func=lambda message: bot_is_target(message))
