@@ -57,7 +57,6 @@ except Exception as e:
     print(f"❌ FATAL: Could not initialize Supabase client. Error: {e}")
 
 # --- Global In-Memory Storage ---
-scheduled_messages = []
 active_polls = []
 QUIZ_SESSIONS = {}
 QUIZ_PARTICIPANTS = {}
@@ -65,7 +64,6 @@ TODAY_QUIZ_DETAILS = {
     "details_text": "Not Set",
     "is_set": False
 }
-CUSTOM_WELCOME_MESSAGE = "Hey {user_name}! 👋 Welcome to the group. Be ready for the quiz at 8 PM! 🚀"
 MARATHON_STATE = {}
 user_states = {}
 last_quiz_posted_hour = -1
@@ -208,7 +206,7 @@ def send_join_group_prompt(chat_id):
     )
     bot.send_message(
         chat_id,
-        "❌ *Access Denied\!*\n\nYou must be a member of our group to use this bot\.\n\nPlease join and then click 'Re\-Verify' or type /start\.",
+        "❌ *Access Denied\!*\n\nYou must be a member of our group to use this bot\.\n\nPlease join and then click 'Re\-Verify' or type /suru\.",
         reply_markup=markup,
         parse_mode="MarkdownV2"
     )
@@ -256,7 +254,7 @@ def load_data():
         print("WARNING: Supabase client not available. Skipping data load.")
         return
         
-    global scheduled_messages, TODAY_QUIZ_DETAILS, CUSTOM_WELCOME_MESSAGE, QUIZ_SESSIONS, QUIZ_PARTICIPANTS, active_polls
+    global TODAY_QUIZ_DETAILS, QUIZ_SESSIONS, QUIZ_PARTICIPANTS, active_polls
     print("Loading data from Supabase...")
     try:
         response = supabase.table('bot_state').select("*").execute()
@@ -277,12 +275,10 @@ def load_data():
                 except (json.JSONDecodeError, TypeError, ValueError) as e:
                     print(f"Warning: Could not deserialize {items}. Starting fresh. Error: {e}")
                 return deserialized_list
-
-            scheduled_messages = deserialize_datetimes('scheduled_messages', 'send_time')
             active_polls = deserialize_datetimes('active_polls', 'close_time')
 
             TODAY_QUIZ_DETAILS = json.loads(state.get('today_quiz_details', '{}')) or TODAY_QUIZ_DETAILS
-            CUSTOM_WELCOME_MESSAGE = state.get('custom_welcome_message', CUSTOM_WELCOME_MESSAGE)
+            
             QUIZ_SESSIONS = json.loads(state.get('quiz_sessions', '{}')) or QUIZ_SESSIONS
             QUIZ_PARTICIPANTS = json.loads(state.get('quiz_participants', '{}')) or QUIZ_PARTICIPANTS
             
@@ -311,10 +307,9 @@ def save_data():
             return json.dumps(serializable_list)
 
         data_to_upsert = [
-            {'key': 'scheduled_messages', 'value': serialize_datetimes(scheduled_messages, 'send_time')},
+            
             {'key': 'active_polls', 'value': serialize_datetimes(active_polls, 'close_time')},
             {'key': 'today_quiz_details', 'value': json.dumps(TODAY_QUIZ_DETAILS)},
-            {'key': 'custom_welcome_message', 'value': CUSTOM_WELCOME_MESSAGE},
             {'key': 'quiz_sessions', 'value': json.dumps(QUIZ_SESSIONS)},
             {'key': 'quiz_participants', 'value': json.dumps(QUIZ_PARTICIPANTS)},
         ]
@@ -361,22 +356,6 @@ def background_worker():
                     print(f"❌ Failed to check for doubt reminders: {e}")
                 last_doubt_reminder_hour = current_hour
 
-            # --- Process Scheduled Messages ---
-            messages_to_process = scheduled_messages[:]
-            for msg_details in messages_to_process:
-                send_time = msg_details['send_time'].replace(tzinfo=ist_tz)
-                if current_time_ist >= send_time:
-                    try:
-                        safe_message = escape_markdown(msg_details['message'])
-                        bot.send_message(GROUP_ID, safe_message, parse_mode="MarkdownV2")
-                        print(f"✅ Sent scheduled message: {msg_details['message'][:50]}...")
-                        if not msg_details.get('recurring', False):
-                            scheduled_messages.remove(msg_details)
-                        else:
-                            msg_details['send_time'] += datetime.timedelta(days=1)
-                    except Exception as e:
-                        print(f"❌ Failed to send scheduled message: {e}")
-                        report_error_to_admin(f"Failed to send scheduled message: {e}\n\nMessage was: {msg_details.get('message', 'N/A')}")
             
             # --- Process and Close Active Polls ---
             polls_to_process = active_polls[:]
@@ -424,14 +403,17 @@ def health_check():
 # =============================================================================
 # 8. TELEGRAM BOT HANDLERS
 # =============================================================================
-@bot.message_handler(commands=['start', 'suru'], func=bot_is_target)
+@bot.message_handler(commands=['suru'], func=bot_is_target)
 def on_start(msg: types.Message):
-    """Handles the /start command."""
+    """Handles the /start command. NOW ONLY WORKS IN PRIVATE CHAT."""
+    # NEW: If this command is used in a group, do nothing.
+    if is_group_message(msg):
+        return
+
+    # The rest of the function only runs if it's a private chat.
     if check_membership(msg.from_user.id):
         safe_user_name = escape_markdown(msg.from_user.first_name)
         welcome_text = f"✅ Welcome, {safe_user_name}! Use the buttons below to get started."
-        if is_group_message(msg):
-            welcome_text += "\n\n💡 *Tip: For a better experience, interact with me in a private chat\!*"
         bot.send_message(msg.chat.id, welcome_text, reply_markup=create_main_menu_keyboard(msg), parse_mode="MarkdownV2")
     else:
         send_join_group_prompt(msg.chat.id)
@@ -451,7 +433,7 @@ def reverify(call: types.CallbackQuery):
             options={},
             json_string=""
         )
-        start_message_clone.text = "/start"
+        start_message_clone.text = "/suru"
         on_start(start_message_clone)
     else:
         bot.answer_callback_query(call.id, "❌ You're still not in the group. Please join and try again.", show_alert=True)
@@ -493,16 +475,6 @@ Here are all the commands available to you\. Click on any command to use it\.
 ❓ `/askdoubt` \- Ask a question \(e\.g\., `/askdoubt \[High] question text`\)\.
 ✍️ `/answer` \- Answer a specific doubt \(e\.g\., `/answer 123 your answer`\)\.
 
-*━━━ Scheduling & Reminders ━━━*
-⏰ `/setreminder` \- Set a one\-time or daily reminder\.
-👀 `/viewscheduled` \- See all upcoming scheduled messages\.
-🗑️ `/clearscheduled` \- Delete all scheduled messages\.
-
-*━━━ Group Administration ━━━*
-👋 `/setwelcome` \- Change the group welcome message\.
-💬 `/replyto` \- Reply to a user's message via the bot\.
-❌ `/deletemessage` \- Delete a message by replying to it\.
-
 *━━━ Utilities ━━━*
 📖 `/section` \- Get a summary of a law section \(e\.g\., `/section 141`\)\.
 📄 `/mysheet` \- Get the link to the connected Google Sheet\.
@@ -533,19 +505,6 @@ def handle_leaderboard_command(msg: types.Message):
     except Exception as e:
         print(f"Error in /leaderboard command: {traceback.format_exc()}")
         report_error_to_admin(f"Failed to generate leaderboard:\n{traceback.format_exc()}")
-@bot.message_handler(commands=['deletemessage'])
-@admin_required
-def handle_delete_message(msg: types.Message):
-    """Deletes a message by replying to it."""
-    if not msg.reply_to_message:
-        bot.send_message(msg.chat.id, "❌ Please reply to the message you want to delete with `/deletemessage`.")
-        return
-    try:
-        bot.delete_message(msg.chat.id, msg.reply_to_message.message_id)
-        bot.delete_message(msg.chat.id, msg.message_id)
-        bot.send_message(msg.from_user.id, "✅ Message deleted successfully.")
-    except Exception as e:
-        bot.send_message(msg.from_user.id, f"⚠️ Could not delete message: {e}")
 # =============================================================================
 # 5. DATA PERSISTENCE WITH SUPABASE (UPDATED FUNCTIONS)
 # =============================================================================
@@ -559,7 +518,7 @@ def load_data():
         return
         
     # Add active_polls to the list of global variables we are loading
-    global scheduled_messages, TODAY_QUIZ_DETAILS, CUSTOM_WELCOME_MESSAGE, QUIZ_SESSIONS, QUIZ_PARTICIPANTS, active_polls
+    global  TODAY_QUIZ_DETAILS, QUIZ_SESSIONS, QUIZ_PARTICIPANTS, active_polls
     print("Loading data from Supabase...")
     try:
         response = supabase.table('bot_state').select("*").execute()
@@ -568,19 +527,6 @@ def load_data():
             db_data = response.data
             state = {item['key']: item['value'] for item in db_data}
             
-            # --- Load scheduled messages ---
-            loaded_messages_str = state.get('scheduled_messages', '[]')
-            loaded_messages = json.loads(loaded_messages_str)
-            deserialized_messages = []
-            for msg in loaded_messages:
-                try:
-                    if 'send_time' in msg:
-                        msg['send_time'] = datetime.datetime.strptime(msg['send_time'], '%Y-%m-%d %H:%M:%S')
-                        deserialized_messages.append(msg)
-                except (ValueError, TypeError): 
-                    continue
-            scheduled_messages = deserialized_messages
-
             # --- NEW: Load active polls ---
             loaded_polls_str = state.get('active_polls', '[]')
             loaded_polls = json.loads(loaded_polls_str)
@@ -596,7 +542,7 @@ def load_data():
 
             # --- Load all other data ---
             TODAY_QUIZ_DETAILS = json.loads(state.get('today_quiz_details', '{}')) or TODAY_QUIZ_DETAILS
-            CUSTOM_WELCOME_MESSAGE = state.get('custom_welcome_message', CUSTOM_WELCOME_MESSAGE)
+            
             QUIZ_SESSIONS = json.loads(state.get('quiz_sessions', '{}')) or QUIZ_SESSIONS
             QUIZ_PARTICIPANTS = json.loads(state.get('quiz_participants', '{}')) or QUIZ_PARTICIPANTS
             
@@ -615,12 +561,6 @@ def save_data():
         return
 
     try:
-        # --- Serialize scheduled_messages (contains datetime objects) ---
-        serializable_messages = []
-        for msg in scheduled_messages:
-            msg_copy = msg.copy()
-            msg_copy['send_time'] = msg_copy['send_time'].strftime('%Y-%m-%d %H:%M:%S')
-            serializable_messages.append(msg_copy)
 
         # --- NEW: Serialize active_polls (also contains datetime objects) ---
         serializable_polls = []
@@ -632,9 +572,8 @@ def save_data():
 
         # --- Prepare all data for upserting ---
         data_to_upsert = [
-            {'key': 'scheduled_messages', 'value': json.dumps(serializable_messages)},
+            
             {'key': 'today_quiz_details', 'value': json.dumps(TODAY_QUIZ_DETAILS)},
-            {'key': 'custom_welcome_message', 'value': CUSTOM_WELCOME_MESSAGE},
             {'key': 'quiz_sessions', 'value': json.dumps(QUIZ_SESSIONS)},
             {'key': 'quiz_participants', 'value': json.dumps(QUIZ_PARTICIPANTS)},
             # Add the newly serialized polls to the list
@@ -652,7 +591,12 @@ def save_data():
 @bot.message_handler(commands=['todayquiz'])
 @membership_required
 def handle_today_quiz(msg: types.Message):
-    """Shows the quiz details for the day."""
+    """Shows the quiz details for the day. ONLY WORKS IN GROUP."""
+    # NEW: Check if this is a group message
+    if not is_group_message(msg):
+        bot.send_message(msg.chat.id, "ℹ️ The `/todayquiz` command only works in the main group chat.")
+        return
+
     if not TODAY_QUIZ_DETAILS.get("is_set"):
         bot.send_message(msg.chat.id, "😕 Today's quiz details have not been set yet. The admin can set it using /setquiz.")
         return
@@ -836,130 +780,6 @@ def handle_mysheet(msg: types.Message):
 # =============================================================================
 # 8.6. GENERAL ADMIN COMMANDS (CLEANED UP)
 # =============================================================================
-
-@bot.message_handler(commands=['schedulemsg', 'setreminder'])
-@admin_required
-def handle_schedule_or_remind_command(msg: types.Message):
-    """Handles both scheduling a one-time message and setting a daily reminder."""
-    prompt = bot.send_message(
-        msg.chat.id,
-        "⏰ *Schedule a Message or Reminder*\n\n"
-        "Please send the details in ONE of the following formats:\n\n"
-        "**For a one-time message:**\n"
-        "`YYYY-MM-DD HH:MM | Your one-time message here`\n\n"
-        "**For a daily reminder:**\n"
-        "`HH:MM | Your daily reminder message`\n\n"
-        "Or type /cancel to abort the operation.",
-        parse_mode="Markdown"
-    )
-    bot.register_next_step_handler(prompt, process_schedule_or_reminder)
-
-def process_schedule_or_reminder(msg: types.Message):
-    """Processes the input from the admin to schedule a message or reminder."""
-    if msg.text and msg.text.lower() == '/cancel':
-        bot.send_message(msg.chat.id, "❌ Operation cancelled.")
-        return
-
-    try:
-        time_part, message_part = msg.text.split(' | ', 1)
-        time_part = time_part.strip()
-        message_part = message_part.strip()
-        is_recurring = False
-        
-        if ':' in time_part and len(time_part) <= 5: # Daily reminder format HH:MM
-            is_recurring = True
-            send_time = datetime.datetime.strptime(time_part, "%H:%M")
-            now = datetime.datetime.now()
-            final_send_time = now.replace(hour=send_time.hour, minute=send_time.minute, second=0, microsecond=0)
-            if final_send_time <= now:
-                final_send_time += datetime.timedelta(days=1)
-            final_message = f"⏰ **Daily Reminder:** {message_part}"
-        else: # One-time message format YYYY-MM-DD HH:MM
-            final_send_time = datetime.datetime.strptime(time_part, "%Y-%m-%d %H:%M")
-            if final_send_time <= datetime.datetime.now():
-                raise ValueError("Cannot schedule messages in the past.")
-            final_message = message_part
-
-        scheduled_messages.append({
-            'send_time': final_send_time,
-            'message': final_message,
-            'markdown': True,
-            'recurring': is_recurring
-        })
-        bot.send_message(
-            msg.chat.id,
-            f"✅ Message successfully scheduled for {final_send_time.strftime('%Y-%m-%d %H:%M')}."
-            f"{' (This will repeat daily)' if is_recurring else ''}"
-        )
-    except Exception as e:
-        bot.send_message(msg.chat.id, f"❌ Invalid format or other error: {e}.\nPlease check the format and try the command again.")
-
-@bot.message_handler(commands=['replyto'])
-@admin_required
-def handle_respond_command(msg: types.Message):
-    """
-    Allows the admin to reply to a user's message. The bot posts the reply,
-    sends a private confirmation to the admin, and deletes the admin's command.
-    """
-    if not msg.reply_to_message:
-        bot.reply_to(msg, "❌ Please use this command by replying to the message you want to answer.")
-        return
-        
-    response_text = msg.text.replace('/replyto', '').strip()
-    if not response_text:
-        bot.reply_to(msg, "❌ Please provide your response after the `/replyto` command.")
-        return
-        
-    try:
-        # Step 1: Post the formatted response in the group, replying to the original user's message.
-        bot.send_message(
-            GROUP_ID, # Always sends to the main group
-            f"📢 *Admin Response:*\n\n{escape_markdown(response_text)}",
-            reply_to_message_id=msg.reply_to_message.message_id,
-            parse_mode="MarkdownV2"
-        )
-        
-        # Step 2: Send a private confirmation message to you (the admin).
-        bot.send_message(msg.from_user.id, "✅ Your response has been posted in the group!")
-
-        # Step 3: Delete your original command message (e.g., "/replyto ...") from the group.
-        bot.delete_message(msg.chat.id, msg.message_id)
-        
-    except Exception as e:
-        print(f"Error in /replyto command: {traceback.format_exc()}")
-        # Send an error message to you (the admin) in private.
-        bot.send_message(msg.from_user.id, f"❌ Failed to send response: {e}")
-
-@bot.message_handler(commands=['viewscheduled'])
-@admin_required
-def handle_view_scheduled_command(msg: types.Message):
-    """Displays all currently scheduled messages and reminders."""
-    if not scheduled_messages:
-        bot.send_message(msg.chat.id, "📅 No messages are currently scheduled.")
-        return
-    text = "📅 *Scheduled Messages & Reminders:*\n\n"
-    sorted_messages = sorted(scheduled_messages, key=lambda x: x['send_time'])
-    for i, item in enumerate(sorted_messages, 1):
-        time_str = item['send_time'].strftime('%Y-%m-%d %H:%M')
-        message_preview = item['message'][:80].replace('`', "'")
-        text += f"*{i}. {time_str}*\n   `{message_preview}`"
-        if item.get('recurring'):
-            text += " _(Daily)_\n"
-        else:
-            text += "\n"
-    bot.send_message(msg.chat.id, text, parse_mode="Markdown")
-
-@bot.message_handler(commands=['clearscheduled'])
-@admin_required
-def handle_clear_schedule_command(msg: types.Message):
-    """Clears all scheduled messages and reminders."""
-    count = len(scheduled_messages)
-    if count == 0:
-        bot.send_message(msg.chat.id, "📅 There are no scheduled messages to clear.")
-        return
-    scheduled_messages.clear()
-    bot.send_message(msg.chat.id, f"✅ All {count} scheduled message(s) have been cleared.")
-
 @bot.message_handler(commands=['quickquiz'])
 @admin_required
 def handle_quick_quiz_command(msg: types.Message):
@@ -1170,7 +990,7 @@ def handle_set_quiz_decision(call: types.CallbackQuery):
         
         # --- Format the final message ---
         quiz_data = user_states[user_id]['quiz_data']
-        final_text = f"🚨 Quiz – {quiz_data['date']} | Rising Empire Group |"
+                final_text = f"🚨 Quiz – {quiz_data['date']} \\| Rising Empire Group \\|"
         
         for quiz in quiz_data['quizzes']:
             final_text += (
@@ -1197,22 +1017,6 @@ def handle_set_quiz_decision(call: types.CallbackQuery):
         
         # Clean up the state
         cleanup_user_state(user_id)
-@bot.message_handler(commands=['setwelcome'])
-@admin_required
-def handle_set_welcome(msg: types.Message):
-    """Starts the process for setting a new welcome message."""
-    prompt = bot.send_message(msg.chat.id, "👋 Send the new welcome message. Use `{user_name}` as a placeholder for the new member's name.\n\nOr /cancel.")
-    bot.register_next_step_handler(prompt, process_welcome_message)
-
-def process_welcome_message(msg: types.Message):
-    """Saves the new custom welcome message."""
-    if msg.text and msg.text.lower() == '/cancel':
-        bot.send_message(msg.chat.id, "❌ Operation cancelled.")
-        return
-    global CUSTOM_WELCOME_MESSAGE
-    CUSTOM_WELCOME_MESSAGE = msg.text
-    # The missing parenthesis has been added here
-    bot.send_message(msg.chat.id, f"✅ Welcome message updated!\n\n**Preview:**\n{CUSTOM_WELCOME_MESSAGE.format(user_name='TestUser')}")
 @bot.message_handler(commands=['createquiztext'])
 @admin_required
 def handle_text_quiz_command(msg: types.Message):
@@ -1474,14 +1278,14 @@ def handle_congratulate_command(msg: types.Message):
     leaderboard_text = msg.reply_to_message.text
 # === In handle_congratulate_command, REPLACE the entire try...except block ===
 
-    try:
+        try:
         leaderboard_data = parse_leaderboard(leaderboard_text)
         top_winners = leaderboard_data['winners'][:3]
         if not top_winners:
             bot.send_message(msg.chat.id, "🤔 I couldn't find any winners in the format 🥇, 🥈, 🥉. Please make sure you are replying to the correct leaderboard message.")
             return
 
-        # Escape all variable text
+        # Escape all variable text that comes from the parsed message
         quiz_title = escape_markdown(leaderboard_data.get('quiz_title', 'the recent quiz'))
         total_questions = leaderboard_data.get('total_questions', 0)
 
@@ -1494,6 +1298,7 @@ def handle_congratulate_command(msg: types.Message):
         
         for winner in top_winners:
             percentage = (winner['score'] / total_questions * 100) if total_questions > 0 else 0
+            # Escape the winner's name and time string
             safe_winner_name = escape_markdown(winner['name'])
             safe_time_str = escape_markdown(winner['time_str'])
             congrats_message += (
@@ -1505,18 +1310,16 @@ def handle_congratulate_command(msg: types.Message):
         congrats_message += "*━━━ Performance Insights ━━━*\n"
         fastest_winner_name = escape_markdown(min(top_winners, key=lambda x: x['time_in_seconds'])['name'])
         congrats_message += f"⚡️ *Speed King/Queen:* A special mention to *{fastest_winner_name}* for being the fastest among the toppers!\n"
-        
-        # ... (rest of the logic is complex but the variable parts are now escaped)
 
         congrats_message += "\nKeep pushing your limits, everyone! The next leaderboard is waiting for you\. 🔥"
         
-        # Use MarkdownV2 to send the final message
         bot.send_message(msg.chat.id, congrats_message, parse_mode="MarkdownV2")
         
         try:
             bot.delete_message(msg.chat.id, msg.message_id)
         except Exception:
-            pass
+            pass # Ignore if deletion fails
+            
     except Exception as e:
         print(f"Error in /bdhai command: {traceback.format_exc()}")
         bot.send_message(msg.chat.id, f"❌ Oops! Something went wrong while generating the message. Error: {e}")
@@ -1852,36 +1655,32 @@ def format_section_message(section_data, user_name):
 @membership_required
 def handle_section_command(msg: types.Message):
     """
-    Fetches details for a specific law section from the Supabase database.
-    This version is fully robust and uses send_message exclusively to prevent errors.
+    Fetches details for a specific law section from the Supabase database. ONLY WORKS IN GROUP.
     """
+    # NEW: Check if this is a group message
+    if not is_group_message(msg):
+        bot.send_message(msg.chat.id, "ℹ️ The `/section` command only works in the main group chat.")
+        return
+
     try:
         parts = msg.text.split(' ', 1)
         if len(parts) < 2:
-            # Using send_message for all communications for robustness
             bot.send_message(msg.chat.id, "Please provide a section number after the command.\n*Example:* `/section 141`", parse_mode="Markdown")
             return
             
         section_number_to_find = parts[1].strip()
-
-        # Query the 'law_sections' table to find the section
         response = supabase.table('law_sections').select('*').eq('section_number', section_number_to_find).limit(1).execute()
 
         if response.data:
             section_data = response.data[0]
             user_name = msg.from_user.first_name
             formatted_message = format_section_message(section_data, user_name)
-            
             bot.send_message(msg.chat.id, formatted_message, parse_mode="HTML")
-            
-            # Delete the user's original command to keep the chat clean
             try:
                 bot.delete_message(msg.chat.id, msg.message_id)
             except Exception as e:
                 print(f"Info: Could not delete /section command message. {e}")
-
         else:
-            # If section is not found in the database
             bot.send_message(msg.chat.id, f"Sorry, I couldn't find any details for Section '{section_number_to_find}'. Please check the section number.")
 
     except Exception as e:
@@ -2076,20 +1875,29 @@ def handle_answer(msg: types.Message):
         original_message_id = doubt_data['message_id']
         all_answers = doubt_data.get('all_answer_message_ids', [])
         
-        # Correctly send the escaped message
-        sent_answer_msg = bot.reply_to(original_message_id, f"↪️ *Answer by {escape_markdown(msg.from_user.first_name)}:*\n\n{escape_markdown(answer_text)}", parse_mode="MarkdownV2")
+        # This is the critical part: escaping the user's name and their answer text.
+        safe_answerer_name = escape_markdown(msg.from_user.first_name)
+        safe_answer_text = escape_markdown(answer_text)
+        
+        # Sending the reply to the original doubt message
+        sent_answer_msg = bot.send_message(
+            chat_id=msg.chat.id,
+            text=f"↪️ *Answer by {safe_answerer_name}:*\n\n{safe_answer_text}",
+            reply_to_message_id=original_message_id,
+            parse_mode="MarkdownV2"
+        )
         
         all_answers.append(sent_answer_msg.message_id)
         supabase.table('doubts').update({'all_answer_message_ids': all_answers}).eq('id', doubt_id).execute()
 
+        # Delete the user's command message `/answer ...`
         bot.delete_message(msg.chat.id, msg.message_id)
         
     except (ValueError, IndexError):
-        # Using send_message for error feedback
-        bot.send_message(msg.chat.id, "Invalid Doubt ID. Please use a number.")
+        bot.send_message(msg.chat.id, "Invalid Doubt ID. Please use a number.", reply_to_message_id=msg.message_id)
     except Exception as e:
         print(f"Error in /answer: {traceback.format_exc()}")
-        bot.send_message(msg.chat.id, f"❌ Oops! Something went wrong while answering.")
+        bot.send_message(msg.chat.id, "❌ Oops! Something went wrong while submitting your answer.", reply_to_message_id=msg.message_id)
 @bot.message_handler(commands=['bestanswer'])
 @membership_required
 def handle_best_answer(msg: types.Message):
