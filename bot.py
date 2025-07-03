@@ -28,7 +28,7 @@ GROUP_ID_STR = os.getenv('GROUP_ID')
 WEBAPP_URL = os.getenv('WEBAPP_URL')
 ADMIN_USER_ID_STR = os.getenv('ADMIN_USER_ID')
 BOT_USERNAME = "Rising_quiz_bot"  # Your specified bot username
-
+PUBLIC_GROUP_COMMANDS = ['todayquiz', 'askdoubt', 'answer', 'section', 'feedback']
 # Environment variables for Google Sheets
 GOOGLE_SHEETS_CREDENTIALS_PATH = os.getenv('GOOGLE_SHEETS_CREDENTIALS_PATH')
 GOOGLE_SHEET_KEY = os.getenv('GOOGLE_SHEET_KEY')
@@ -227,14 +227,25 @@ def check_membership(user_id):
         return False
 
 def membership_required(func):
-    """Decorator to ensure the user is a member of the group."""
+    """
+    Decorator to ensure the user is a member of the group.
+    This new version also controls which commands are public in the group.
+    """
     @functools.wraps(func)
     def wrapper(msg: types.Message, *args, **kwargs):
-        if is_group_message(msg) and not is_bot_mentioned(msg):
+        command = ""
+        if msg.text and msg.text.startswith('/'):
+            command = msg.text.split(' ')[0].replace('/', '')
+
+        # Rule 1: In a group, if the command is NOT public AND the bot is NOT mentioned, ignore the message.
+        if is_group_message(msg) and command not in PUBLIC_GROUP_COMMANDS and not is_bot_mentioned(msg):
             return
+
+        # Rule 2: If the command is allowed to proceed, check for membership.
         if check_membership(msg.from_user.id):
             return func(msg, *args, **kwargs)
         else:
+            # If not a member, send the join prompt.
             send_join_group_prompt(msg.chat.id)
     return wrapper
 
@@ -1848,6 +1859,103 @@ def handle_section_command(msg: types.Message):
         print(f"Error in /section command: {traceback.format_exc()}")
         bot.send_message(msg.chat.id, "❌ Oops! Something went wrong while fetching the details.")
 # =============================================================================
+# UPDATE 3: Replace your two separate poll handlers with this single, corrected block
+# =============================================================================
+@bot.poll_answer_handler()
+def handle_poll_answers(poll_answer: types.PollAnswer):
+    """
+    This is the single, master handler for ALL poll answers.
+    It intelligently checks if the answer is for a Marathon or a Quick Quiz.
+    """
+    global QUIZ_PARTICIPANTS, MARATHON_STATE
+    
+    poll_id = poll_answer.poll_id
+    user = poll_answer.user
+    
+    # --- Logic 1: Check if it's a Marathon Quiz answer ---
+    if MARATHON_STATE.get('is_running') and poll_id == MARATHON_STATE.get('current_poll_id'):
+        if poll_answer.option_ids: # Check if user selected an answer
+            selected_option = poll_answer.option_ids[0]
+            correct_option = MARATHON_STATE.get('current_correct_index')
+            
+            if selected_option == correct_option:
+                if user.id not in MARATHON_STATE['scores']:
+                    MARATHON_STATE['scores'][user.id] = {'name': user.first_name, 'score': 0}
+                MARATHON_STATE['scores'][user.id]['score'] += 1
+                print(f"Marathon: Correct answer from {user.first_name}! New score: {MARATHON_STATE['scores'][user.id]['score']}")
+
+    # --- Logic 2: If not a marathon, check if it's a Quick Quiz ---
+    elif poll_id in QUIZ_SESSIONS:
+        if poll_answer.option_ids: # User selected an answer
+            selected_option = poll_answer.option_ids[0]
+            is_correct = (selected_option == QUIZ_SESSIONS[poll_id]['correct_option'])
+            
+            if poll_id not in QUIZ_PARTICIPANTS:
+                QUIZ_PARTICIPANTS[poll_id] = {}
+                
+            QUIZ_PARTICIPANTS[poll_id][user.id] = {
+                'user_name': user.first_name,
+                'is_correct': is_correct,
+                'answered_at': datetime.datetime.now()
+            }
+            print(f"Quick Quiz: Answer received from {user.first_name}.")
+            
+        elif user.id in QUIZ_PARTICIPANTS.get(poll_id, {}):
+            del QUIZ_PARTICIPANTS[poll_id][user.id]
+
+# --- This function is now OUTSIDE and SEPARATE from handle_poll_answers ---
+@bot.message_handler(commands=['quizresult'])
+@admin_required
+def handle_quiz_result_command(msg: types.Message):
+    """
+    Analyzes the bot's internal quiz session data and announces the winners.
+    This is for quizzes created via /quickquiz.
+    """
+    if not QUIZ_SESSIONS:
+        bot.send_message(msg.chat.id, "😕 No quizzes have been conducted in this session yet.")
+        return
+    try:
+        last_quiz_id = list(QUIZ_SESSIONS.keys())[-1]
+        quiz_start_time_iso = QUIZ_SESSIONS[last_quiz_id].get('start_time')
+        quiz_start_time = datetime.datetime.fromisoformat(quiz_start_time_iso)
+        
+        participants = QUIZ_PARTICIPANTS.get(last_quiz_id)
+        
+        if not participants:
+            bot.send_message(GROUP_ID, "🏁 The last quiz had no participants.")
+            return
+        
+        correct_participants = []
+        for uid, data in participants.items():
+            if data.get('is_correct'):
+                time_taken = (data['answered_at'] - quiz_start_time).total_seconds()
+                correct_participants.append({
+                    'name': data['user_name'],
+                    'time': time_taken
+                })
+
+        if not correct_participants:
+            bot.send_message(GROUP_ID, "🤔 No one answered the last quiz correctly.")
+            return
+
+        sorted_winners = sorted(correct_participants, key=lambda x: x['time'])
+        
+        result_text = "🎉 *Internal Quiz Results* 🎉\n\n🏆 Top performers for the last quiz:\n"
+        medals = ["🥇", "🥈", "🥉"]
+        for i, winner in enumerate(sorted_winners[:10]):
+            rank = medals[i] if i < 3 else f" {i+1}."
+            result_text += f"\n{rank} {winner['name']} - *{winner['time']:.2f} seconds*"
+        
+        result_text += "\n\nGreat job to all participants! 🚀"
+        
+        bot.send_message(GROUP_ID, result_text, parse_mode="Markdown")
+        bot.send_message(msg.from_user.id, "✅ Quiz results announced in the group!")
+
+    except Exception as e:
+        print(f"Error in /quizresult: {traceback.format_exc()}")
+        bot.send_message(msg.from_user.id, f"❌ Error announcing winners: {e}")
+
+# =============================================================================
 # 8.10. SUPER DOUBT HUB FEATURE (Interactive, AI-like, with Best Answer System)
 # =============================================================================
 
@@ -2239,116 +2347,6 @@ def announce_marathon_results(admin_chat_id):
     
     bot.send_message(GROUP_ID, result_text, parse_mode="Markdown")
     bot.send_message(admin_chat_id, "✅ Marathon results have been announced.")
-
-# =============================================================================
-# 8.7. MASTER POLL ANSWER HANDLER (MERGED & CORRECTED)
-# =============================================================================
-
-@bot.poll_answer_handler()
-def handle_poll_answers(poll_answer: types.PollAnswer):
-    """
-    This is the single, master handler for ALL poll answers.
-    It intelligently checks if the answer is for a Marathon or a Quick Quiz.
-    """
-    global QUIZ_PARTICIPANTS, MARATHON_STATE
-    
-    poll_id = poll_answer.poll_id
-    user = poll_answer.user
-    
-    # --- Logic 1: Check if it's a Marathon Quiz answer ---
-    if MARATHON_STATE.get('is_running') and poll_id == MARATHON_STATE.get('current_poll_id'):
-        if poll_answer.option_ids: # Check if user selected an answer
-            selected_option = poll_answer.option_ids[0]
-            correct_option = MARATHON_STATE.get('current_correct_index')
-            
-            if selected_option == correct_option:
-                # Initialize score for the user if it's their first correct answer
-                if user.id not in MARATHON_STATE['scores']:
-                    MARATHON_STATE['scores'][user.id] = {'name': user.first_name, 'score': 0}
-                
-                # Increment score for correct answer
-                MARATHON_STATE['scores'][user.id]['score'] += 1
-                print(f"Marathon: Correct answer from {user.first_name}! New score: {MARATHON_STATE['scores'][user.id]['score']}")
-
-    # --- Logic 2: If not a marathon, check if it's a Quick Quiz ---
-    elif poll_id in QUIZ_SESSIONS:
-        if poll_answer.option_ids: # User selected an answer
-            selected_option = poll_answer.option_ids[0]
-            is_correct = (selected_option == QUIZ_SESSIONS[poll_id]['correct_option'])
-            
-            # Ensure the nested dictionary exists before adding a participant
-            if poll_id not in QUIZ_PARTICIPANTS:
-                QUIZ_PARTICIPANTS[poll_id] = {}
-                
-            QUIZ_PARTICIPANTS[poll_id][user.id] = {
-                'user_name': user.first_name,
-                'is_correct': is_correct,
-                'answered_at': datetime.datetime.now()
-            }
-            print(f"Quick Quiz: Answer received from {user.first_name}.")
-            
-        elif user.id in QUIZ_PARTICIPANTS.get(poll_id, {}):
-            # This handles the case where a user retracts their vote
-            del QUIZ_PARTICIPANTS[poll_id][user.id]
-
-# =============================================================================
-# 8.8. QUIZ RESULT COMMAND (For internal quizzes like /quickquiz)
-# =============================================================================
-
-    @bot.message_handler(commands=['quizresult'])
-    @admin_required
-    def handle_quiz_result_command(msg: types.Message):
-        """
-        Analyzes the bot's internal quiz session data and announces the winners.
-        This is for quizzes created via /quickquiz.
-        """
-        if not QUIZ_SESSIONS:
-            bot.send_message(msg.chat.id, "😕 No quizzes have been conducted in this session yet.")
-            return
-        try:
-            # Get the data from the very last quiz conducted by the bot
-            last_quiz_id = list(QUIZ_SESSIONS.keys())[-1]
-            quiz_start_time_iso = QUIZ_SESSIONS[last_quiz_id].get('start_time')
-            quiz_start_time = datetime.datetime.fromisoformat(quiz_start_time_iso)
-            
-            participants = QUIZ_PARTICIPANTS.get(last_quiz_id)
-            
-            if not participants:
-                bot.send_message(GROUP_ID, "🏁 The last quiz had no participants.")
-                return
-            
-            # Filter for correct participants and calculate their time taken
-            correct_participants = []
-            for uid, data in participants.items():
-                if data.get('is_correct'):
-                    time_taken = (data['answered_at'] - quiz_start_time).total_seconds()
-                    correct_participants.append({
-                        'name': data['user_name'],
-                        'time': time_taken
-                    })
-
-            if not correct_participants:
-                bot.send_message(GROUP_ID, "🤔 No one answered the last quiz correctly.")
-                return
-
-            # Sort winners by the time they took to answer (fastest first)
-            sorted_winners = sorted(correct_participants, key=lambda x: x['time'])
-            
-            # Build the result message
-            result_text = "🎉 *Internal Quiz Results* 🎉\n\n🏆 Top performers for the last quiz:\n"
-            medals = ["🥇", "🥈", "🥉"]
-            for i, winner in enumerate(sorted_winners[:10]): # Top 10
-                rank = medals[i] if i < 3 else f" {i+1}."
-                result_text += f"\n{rank} {winner['name']} - *{winner['time']:.2f} seconds*"
-            
-            result_text += "\n\nGreat job to all participants! 🚀"
-            
-            bot.send_message(GROUP_ID, result_text, parse_mode="Markdown")
-            bot.send_message(msg.from_user.id, "✅ Quiz results announced in the group!")
-
-        except Exception as e:
-            print(f"Error in /quizresult: {traceback.format_exc()}")
-            bot.send_message(msg.from_user.id, f"❌ Error announcing winners: {e}")
 
 @bot.message_handler(content_types=['new_chat_members'])
 def handle_new_member(msg: types.Message):
