@@ -1,3 +1,4 @@
+bot.py
 # =============================================================================
 # 1. IMPORTS
 # =============================================================================
@@ -127,13 +128,7 @@ def initialize_gsheet():
 # =============================================================================
 # 4. UTILITY & HELPER FUNCTIONS
 # =============================================================================
-# NEW HELPER FUNCTION TO PREVENT MARKDOWN ERRORS
-def escape_markdown(text: str) -> str:
-"""Escapes special characters for Telegram's Markdown."""
-text = str(text) # Ensure the input is a string
-escape_chars = r'_*~`>#+-=|{}.!'
-# This will add a backslash before each special character
-return "".join(['\' + char if char in escape_chars else char for char in text])
+# ADD THIS NEW HELPER FUNCTION
 def report_error_to_admin(error_message: str):
     """Sends a formatted error message to the admin."""
     try:
@@ -183,9 +178,10 @@ def post_daily_quiz():
             type='quiz',
             correct_option_id=correct_index,
             is_anonymous=False,
-            open_period=3600 # 5-minute quiz
+            open_period=300 # 5-minute quiz
         )
-        bot.send_message(GROUP_ID, "👆 You have 60 minutes to answer the daily quiz! Good luck!", reply_to_message_id=poll.message_id)
+        bot.send_message(GROUP_ID, "👆 You have 5 minutes to answer the daily quiz! Good luck!", reply_to_message_id=poll.message_id)
+
         # Mark the question as used in the database
         supabase.table('questions').update({'used': 'true'}).eq('id', question_id).execute()
         print(f"✅ Daily quiz posted using question ID: {question_id}")
@@ -302,7 +298,6 @@ def bot_is_target(message: types.Message):
 # =============================================================================
 # 5. DATA PERSISTENCE WITH SUPABASE *** THIS SECTION IS REPLACED ***
 # =============================================================================
-
 def load_data():
     """
     Loads bot state from Supabase. This version correctly parses JSON data.
@@ -1823,8 +1818,6 @@ def handle_study_tip_command(msg: types.Message):
 # =============================================================================
 # 8.12. LAW LIBRARY FEATURE (/section) - FINAL & ROBUST VERSION
 # =============================================================================
-# === REPLACE WITH THIS CODE BLOCK ===
-
 def format_section_message(section_data, user_name):
     """
     Formats the section details into a clean, readable message using safer HTML parsing.
