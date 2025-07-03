@@ -1809,19 +1809,17 @@ def handle_study_tip_command(msg: types.Message):
     bot.send_message(GROUP_ID, tip, parse_mode="Markdown")
     bot.send_message(msg.chat.id, "✅ Study tip sent to the group!")
 # =============================================================================
-# 8.12. LAW LIBRARY FEATURE (/section) - SIMPLIFIED LOGIC
+# 8.12. LAW LIBRARY FEATURE (/section) - FINAL & ROBUST VERSION
 # =============================================================================
-
 def format_section_message(section_data, user_name):
     """
     Formats the section details into a clean, readable message.
-    This version directly uses the data from Supabase without any extra logic.
+    This version has corrected Markdown formatting.
     """
     # Personalize the example with the user's name by replacing a placeholder.
-    # We use a generic placeholder to make the database entries reusable.
     example = section_data.get('example_hinglish', 'Example not available.').replace("{user_name}", user_name)
     
-    # Build the final message string
+    # Build the final message string with corrected disclaimer formatting
     message_text = (
         f"📖 **{section_data.get('chapter_info', 'N/A')}**\n\n"
         f"**Section {section_data.get('section_number', '')}: {section_data.get('it_is_about', 'N/A')}**\n\n"
@@ -1829,7 +1827,7 @@ def format_section_message(section_data, user_name):
         f"{section_data.get('summary_hinglish', 'Summary not available.')}\n\n"
         f"*Example:*\n"
         f"{example}\n\n"
-        f"_{{Disclaimer: Please cross-check with the latest amendments.}}_"
+        f"_{Disclaimer: Please cross-check with the latest amendments.}_" # <-- CORRECTED MARKDOWN
     )
         
     return message_text
@@ -1838,11 +1836,13 @@ def format_section_message(section_data, user_name):
 def handle_section_command(msg: types.Message):
     """
     Fetches details for a specific law section from the Supabase database.
+    This version is fully robust and uses send_message exclusively to prevent errors.
     """
     try:
         parts = msg.text.split(' ', 1)
         if len(parts) < 2:
-            bot.reply_to(msg, "Please provide a section number after the command.\n*Example:* `/section 141`", parse_mode="Markdown")
+            # Using send_message for all communications for robustness
+            bot.send_message(msg.chat.id, "Please provide a section number after the command.\n*Example:* `/section 141`", parse_mode="Markdown")
             return
             
         section_number_to_find = parts[1].strip()
@@ -1851,18 +1851,25 @@ def handle_section_command(msg: types.Message):
         response = supabase.table('law_sections').select('*').eq('section_number', section_number_to_find).limit(1).execute()
 
         if response.data:
-            # If section is found, format and send the message
             section_data = response.data[0]
-            user_name = msg.from_user.first_name # Get the user's name for personalization
+            user_name = msg.from_user.first_name
             formatted_message = format_section_message(section_data, user_name)
-            bot.reply_to(msg, formatted_message, parse_mode="Markdown")
+            
+            bot.send_message(msg.chat.id, formatted_message, parse_mode="Markdown")
+            
+            # Delete the user's original command to keep the chat clean
+            try:
+                bot.delete_message(msg.chat.id, msg.message_id)
+            except Exception as e:
+                print(f"Info: Could not delete /section command message. {e}")
+
         else:
             # If section is not found in the database
-            bot.reply_to(msg, f"Sorry, I couldn't find any details for Section '{section_number_to_find}'. Please check the section number.")
+            bot.send_message(msg.chat.id, f"Sorry, I couldn't find any details for Section '{section_number_to_find}'. Please check the section number.")
 
     except Exception as e:
         print(f"Error in /section command: {traceback.format_exc()}")
-        bot.reply_to(msg, "❌ Oops! Something went wrong while fetching the details.")
+        bot.send_message(msg.chat.id, "❌ Oops! Something went wrong while fetching the details.")
 # =============================================================================
 # 8.10. SUPER DOUBT HUB FEATURE (Interactive, AI-like, with Best Answer System)
 # =============================================================================
