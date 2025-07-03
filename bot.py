@@ -2148,6 +2148,8 @@ def handle_doubt_confirmation(call: types.CallbackQuery):
         else:
             bot.edit_message_text("Sorry, something went wrong. Please try asking your doubt again using /askdoubt.", call.message.chat.id, call.message.message_id)
 
+# === REPLACE YOUR ENTIRE handle_answer FUNCTION WITH THIS ===
+
 @bot.message_handler(commands=['answer'])
 @membership_required
 def handle_answer(msg: types.Message):
@@ -2156,38 +2158,38 @@ def handle_answer(msg: types.Message):
         bot.send_message(msg.chat.id, "This command can only be used in the main group.")
         return
 
- try:
-    parts = msg.text.split(' ', 2)
-    if len(parts) < 3:
-        bot.send_message(msg.chat.id, "Invalid format. Use: `/answer [Doubt_ID] [Your Answer]`\n*Example:* `/answer 101 The answer is...`", parse_mode="Markdown")
-        return
+    try:
+        parts = msg.text.split(' ', 2)
+        if len(parts) < 3:
+            bot.send_message(msg.chat.id, "Invalid format. Use: `/answer [Doubt_ID] [Your Answer]`\n*Example:* `/answer 101 The answer is...`", parse_mode="Markdown")
+            return
+            
+        doubt_id = int(parts[1])
+        answer_text = parts[2].strip()
         
-    doubt_id = int(parts[1])
-    answer_text = parts[2].strip()
-    
-    fetch_response = supabase.table('doubts').select('message_id, all_answer_message_ids').eq('id', doubt_id).limit(1).execute()
-    if not fetch_response.data:
-        bot.send_message(msg.chat.id, f"❌ Doubt with ID #{doubt_id} not found.")
-        return
-    
-    doubt_data = fetch_response.data[0]
-    original_message_id = doubt_data['message_id']
-    all_answers = doubt_data.get('all_answer_message_ids', [])
-    
-    # Correctly send the escaped message
-    sent_answer_msg = bot.reply_to(original_message_id, f"↪️ *Answer by {escape_markdown(msg.from_user.first_name)}:*\n\n{escape_markdown(answer_text)}", parse_mode="MarkdownV2")
-    
-    all_answers.append(sent_answer_msg.message_id)
-    supabase.table('doubts').update({'all_answer_message_ids': all_answers}).eq('id', doubt_id).execute()
+        fetch_response = supabase.table('doubts').select('message_id, all_answer_message_ids').eq('id', doubt_id).limit(1).execute()
+        if not fetch_response.data:
+            bot.send_message(msg.chat.id, f"❌ Doubt with ID #{doubt_id} not found.")
+            return
+        
+        doubt_data = fetch_response.data[0]
+        original_message_id = doubt_data['message_id']
+        all_answers = doubt_data.get('all_answer_message_ids', [])
+        
+        # Correctly send the escaped message
+        sent_answer_msg = bot.reply_to(original_message_id, f"↪️ *Answer by {escape_markdown(msg.from_user.first_name)}:*\n\n{escape_markdown(answer_text)}", parse_mode="MarkdownV2")
+        
+        all_answers.append(sent_answer_msg.message_id)
+        supabase.table('doubts').update({'all_answer_message_ids': all_answers}).eq('id', doubt_id).execute()
 
-    bot.delete_message(msg.chat.id, msg.message_id)
-    
-except (ValueError, IndexError):
-    # Using send_message for error feedback
-    bot.send_message(msg.chat.id, "Invalid Doubt ID. Please use a number.")
-except Exception as e:
-    print(f"Error in /answer: {traceback.format_exc()}")
-    bot.send_message(msg.chat.id, f"❌ Oops! Something went wrong while answering.")
+        bot.delete_message(msg.chat.id, msg.message_id)
+        
+    except (ValueError, IndexError):
+        # Using send_message for error feedback
+        bot.send_message(msg.chat.id, "Invalid Doubt ID. Please use a number.")
+    except Exception as e:
+        print(f"Error in /answer: {traceback.format_exc()}")
+        bot.send_message(msg.chat.id, f"❌ Oops! Something went wrong while answering.")
 @bot.message_handler(commands=['bestanswer'])
 @membership_required
 def handle_best_answer(msg: types.Message):
