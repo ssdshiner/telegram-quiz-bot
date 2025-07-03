@@ -565,14 +565,19 @@ Here are all the commands available to you. Click on any command to use it.
 @bot.message_handler(commands=['deletemessage'])
 @admin_required
 def handle_delete_message(msg: types.Message):
+    """Deletes a message by replying to it. Uses send_message for feedback."""
     if not msg.reply_to_message:
-        bot.reply_to(msg, "❌ Please reply to the message you want to delete with `/deletemessage`.")
+        bot.send_message(msg.chat.id, "❌ Please reply to the message you want to delete with `/deletemessage`.")
         return
     try:
+        # Delete the target message and the admin's command message
         bot.delete_message(msg.chat.id, msg.reply_to_message.message_id)
         bot.delete_message(msg.chat.id, msg.message_id)
+        # Optionally send a confirmation to the admin in PM
+        bot.send_message(msg.from_user.id, "✅ Message deleted successfully.")
     except Exception as e:
-        bot.reply_to(msg, f"⚠️ Could not delete message: {e}")
+        # Send error feedback to the admin in PM
+        bot.send_message(msg.from_user.id, f"⚠️ Could not delete message: {e}")
 # =============================================================================
 # 5. DATA PERSISTENCE WITH SUPABASE (UPDATED FUNCTIONS)
 # =============================================================================
@@ -653,26 +658,21 @@ def save_data():
 # =============================================================================
 # 8. TELEGRAM BOT HANDLERS (UPDATED /todayquiz)
 # =============================================================================
-
 @bot.message_handler(commands=['todayquiz'])
 @membership_required
 def handle_today_quiz(msg: types.Message):
     """
-    Shows the quiz details for the day. This version is compatible with the 
-    new conversational /setquiz command.
+    Shows the quiz details for the day. This version uses send_message for robustness.
     """
-    # Check if the details are set and not empty
     if not TODAY_QUIZ_DETAILS.get("is_set"):
-        bot.reply_to(msg, "😕 Today's quiz details have not been set yet. The admin can set it using /setquiz.")
+        # Using send_message instead of reply_to
+        bot.send_message(msg.chat.id, "😕 Today's quiz details have not been set yet. The admin can set it using /setquiz.")
         return
         
-    # The new format stores the full announcement text directly.
     details_text = TODAY_QUIZ_DETAILS.get("details_text", "Error: Quiz details are set but text is missing.")
     
-    # Send the pre-formatted message
-    bot.reply_to(msg, details_text, parse_mode="Markdown")
-
-
+    # Using send_message instead of reply_to
+    bot.send_message(msg.chat.id, details_text, parse_mode="Markdown")
 # THIS IS THE COMPLETE AND CORRECT CODE FOR THE /createpoll FEATURE
 # =============================================================================
 # 8.5. INTERACTIVE COMMANDS (POLLS, QUIZZES, ETC.) - CORRECTED BLOCK
@@ -1291,14 +1291,16 @@ def handle_cancel_command(msg: types.Message):
         bot.send_message(msg.chat.id, "✅ Operation cancelled.")
     else:
         # If they were not in any process, inform them
-        bot.send_message(msg.chat.id, "🤷‍♀️ Nothing to cancel. You were not in the middle of any operation.")
+        bot.send_message(msg.chat.id, "🤷 Nothing to cancel. You were not in the middle of any operation.")
 @bot.message_handler(commands=['feedback'])
 @membership_required
 def handle_feedback_command(msg: types.Message):
+    """Handles user feedback. Uses send_message for responses."""
     feedback_text = msg.text.replace('/feedback', '').strip()
     if not feedback_text:
-        bot.reply_to(msg, "✍️ Please provide feedback after command.\nExample: `/feedback The quizzes are helpful!`")
+        bot.send_message(msg.chat.id, "✍️ Please provide your feedback after the command.\nExample: `/feedback The quizzes are helpful!`")
         return
+        
     user_info = msg.from_user
     full_name = f"{user_info.first_name} {user_info.last_name or ''}".strip()
     username = f"@{user_info.username}" if user_info.username else "No username"
@@ -1309,10 +1311,12 @@ def handle_feedback_command(msg: types.Message):
         f"**Message:**\n_{feedback_text}_"
     )
     try:
+        # Send the feedback to the admin
         bot.send_message(ADMIN_USER_ID, feedback_msg, parse_mode="Markdown")
-        bot.reply_to(msg, "✅ Thank you for your feedback! 🙏")
+        # Send confirmation to the user in the group
+        bot.send_message(msg.chat.id, "✅ Thank you for your feedback! It has been sent to the admin. 🙏")
     except Exception as e:
-        bot.reply_to(msg, "❌ Failed to send feedback.")
+        bot.send_message(msg.chat.id, "❌ Sorry, something went wrong while sending your feedback.")
         print(f"Feedback error: {e}")
 @bot.poll_answer_handler()
 def handle_poll_answers(poll_answer: types.PollAnswer):
@@ -2026,15 +2030,15 @@ def handle_doubt_confirmation(call: types.CallbackQuery):
 
 @bot.message_handler(commands=['answer'])
 def handle_answer(msg: types.Message):
-    """Handles the /answer command and logs the answer's message ID."""
+    """Handles the /answer command. Uses send_message for error feedback."""
     if not is_group_message(msg):
-        bot.reply_to(msg, "This command can only be used in the main group.")
+        bot.send_message(msg.chat.id, "This command can only be used in the main group.")
         return
 
     try:
         parts = msg.text.split(' ', 2)
         if len(parts) < 3:
-            bot.reply_to(msg, "Invalid format. Use: `/answer [Doubt_ID] [Your Answer]`\n*Example:* `/answer 101 The answer is...`", parse_mode="Markdown")
+            bot.send_message(msg.chat.id, "Invalid format. Use: `/answer [Doubt_ID] [Your Answer]`\n*Example:* `/answer 101 The answer is...`", parse_mode="Markdown")
             return
             
         doubt_id = int(parts[1])
@@ -2042,7 +2046,7 @@ def handle_answer(msg: types.Message):
         
         fetch_response = supabase.table('doubts').select('message_id, all_answer_message_ids').eq('id', doubt_id).limit(1).execute()
         if not fetch_response.data:
-            bot.reply_to(msg, f"❌ Doubt with ID #{doubt_id} not found.")
+            bot.send_message(msg.chat.id, f"❌ Doubt with ID #{doubt_id} not found.")
             return
         
         doubt_data = fetch_response.data[0]
@@ -2056,10 +2060,12 @@ def handle_answer(msg: types.Message):
 
         bot.delete_message(msg.chat.id, msg.message_id)
         
+    except (ValueError, IndexError):
+        # Using send_message for error feedback
+        bot.send_message(msg.chat.id, "Invalid Doubt ID. Please use a number.")
     except Exception as e:
         print(f"Error in /answer: {traceback.format_exc()}")
-        bot.reply_to(msg, f"❌ Oops! Something went wrong while answering.")
-
+        bot.send_message(msg.chat.id, f"❌ Oops! Something went wrong while answering.")
 @bot.message_handler(commands=['bestanswer'])
 def handle_best_answer(msg: types.Message):
     """Handles marking an answer as the best one, and cleans up other answers."""
