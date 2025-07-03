@@ -369,14 +369,16 @@ def save_data():
 
 # This global variable prevents the bot from re-posting a quiz if it restarts.
 last_quiz_posted_hour = -1
+last_doubt_reminder_hour = -1
 
 def background_worker():
     """
-    This function runs continuously to handle scheduled tasks.
-    It's now more robust and handles timezone issues correctly.
+    This function runs continuously to handle all scheduled tasks,
+    including automated quizzes, scheduled messages, poll closing, 
+    and the new Unanswered Doubt Reminder. It is robust and timezone-aware.
     """
-    global last_quiz_posted_hour
-
+    global last_quiz_posted_hour, last_doubt_reminder_hour
+    
     while True:
         try:
             # Use a consistent timezone (IST) for all time-based operations
@@ -384,54 +386,67 @@ def background_worker():
             current_time_ist = datetime.datetime.now(ist_tz)
             current_hour = current_time_ist.hour
 
-            # --- Automated Bi-Hourly Quiz Trigger ---
+            # --- Automated Bi-Hourly Quiz Trigger (on EVEN hours) ---
             is_quiz_time = (current_hour % 2 == 0)
             if is_quiz_time and last_quiz_posted_hour != current_hour:
                 print(f"⏰ It's {current_hour}:00 IST, time for a bi-hourly quiz! Posting...")
                 post_daily_quiz()
                 last_quiz_posted_hour = current_hour
 
+            # --- Unanswered Doubts Reminder (on ODD hours) ---
+            is_reminder_time = (current_hour % 2 != 0)
+            if is_reminder_time and last_doubt_reminder_hour != current_hour:
+                print(f"⏰ It's {current_hour}:00 IST, checking for unanswered doubts...")
+                try:
+                    response = supabase.table('doubts').select('id', count='exact').eq('status', 'unanswered').execute()
+                    unanswered_count = response.count
+                    if unanswered_count and unanswered_count > 0:
+                        reminder_message = f"📢 **Doubt Reminder!**\n\nThere are currently *{unanswered_count} unanswered doubt(s)* in the group. Let's help each other out! 🤝"
+                        bot.send_message(GROUP_ID, reminder_message, parse_mode="Markdown")
+                        print(f"✅ Sent a reminder for {unanswered_count} unanswered doubts.")
+                except Exception as e:
+                    print(f"❌ Failed to check for doubt reminders: {e}")
+                
+                last_doubt_reminder_hour = current_hour
+
             # --- Process Scheduled Messages & Reminders ---
+            # Create a copy to safely modify the list while iterating
             messages_to_process = scheduled_messages[:]
             for msg_details in messages_to_process:
                 send_time = msg_details['send_time']
-                # Make the stored time timezone-aware before comparing
+                # *** BUG FIX ***: Make the stored (naive) time timezone-aware before comparing
                 if not send_time.tzinfo:
-                    send_time = send_time.replace(tzinfo=ist_tz)
-
+                     send_time = send_time.replace(tzinfo=ist_tz)
+                
                 if current_time_ist >= send_time:
                     try:
-                        bot.send_message(
-                            GROUP_ID,
-                            msg_details['message'],
-                            parse_mode="Markdown" if msg_details.get('markdown') else None
-                        )
+                        bot.send_message(GROUP_ID, msg_details['message'], parse_mode="Markdown")
                         print(f"✅ Sent scheduled message: {msg_details['message'][:50]}...")
-
-                        # IMPORTANT: Only modify after successful sending
+                        # IMPORTANT: Only modify the list after the message is successfully sent
                         if not msg_details.get('recurring', False):
                             scheduled_messages.remove(msg_details)
                         else:
+                            # For recurring messages, schedule for the next day
                             msg_details['send_time'] += datetime.timedelta(days=1)
-
                     except Exception as e:
                         print(f"❌ Failed to send scheduled message: {e}")
-                        report_error_to_admin(f"Failed to send scheduled message ID {msg_details.get('id', 'N/A')}: {e}")
 
             # --- Process and Close Active Polls ---
             polls_to_process = active_polls[:]
             for poll in polls_to_process:
                 close_time = poll.get('close_time')
                 if isinstance(close_time, datetime.datetime):
+                    # *** BUG FIX ***: Also make poll close_time timezone-aware
                     if not close_time.tzinfo:
                         close_time = close_time.replace(tzinfo=ist_tz)
-
+                    
                     if current_time_ist >= close_time:
                         try:
                             bot.stop_poll(poll['chat_id'], poll['message_id'])
                             print(f"✅ Closed poll {poll['message_id']}.")
                         except Exception as e:
                             print(f"⚠️ Could not stop poll {poll['message_id']}: {e}")
+                        # Remove poll from the list regardless of whether stop_poll succeeded
                         active_polls.remove(poll)
 
             # --- Periodically Save Data to Supabase ---
@@ -441,8 +456,8 @@ def background_worker():
             tb_string = traceback.format_exc()
             print(f"❌ Error in background_worker:\n{tb_string}")
             report_error_to_admin(tb_string)
-
-        # Wait for 30 seconds before the next cycle
+            
+        # Wait for 30 seconds before the next cycle to avoid spamming
         time.sleep(30)
 # =============================================================================
 # 7. FLASK WEB SERVER & WEBHOOK
@@ -501,30 +516,51 @@ def handle_quiz_start_button(msg: types.Message):
 @bot.message_handler(commands=['adminhelp'])
 @admin_required
 def handle_help_command(msg: types.Message):
-    help_text = (
-        "🤖 *Admin Commands:*\n\n"
-        "📅 `/schedulemsg` - Schedule group message\n"
-        "💬 `/replyto` - Reply to member messages\n"
-        "📊 `/createpoll` - Create timed poll\n"
-        "🧠 `/createquiz` - Create interactive quiz\n"
-        "📣 `/announce` - Make announcement\n"
-        "👀 `/viewscheduled` - View scheduled messages\n"
-        "🗑️ `/clearscheduled` - Clear all scheduled\n"
-        "⏰ `/setreminder` - Set reminder\n"
-        "📝 `/createquiztext` - Create text quiz\n"
-        "⚡ `/quickquiz` - Create poll quiz\n"
-        "✏️ `/randomquiz` - random quiz bhejo\n"
-        "🏃 `/quizmarathon` - Start a quiz series from Google Sheet\n"
-        "📄 `/mysheet` - Google Sheet link\n"
-        "❌ `/deletemessage` - Delete messages\n"
-        "🏆 `/announcewinners` - Announce quiz winners\n"
-        "👋 `/setwelcome` - Set welcome message\n"
-        "🗓️ `/setquiz` - Set today's quiz details conversationally\n"
-        "💪 `/motivate` - Send motivation\n"
-        "📚 `/studytip` - Send study tip\n"
-    )
-    bot.send_message(msg.chat.id, help_text, parse_mode="Markdown")
+    """Sends a well-formatted and categorized list of admin commands."""
+    
+    # Using a multi-line string for better readability and organization.
+    # Commands are grouped by their function.
+    help_text = """
+� *Rising Empire Bot - Admin Panel* 🤖
 
+Here are all the commands available to you. Click on any command to use it.
+
+*━━━ Engagement & Content ━━━*
+💪 `/motivate` - Send a random motivational quote.
+📚 `/studytip` - Send a useful study tip.
+📣 `/announce` - Broadcast a message to the group.
+
+*━━━ Quiz & Marathon Management ━━━*
+🗓️ `/setquiz` - Set today's quiz topics conversationally.
+⚡ `/quickquiz` - Create a quick, timed poll-based quiz.
+📝 `/createquiztext` - Create a simple text-based quiz.
+🧠 `/randomquiz` - Post a random quiz from the Supabase DB.
+🏃‍♂️ `/quizmarathon` - Start a multi-question quiz from Google Sheets.
+🛑 `/roko` - Forcefully stop a running quiz marathon.
+🏆 `/announcewinners` - Announce winners of the last quiz.
+
+*━━━ Doubt Hub ━━━*
+❓ `/askdoubt [question]` - Ask a question (for testing).
+✍️ `/answer [ID] [reply]` - Answer a specific doubt.
+
+*━━━ Scheduling & Reminders ━━━*
+⏰ `/setreminder` - Set a one-time or daily reminder.
+📅 `/schedulemsg` - Schedule a future message (same as /setreminder).
+👀 `/viewscheduled` - See all upcoming scheduled messages.
+🗑️ `/clearscheduled` - Delete all scheduled messages.
+
+*━━━ Group Administration ━━━*
+👋 `/setwelcome` - Change the group welcome message.
+💬 `/replyto` - Reply to a user's message via the bot.
+❌ `/deletemessage` - Delete a message by replying to it.
+
+*━━━ Utilities ━━━*
+📄 `/mysheet` - Get the link to the connected Google Sheet.
+    """
+    
+    # The parse_mode is crucial for making the commands clickable and formatting bold text.
+    bot.send_message(msg.chat.id, help_text, parse_mode="Markdown")
+�
 @bot.message_handler(commands=['deletemessage'])
 @admin_required
 def handle_delete_message(msg: types.Message):
@@ -1526,6 +1562,130 @@ def handle_study_tip_command(msg: types.Message):
     tip = random.choice(tips)
     bot.send_message(GROUP_ID, tip, parse_mode="Markdown")
     bot.send_message(msg.chat.id, "✅ Study tip sent to the group!")
+# =============================================================================
+# 8.10. SMART DOUBT HUB FEATURE
+# =============================================================================
+
+def format_doubt_message(doubt_id, student_name, question, status="Unanswered ❓", answerer_name=None, answer_text=None):
+    """Formats the doubt message in a clean, readable way."""
+    
+    header = f"**#Doubt{doubt_id}: {status}**"
+    
+    # Use HTML for better formatting control, especially for nested text
+    message_text = (
+        f"<b>#Doubt{doubt_id}: {status}</b>\n\n"
+        f"<b>Student:</b> {student_name}\n"
+        f"<b>Question:</b>\n<pre>{question}</pre>\n\n"
+    )
+
+    if status == "Answered! ✅" and answerer_name and answer_text:
+        message_text += f"<i>↪️ Answered by {answerer_name}:</i>\n<pre>{answer_text}</pre>"
+    else:
+        message_text += f"<i>Reply to this message with /answer {doubt_id} [your answer] to help.</i>"
+        
+    return message_text
+
+@bot.message_handler(commands=['askdoubt'])
+def handle_askdoubt(msg: types.Message):
+    """Handles the /askdoubt command from any user in the group."""
+    if not is_group_message(msg):
+        bot.reply_to(msg, "This command can only be used in the main group.")
+        return
+
+    question_text = msg.text.replace('/askdoubt', '').strip()
+    if not question_text:
+        bot.reply_to(msg, "Please write your question after the /askdoubt command.")
+        return
+
+    try:
+        student_name = msg.from_user.first_name
+        student_id = msg.from_user.id
+
+        # 1. Insert the initial doubt into Supabase to get the new ID
+        insert_response = supabase.table('doubts').insert({
+            'group_id': msg.chat.id,
+            'student_name': student_name,
+            'student_id': student_id,
+            'question': question_text,
+            'status': 'unanswered'
+        }).execute()
+        
+        # The new Supabase client returns data differently
+        if not (insert_response.data and len(insert_response.data) > 0):
+             raise Exception("Failed to insert doubt into database.")
+        
+        doubt_id = insert_response.data[0]['id']
+
+        # 2. Format and post the doubt message to the group
+        formatted_message = format_doubt_message(doubt_id, student_name, question_text)
+        sent_doubt_msg = bot.send_message(msg.chat.id, formatted_message, parse_mode="HTML")
+
+        # 3. Update the Supabase record with the message_id of the bot's message
+        supabase.table('doubts').update({'message_id': sent_doubt_msg.message_id}).eq('id', doubt_id).execute()
+
+        # 4. Delete the user's original /askdoubt command to keep the chat clean
+        bot.delete_message(msg.chat.id, msg.message_id)
+        
+    except Exception as e:
+        print(f"Error in /askdoubt: {traceback.format_exc()}")
+        bot.reply_to(msg, f"❌ Oops! Something went wrong. Please try again. Error: {e}")
+
+
+@bot.message_handler(commands=['answer'])
+def handle_answer(msg: types.Message):
+    """Handles the /answer command to reply to a specific doubt."""
+    if not is_group_message(msg):
+        bot.reply_to(msg, "This command can only be used in the main group.")
+        return
+
+    try:
+        # Parse the command: /answer 101 The answer is...
+        parts = msg.text.split(' ', 2)
+        if len(parts) < 3:
+            bot.reply_to(msg, "Invalid format. Use: `/answer [Doubt_ID] [Your Answer]`")
+            return
+            
+        doubt_id = int(parts[1])
+        answer_text = parts[2].strip()
+        answerer_name = msg.from_user.first_name
+        answerer_id = msg.from_user.id
+
+        # 1. Fetch the doubt details from Supabase
+        fetch_response = supabase.table('doubts').select('*').eq('id', doubt_id).limit(1).execute()
+        if not fetch_response.data:
+            bot.reply_to(msg, f"❌ Doubt with ID #{doubt_id} not found.")
+            return
+        
+        doubt_data = fetch_response.data[0]
+        original_message_id = doubt_data['message_id']
+        
+        # 2. Update the original doubt message with the new answer
+        updated_message_text = format_doubt_message(
+            doubt_id,
+            doubt_data['student_name'],
+            doubt_data['question'],
+            status="Answered! ✅",
+            answerer_name=answerer_name,
+            answer_text=answer_text
+        )
+        bot.edit_message_text(updated_message_text, chat_id=msg.chat.id, message_id=original_message_id, parse_mode="HTML")
+
+        # 3. Update the Supabase record to mark it as answered
+        supabase.table('doubts').update({
+            'status': 'answered',
+            'answered_by_name': answerer_name,
+            'answered_by_id': answerer_id,
+            'answer_text': answer_text
+        }).eq('id', doubt_id).execute()
+
+        # 4. Delete the user's /answer command
+        bot.delete_message(msg.chat.id, msg.message_id)
+        
+    except (ValueError, IndexError):
+        bot.reply_to(msg, "Invalid Doubt ID. Please use a number.")
+    except Exception as e:
+        print(f"Error in /answer: {traceback.format_exc()}")
+        bot.reply_to(msg, f"❌ Oops! Something went wrong while answering. Error: {e}")
 
 # =============================================================================
 # 8.8. QUIZ MARATHON FEATURE (from Google Sheets) - WITH SCORING, EXPLANATIONS & STOP
