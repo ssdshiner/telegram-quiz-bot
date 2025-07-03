@@ -433,8 +433,7 @@ def background_worker():
                         print(f"❌ Failed to send scheduled message: {e}")
                         # Also report this specific error to the admin
                         report_error_to_admin(f"Failed to send scheduled message: {e}\n\nMessage was: {msg_details['message']}")
-                
-                last_doubt_reminder_hour = current_hour
+    last_doubt_reminder_hour = current_hour
             # --- Process Scheduled Messages & Reminders ---
             # Create a copy to safely modify the list while iterating
             messages_to_process = scheduled_messages[:]
