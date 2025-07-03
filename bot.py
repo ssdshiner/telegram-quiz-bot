@@ -160,7 +160,7 @@ def post_daily_quiz():
             is_anonymous=False,
             open_period=3600  # 1-hour quiz
         )
-        bot.send_message(GROUP_ID, "👆 You have 1 hour to answer the daily quiz! Good luck!", reply_to_message_id=poll.message_id)
+        bot.send_message(GROUP_ID, "👆 You have 1 hour to answer the daily quiz Good luck", reply_to_message_id=poll.message_id)
         supabase.table('questions').update({'used': 'true'}).eq('id', question_id).execute()
         print(f"✅ Daily quiz posted using question ID: {question_id}")
     except Exception as e:
@@ -207,7 +207,7 @@ def send_join_group_prompt(chat_id):
     bot.send_message(
         chat_id,
         # The '!' characters are now escaped with '\'
-        "❌ *Access Denied\!* \n\nYou must be a member of our group to use this bot\.\n\nPlease join and then click 'Re\-Verify' or type /suru\.",
+        "❌ *Access Denied\* \n\nYou must be a member of our group to use this bot\.\n\nPlease join and then click 'Re\-Verify' or type /suru\.",
         reply_markup=markup,
         parse_mode="MarkdownV2"
     )
@@ -339,7 +339,7 @@ def background_worker():
 
             # --- Automated Bi-Hourly Quiz ---
             if (current_hour % 2 == 0) and (last_quiz_posted_hour != current_hour):
-                print(f"⏰ It's {current_hour}:00 IST, time for a bi-hourly quiz! Posting...")
+                print(f"⏰ It's {current_hour}:00 IST, time for a bi-hourly quiz Posting...")
                 post_daily_quiz()
                 last_quiz_posted_hour = current_hour
 
@@ -350,7 +350,7 @@ def background_worker():
                     response = supabase.table('doubts').select('id', count='exact').eq('status', 'unanswered').execute()
                     unanswered_count = response.count
                     if unanswered_count and unanswered_count > 0:
-                        reminder_message = f"📢 *Doubt Reminder\!* \n\nThere are currently *{unanswered_count} unanswered doubt(s)* in the group\. Let's help each other out\! 🤝"
+                        reminder_message = f"📢 *Doubt Reminder\* \n\nThere are currently *{unanswered_count} unanswered doubt(s)* in the group\. Let's help each other out\ 🤝"
                         bot.send_message(GROUP_ID, reminder_message, parse_mode="MarkdownV2")
                         print(f"✅ Sent a reminder for {unanswered_count} unanswered doubts.")
                 except Exception as e:
@@ -399,7 +399,7 @@ def get_message():
 @app.route('/')
 def health_check():
     """Health check endpoint for Render to monitor service status."""
-    return "<h1>Telegram Bot is alive and running!</h1>", 200
+    return "<h1>Telegram Bot is alive and running</h1>", 200
 
 # =============================================================================
 # 8. TELEGRAM BOT HANDLERS
@@ -414,7 +414,7 @@ def on_start(msg: types.Message):
     # The rest of the function only runs if it's a private chat.
     if check_membership(msg.from_user.id):
         safe_user_name = escape_markdown(msg.from_user.first_name)
-        welcome_text = f"✅ Welcome, {safe_user_name}! Use the buttons below to get started."
+        welcome_text = f"✅ Welcome, {safe_user_name} Use the buttons below to get started."
         bot.send_message(msg.chat.id, welcome_text, reply_markup=create_main_menu_keyboard(msg), parse_mode="MarkdownV2")
     else:
         send_join_group_prompt(msg.chat.id)
@@ -423,7 +423,7 @@ def on_start(msg: types.Message):
 def reverify(call: types.CallbackQuery):
     if check_membership(call.from_user.id):
         bot.delete_message(call.message.chat.id, call.message.message_id)
-        bot.answer_callback_query(call.id, "✅ Verification Successful!")
+        bot.answer_callback_query(call.id, "✅ Verification Successful")
         # Re-trigger the start message logic
         start_message_clone = types.Message(
             message_id=call.message.message_id,
@@ -445,7 +445,7 @@ def handle_quiz_start_button(msg: types.Message):
     if not check_membership(msg.from_user.id):
         send_join_group_prompt(msg.chat.id)
         return
-    bot.send_message(msg.chat.id, "🚀 Opening quiz... Good luck! 🤞")
+    bot.send_message(msg.chat.id, "🚀 Opening quiz... Good luck 🤞")
 
 @bot.message_handler(commands=['adminhelp'])
 @admin_required
@@ -490,7 +490,7 @@ def handle_leaderboard_command(msg: types.Message):
     try:
         response = supabase.table('leaderboard').select('user_name, score').order('score', desc=True).limit(10).execute()
         if not response.data:
-            bot.send_message(msg.chat.id, "The leaderboard is empty right now. No one has answered any quizzes yet!")
+            bot.send_message(msg.chat.id, "The leaderboard is empty right now. No one has answered any quizzes yet")
             return
 
         leaderboard_text = "🏆 *All-Time Quiz Leaderboard* 🏆\n\n"
@@ -500,7 +500,7 @@ def handle_leaderboard_command(msg: types.Message):
             safe_user_name = escape_markdown(user['user_name'])
             leaderboard_text += f"{rank_icon} {safe_user_name} \- *{user['score']} points*\n"
         
-        leaderboard_text += "\nKeep answering the daily quizzes to climb the ranks\! 🔥"
+        leaderboard_text += "\nKeep answering the daily quizzes to climb the ranks\ 🔥"
         bot.send_message(GROUP_ID, leaderboard_text, parse_mode="MarkdownV2")
         bot.send_message(msg.chat.id, "✅ Leaderboard has been posted in the group.")
     except Exception as e:
@@ -678,7 +678,7 @@ def process_poll_q_and_opts(msg: types.Message):
         close_time = datetime.datetime.now() + datetime.timedelta(minutes=duration)
         active_polls.append({'chat_id': sent_poll.chat.id, 'message_id': sent_poll.message_id, 'close_time': close_time})
         
-        bot.send_message(msg.chat.id, "✅ Poll sent successfully to the group!")
+        bot.send_message(msg.chat.id, "✅ Poll sent successfully to the group")
         
     except Exception as e:
         bot.send_message(msg.chat.id, f"❌ Error creating poll: {e}. Please start over with /createpoll.")
@@ -755,9 +755,9 @@ def process_text_quiz_options_and_answer(msg: types.Message):
         
         if answer not in ['A', 'B', 'C', 'D']: raise ValueError("Answer must be A, B, C, or D.")
         
-        quiz_text = f"🧠 **Quiz Time!**\n\n❓ {question}\n\n" + "\n".join(options) + "\n\n💭 Reply with your answer (A, B, C, or D)"
+        quiz_text = f"🧠 **Quiz Time**\n\n❓ {question}\n\n" + "\n".join(options) + "\n\n💭 Reply with your answer (A, B, C, or D)"
         bot.send_message(GROUP_ID, quiz_text) # No markdown here to avoid issues with user-provided options
-        bot.send_message(msg.chat.id, f"✅ Text quiz sent to the group! The correct answer is {answer}.")
+        bot.send_message(msg.chat.id, f"✅ Text quiz sent to the group The correct answer is {answer}.")
 
     except Exception as e:
         bot.send_message(msg.chat.id, f"❌ Error creating quiz: {e}. Please try again or /cancel.")
@@ -815,10 +815,10 @@ def process_quick_quiz(msg: types.Message):
             type='quiz', correct_option_id=correct_idx,
             is_anonymous=False, open_period=duration_seconds
         )
-        bot.send_message(chat_id=GROUP_ID, text=f"🔥 A new {duration_seconds}-second quiz has started! 🔥", reply_to_message_id=poll.message_id)
+        bot.send_message(chat_id=GROUP_ID, text=f"🔥 A new {duration_seconds}-second quiz has started 🔥", reply_to_message_id=poll.message_id)
         QUIZ_SESSIONS[poll.poll.id] = {'correct_option': correct_idx, 'start_time': datetime.datetime.now().isoformat()}
         QUIZ_PARTICIPANTS[poll.poll.id] = {}
-        bot.send_message(msg.chat.id, "✅ Timed quick quiz sent!")
+        bot.send_message(msg.chat.id, "✅ Timed quick quiz sent")
     except Exception as e:
         bot.send_message(msg.chat.id, f"❌ Error creating quick quiz: {e}. Please check the format and try again.")
 @bot.message_handler(commands=['randomquiz'])
@@ -831,9 +831,9 @@ def handle_random_quiz_command(msg: types.Message):
     try:
         bot.send_message(msg.chat.id, "🔍 Fetching a random quiz from the database, please wait...")
         post_daily_quiz() # Hum automated quiz wala function hi yahan use kar rahe hain
-        bot.send_message(msg.chat.id, "✅ Random quiz has been posted to the group!")
+        bot.send_message(msg.chat.id, "✅ Random quiz has been posted to the group")
     except Exception as e:
-        error_message = f"❌ Oops! Failed to post a random quiz. Error: {e}"
+        error_message = f"❌ Oops Failed to post a random quiz. Error: {e}"
         print(error_message)
         report_error_to_admin(traceback.format_exc())
         bot.send_message(msg.chat.id, error_message)
@@ -967,7 +967,7 @@ def process_quiz_topic(msg: types.Message):
         types.InlineKeyboardButton("Yes, Add Another Quiz", callback_data="add_another_quiz"),
         types.InlineKeyboardButton("No, Finish & Post", callback_data="finish_set_quiz")
     )
-    bot.send_message(user_id, "✅ Quiz details saved! Do you want to add another quiz for the same date?", reply_markup=markup)
+    bot.send_message(user_id, "✅ Quiz details saved Do you want to add another quiz for the same date?", reply_markup=markup)
 
 # This handler will catch the button presses for "Yes" or "No"
 @bot.callback_query_handler(func=lambda call: call.data in ['add_another_quiz', 'finish_set_quiz'])
@@ -1044,9 +1044,9 @@ def process_text_quiz(msg: types.Message):
         
         if answer not in ['A', 'B', 'C', 'D']: raise ValueError("Answer must be A, B, C, or D.")
         
-        quiz_text = f"🧠 **Quiz Time!**\n\n❓ {question}\n\n" + "\n".join(options) + "\n\n💭 Reply with your answer (A, B, C, or D)"
+        quiz_text = f"🧠 **Quiz Time**\n\n❓ {question}\n\n" + "\n".join(options) + "\n\n💭 Reply with your answer (A, B, C, or D)"
         bot.send_message(GROUP_ID, quiz_text)
-        bot.send_message(msg.chat.id, f"✅ Text quiz sent! The correct answer is {answer}.")
+        bot.send_message(msg.chat.id, f"✅ Text quiz sent The correct answer is {answer}.")
     except Exception as e:
         bot.send_message(msg.chat.id, f"❌ Error creating quiz: {e}. Please check the format and try again.")
 @bot.message_handler(commands=['announce'])
@@ -1064,7 +1064,7 @@ def process_announcement_message(msg: types.Message):
     try:
         announcement_text = f"📢 **ANNOUNCEMENT**\n\n{msg.text}"
         bot.send_message(GROUP_ID, announcement_text, parse_mode="Markdown")
-        bot.send_message(msg.chat.id, "✅ Announcement sent!")
+        bot.send_message(msg.chat.id, "✅ Announcement sent")
     except Exception as e:
         # Give a helpful error if the admin messes up markdown formatting
         if "can't parse entities" in str(e):
@@ -1091,7 +1091,7 @@ def handle_feedback_command(msg: types.Message):
     """Handles user feedback. Uses send_message for responses."""
     feedback_text = msg.text.replace('/feedback', '').strip()
     if not feedback_text:
-        bot.send_message(msg.chat.id, "✍️ Please provide your feedback after the command.\nExample: `/feedback The quizzes are helpful!`")
+        bot.send_message(msg.chat.id, "✍️ Please provide your feedback after the command.\nExample: `/feedback The quizzes are helpful`")
         return
         
     user_info = msg.from_user
@@ -1115,7 +1115,7 @@ def handle_feedback_command(msg: types.Message):
         bot.send_message(ADMIN_USER_ID, feedback_msg, parse_mode="MarkdownV2")
         
         # Send confirmation to the user in the group
-        bot.send_message(msg.chat.id, "✅ Thank you for your feedback! It has been sent to the admin. 🙏")
+        bot.send_message(msg.chat.id, "✅ Thank you for your feedback It has been sent to the admin. 🙏")
         
     except Exception as e:
         bot.send_message(msg.chat.id, "❌ Sorry, something went wrong while sending your feedback.")
@@ -1216,10 +1216,10 @@ def handle_quiz_result_command(msg: types.Message):
             rank = medals[i] if i < 3 else f" {i+1}."
             result_text += f"\n{rank} {winner['name']} - *{winner['time']:.2f} seconds*"
         
-        result_text += "\n\nGreat job to all participants! 🚀"
+        result_text += "\n\nGreat job to all participants 🚀"
         
         bot.send_message(GROUP_ID, result_text, parse_mode="Markdown")
-        bot.send_message(msg.from_user.id, "✅ Quiz results announced in the group!")
+        bot.send_message(msg.from_user.id, "✅ Quiz results announced in the group")
 
     except Exception as e:
         print(f"Error in /quizresult: {traceback.format_exc()}")
@@ -1244,7 +1244,7 @@ def parse_leaderboard(text):
     Parses the leaderboard to extract quiz title, total questions, and top winners with detailed info.
     """
     data = {'quiz_title': None, 'total_questions': None, 'winners': []}
-    title_match = re.search(r"The quiz '(.*?)' has finished!", text)
+    title_match = re.search(r"The quiz '(.*?)' has finished", text)
     if title_match:
         data['quiz_title'] = title_match.group(1)
     questions_match = re.search(r"(\d+) questions answered", text)
@@ -1323,7 +1323,7 @@ def handle_congratulate_command(msg: types.Message):
             
     except Exception as e:
         print(f"Error in /bdhai command: {traceback.format_exc()}")
-        bot.send_message(msg.chat.id, f"❌ Oops! Something went wrong while generating the message. Error: {e}")
+        bot.send_message(msg.chat.id, f"❌ Oops Something went wrong while generating the message. Error: {e}")
 @bot.message_handler(commands=['motivate'])
 @admin_required
 def handle_motivation_command(msg: types.Message):
@@ -1333,35 +1333,35 @@ def handle_motivation_command(msg: types.Message):
         # ===============================================
         # --- Hinglish & Relatable Quotes for CA Students ---
         # ===============================================
-        "📖 Books se ishq karoge, toh ICAI bhi tumse pyaar karega. Result dekh lena!",
-        "😴 Sapne wo nahi jo sone par aate hain, sapne wo hain jo tumhein sone nahi dete... especially during exam season!",
-        "✍️ Har attempt ek naya 'Provision' hai, bas 'Amendment' ke saath taiyaar raho!",
-        "Don't tell people your plans. Show them your results. Aur result ke din, show them your ICAI certificate!",
-        "The goal is not to be better than anyone else, but to be better than you were yesterday. Kal se ek section toh zyada yaad kar hi sakte ho!",
-        "Ye 'Study Material' ka bojh nahi, Rank-holder banne ka raasta hai. Uthao aur aage badho!",
-        "Thoda aur padh le, baad mein 'Exemption' ka maza hi kuch aur hoga!",
-        "CA banne ka safar ek marathon hai, 100-meter race nahi. Stamina banaye rakho!",
-        "Jis din result aayega, ye saari raaton ki neend qurbaani safal ho jaayegi. Keep hustling!",
-        "Confidence is key. Aur confidence aata hai Mock Test dene se. Darr ke aage jeet hai!",
-        "Duniya 'turnover' dekhti hai, tum 'net profit' pe focus karo. Quality study matters!",
+        "📖 Books se ishq karoge, toh ICAI bhi tumse pyaar karega. Result dekh lena",
+        "😴 Sapne wo nahi jo sone par aate hain, sapne wo hain jo tumhein sone nahi dete... especially during exam season",
+        "✍️ Har attempt ek naya 'Provision' hai, bas 'Amendment' ke saath taiyaar raho",
+        "Don't tell people your plans. Show them your results. Aur result ke din, show them your ICAI certificate",
+        "The goal is not to be better than anyone else, but to be better than you were yesterday. Kal se ek section toh zyada yaad kar hi sakte ho",
+        "Ye 'Study Material' ka bojh nahi, Rank-holder banne ka raasta hai. Uthao aur aage badho",
+        "Thoda aur padh le, baad mein 'Exemption' ka maza hi kuch aur hoga",
+        "CA banne ka safar ek marathon hai, 100-meter race nahi. Stamina banaye rakho",
+        "Jis din result aayega, ye saari raaton ki neend qurbaani safal ho jaayegi. Keep hustling",
+        "Confidence is key. Aur confidence aata hai Mock Test dene se. Darr ke aage jeet hai",
+        "Duniya 'turnover' dekhti hai, tum 'net profit' pe focus karo. Quality study matters",
         "Social media ka 'scroll' nahi, Bare Act ka 'scroll' karo. Zyada 'valuable' hai.",
-        "Har 'Standard on Auditing' tumhari professional life ka standard set karega. Dhyan se padho!",
+        "Har 'Standard on Auditing' tumhari professional life ka standard set karega. Dhyan se padho",
         "Procrastination is the thief of time... and attempts. Aaj ka kaam kal par mat daalo.",
         "Result ke din 'party' karni hai ya 'pachtana' hai, choice aaj ki mehnat par depend karti hai.",
 
         # ===============================================
         # --- Subject-Specific Motivation ---
         # ===============================================
-        "⚖️ **Law:** Life is like a 'Bare Act'. Thoda complicated, but har 'section' ka ek matlab hai. Keep reading!",
+        "⚖️ **Law:** Life is like a 'Bare Act'. Thoda complicated, but har 'section' ka ek matlab hai. Keep reading",
         "📊 **Accounts:** Zindagi ko balance sheet ki tarah balance karna seekho. Assets (Knowledge) badhao, Liabilities (Doubts) ghatao.",
-        "🧾 **Taxation:** Don't let 'due dates' scare you. Plan your studies like you plan your taxes - efficiently and on time!",
-        "🛡️ **Audit:** Har galti ek 'misstatement' hai. 'Verify' karo, 'rectify' karo, aur aage badho. That's the spirit of an auditor!",
-        "💰 **Costing:** Har minute ki 'cost' hai. Invest your time wisely for the best 'return' on your rank!",
+        "🧾 **Taxation:** Don't let 'due dates' scare you. Plan your studies like you plan your taxes - efficiently and on time",
+        "🛡️ **Audit:** Har galti ek 'misstatement' hai. 'Verify' karo, 'rectify' karo, aur aage badho. That's the spirit of an auditor",
+        "💰 **Costing:** Har minute ki 'cost' hai. Invest your time wisely for the best 'return' on your rank",
         "📈 **Financial Management:** Apne 'Portfolio' of knowledge ko diversify karo, risk kam hoga aur rank ka 'return' badhega.",
-        "📉 **Economics:** Demand for CAs is always high. Supply your best efforts to clear the exam!",
+        "📉 **Economics:** Demand for CAs is always high. Supply your best efforts to clear the exam",
         "🤝 **Ethics:** Your integrity is your biggest asset. Study with honesty, practice with honesty.",
         "📝 **Advanced Accounting:** Har 'AS' aur 'Ind AS' ek puzzle hai. Solve karte jao, expert bante jao.",
-        "💼 **Corporate Law:** 'Memorandum' aur 'Articles' sirf companies ke nahi, apne study plan ke bhi banao. Clarity rahegi!",
+        "💼 **Corporate Law:** 'Memorandum' aur 'Articles' sirf companies ke nahi, apne study plan ke bhi banao. Clarity rahegi",
         "🔢 **GST:** Zindagi mein itne 'credits' kamao ki 'output tax liability' (failure) hamesha zero rahe.",
         "🌍 **International Tax:** Sirf desh mein nahi, videsh mein bhi naam karna hai. Har 'DTAA' ek naya door open karta hai.",
         "⚙️ **Strategic Management:** Sirf padhna nahi, 'strategize' karna bhi zaroori hai. Plan your chapters, win the exam.",
@@ -1375,7 +1375,7 @@ def handle_motivation_command(msg: types.Message):
             "🕉️ *Shloka from the Gita:*\n"
             "कर्मण्येवाधिकारस्ते मा फलेषु कदाचन |\n"
             "मा कर्मफलहेतुर्भूर्मा ते सङ्गोऽस्त्वकर्मणि ||\n\n"
-            "**Meaning:** Tumhara adhikaar sirf apne karm (padhai) par hai, uske phal (result) par nahi. Isliye, result ki chinta kiye bina apna best do!"
+            "**Meaning:** Tumhara adhikaar sirf apne karm (padhai) par hai, uske phal (result) par nahi. Isliye, result ki chinta kiye bina apna best do"
         ),
         (
             "🕉️ *Shloka from the Gita:*\n"
@@ -1387,7 +1387,7 @@ def handle_motivation_command(msg: types.Message):
             "🕉️ *Shloka from the Gita:*\n"
             "उद्धरेदात्मनात्मानं नात्मानमवसादयेत् |\n"
             "आत्मैव ह्यात्मनो बन्धुरात्मैव रिपुरात्मनः ||\n\n"
-            "**Meaning:** Insaan ko apna uddhar khud karna chahiye. Tum khud ke sabse acche dost ho, aur khud ke hi sabse bade dushman. Choose to be your best friend!"
+            "**Meaning:** Insaan ko apna uddhar khud karna chahiye. Tum khud ke sabse acche dost ho, aur khud ke hi sabse bade dushman. Choose to be your best friend"
         ),
         (
             "🕉️ *Shloka from the Gita:*\n"
@@ -1423,7 +1423,7 @@ def handle_motivation_command(msg: types.Message):
             "🕉️ *Shloka from the Gita:*\n"
             "हतो वा प्राप्स्यसि स्वर्गं जित्वा वा भोक्ष्यसे महीम् |\n"
             "तस्मादुत्तिष्ठ कौन्तेय युद्धाय कृतनिश्चयः ||\n\n"
-            "**Meaning:** Agar tum is yuddh (exam) mein haare, toh bhi seekh milegi. Agar jeete, toh poori duniya (success) tumhari hai. Isliye, utho aur ladho!"
+            "**Meaning:** Agar tum is yuddh (exam) mein haare, toh bhi seekh milegi. Agar jeete, toh poori duniya (success) tumhari hai. Isliye, utho aur ladho"
         ),
         (
             "🕉️ *Shloka from the Gita:*\n"
@@ -1453,7 +1453,7 @@ def handle_motivation_command(msg: types.Message):
     
     # Send a random quote from the master list
     bot.send_message(GROUP_ID, random.choice(quotes), parse_mode="Markdown")
-    bot.send_message(msg.chat.id, "✅ Motivation sent to the group!")
+    bot.send_message(msg.chat.id, "✅ Motivation sent to the group")
 
 @bot.message_handler(commands=['studytip'])
 @admin_required
@@ -1621,7 +1621,7 @@ def handle_study_tip_command(msg: types.Message):
     # Send a random tip from the master list
     tip = random.choice(tips)
     bot.send_message(GROUP_ID, tip, parse_mode="Markdown")
-    bot.send_message(msg.chat.id, "✅ Study tip sent to the group!")
+    bot.send_message(msg.chat.id, "✅ Study tip sent to the group")
 # =============================================================================
 # 8.12. LAW LIBRARY FEATURE (/section) - FINAL & ROBUST VERSION
 # =============================================================================
@@ -1686,7 +1686,7 @@ def handle_section_command(msg: types.Message):
 
     except Exception as e:
         print(f"Error in /section command: {traceback.format_exc()}")
-        bot.send_message(msg.chat.id, "❌ Oops! Something went wrong while fetching the details.")
+        bot.send_message(msg.chat.id, "❌ Oops Something went wrong while fetching the details.")
 
 # =============================================================================
 # 8.10. SUPER DOUBT HUB FEATURE (Interactive, AI-like, with Best Answer System)
@@ -1742,7 +1742,7 @@ def create_new_doubt(chat_id, user, question_text, priority):
             
     except Exception as e:
         print(f"Error in create_new_doubt: {traceback.format_exc()}")
-        bot.send_message(chat_id, "❌ Oops! Something went wrong while creating your doubt. Please try again.")
+        bot.send_message(chat_id, "❌ Oops Something went wrong while creating your doubt. Please try again.")
 
 @bot.message_handler(commands=['askdoubt'])
 @membership_required
@@ -1772,7 +1772,7 @@ def handle_askdoubt(msg: types.Message):
         ), parse_mode="Markdown")
         return
 
-    # --- Related Doubts Finder 2.0 in action! ---
+    # --- Related Doubts Finder 2.0 in action ---
     related_doubt = find_related_doubts(question_text)
     
     if related_doubt:
@@ -1795,7 +1795,7 @@ def handle_askdoubt(msg: types.Message):
 
         bot.send_message(
             msg.chat.id,
-            f"Hold on, {safe_user_name}! Is your question similar to this previously answered doubt?\n\n"
+            f"Hold on, {safe_user_name} Is your question similar to this previously answered doubt?\n\n"
             f"➡️ *#Doubt{related_doubt['id']}:* _{safe_question_preview}\.\.\._\n\n"
             "Please confirm:",
             reply_markup=markup,
@@ -1821,7 +1821,7 @@ def handle_doubt_confirmation(call: types.CallbackQuery):
         if response.data and response.data[0]['best_answer_text']:
             best_answer = response.data[0]['best_answer_text']
             bot.edit_message_text(
-                f"Great! Here is the best answer for a similar doubt (*#Doubt{doubt_id}*):\n\n"
+                f"Great Here is the best answer for a similar doubt (*#Doubt{doubt_id}*):\n\n"
                 f"```\n{best_answer}\n```",
                 call.message.chat.id,
                 call.message.message_id,
@@ -1836,7 +1836,7 @@ def handle_doubt_confirmation(call: types.CallbackQuery):
         # Retrieve the user's original question from the state
         original_doubt_data = user_states.get(f"doubt_{question_hash}")
         if original_doubt_data:
-            bot.edit_message_text("Okay, posting it as a new doubt for you!", call.message.chat.id, call.message.message_id)
+            bot.edit_message_text("Okay, posting it as a new doubt for you", call.message.chat.id, call.message.message_id)
             create_new_doubt(
                 call.message.chat.id,
                 call.from_user,
@@ -1898,7 +1898,7 @@ def handle_answer(msg: types.Message):
         bot.send_message(msg.chat.id, "Invalid Doubt ID. Please use a number.", reply_to_message_id=msg.message_id)
     except Exception as e:
         print(f"Error in /answer: {traceback.format_exc()}")
-        bot.send_message(msg.chat.id, "❌ Oops! Something went wrong while submitting your answer.", reply_to_message_id=msg.message_id)
+        bot.send_message(msg.chat.id, "❌ Oops Something went wrong while submitting your answer.", reply_to_message_id=msg.message_id)
 @bot.message_handler(commands=['bestanswer'])
 @membership_required
 def handle_best_answer(msg: types.Message):
@@ -1931,7 +1931,7 @@ def handle_best_answer(msg: types.Message):
         best_answer_text = best_answer_msg.text.split(':', 1)[-1].strip()
 
         updated_message_text = (
-            f"<b>#Doubt{doubt_id}: Answered! ✅</b>\n\n"
+            f"<b>#Doubt{doubt_id}: Answered ✅</b>\n\n"
             f"<b>Student:</b> {doubt_data['student_name']}\n"
             f"<b>Question:</b>\n<pre>{doubt_data['question']}</pre>\n\n"
             f"<i>🏆 Best answer chosen by {msg.from_user.first_name}:</i>\n<pre>{best_answer_text}</pre>"
@@ -1962,7 +1962,7 @@ def handle_best_answer(msg: types.Message):
 
     except Exception as e:
         print(f"Error in /bestanswer: {traceback.format_exc()}")
-        bot.reply_to(msg, f"❌ Oops! Something went wrong.")
+        bot.reply_to(msg, f"❌ Oops Something went wrong.")
 
 # =============================================================================
 # 8.8. QUIZ MARATHON FEATURE (from Google Sheets) - WITH SCORING, EXPLANATIONS & STOP
@@ -2039,13 +2039,13 @@ def run_quiz_marathon(admin_chat_id, duration_per_question):
         if not questions_list: raise Exception("The Google Sheet is empty.")
         
         total_questions = len(questions_list)
-        bot.send_message(GROUP_ID, f"🏁 **Quiz Marathon Begins!** 🏁\n\nGet ready for {total_questions} questions. Each question is for {duration_per_question} seconds. Let's go!", parse_mode="Markdown")
+        bot.send_message(GROUP_ID, f"🏁 **Quiz Marathon Begins** 🏁\n\nGet ready for {total_questions} questions. Each question is for {duration_per_question} seconds. Let's go", parse_mode="Markdown")
         time.sleep(3)
 
         # 3. Loop through questions
         for i, quiz_data in enumerate(questions_list):
             if not MARATHON_STATE.get('is_running'):
-                bot.send_message(GROUP_ID, "🏃‍♂️💨 The marathon was stopped by the admin!")
+                bot.send_message(GROUP_ID, "🏃‍♂️💨 The marathon was stopped by the admin")
                 break # Exit the loop if stop command was issued
 
             question_text = quiz_data.get('Question', 'No Question Text')
@@ -2072,7 +2072,7 @@ def run_quiz_marathon(admin_chat_id, duration_per_question):
                 time.sleep(1)
         
         # 4. Announce results
-        bot.send_message(GROUP_ID, "🎉 **Marathon Finished!** 🎉\n\nCalculating the results, please wait...", parse_mode="Markdown")
+        bot.send_message(GROUP_ID, "🎉 **Marathon Finished** 🎉\n\nCalculating the results, please wait...", parse_mode="Markdown")
         time.sleep(2)
         announce_marathon_results(admin_chat_id)
 
@@ -2108,7 +2108,7 @@ def handle_new_member(msg: types.Message):
     for member in msg.new_chat_members:
         if not member.is_bot:
             # We now use a direct string, not a variable.
-            welcome_text = f"Hey {member.first_name}! 👋 Welcome to the group. Be ready for the quiz at 8 PM! 🚀"
+            welcome_text = f"Hey {member.first_name} 👋 Welcome to the group. Be ready for the quiz at 8 PM 🚀"
             # IMPORTANT: We remove parse_mode="Markdown" to avoid errors with user names.
             bot.send_message(msg.chat.id, welcome_text)
 # --- Fallback Handler (Must be the VERY LAST message handler) ---
