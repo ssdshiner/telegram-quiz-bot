@@ -990,7 +990,7 @@ def handle_set_quiz_decision(call: types.CallbackQuery):
         
         # --- Format the final message ---
         quiz_data = user_states[user_id]['quiz_data']
-                final_text = f"🚨 Quiz – {quiz_data['date']} \\| Rising Empire Group \\|"
+        final_text = f"🚨 Quiz – {quiz_data['date']} \\| Rising Empire Group \\|"
         
         for quiz in quiz_data['quizzes']:
             final_text += (
