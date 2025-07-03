@@ -14,7 +14,7 @@ from flask import Flask, request
 from telebot import TeleBot, types
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import timezone, timedelta
-from supabase import create_client, Client # <-- ADDED FOR SUPABASE
+from supabase import create_client, Client 
 from urllib.parse import quote
 
 # =============================================================================
@@ -1225,8 +1225,7 @@ def process_welcome_message(msg: types.Message):
         return
     global CUSTOM_WELCOME_MESSAGE
     CUSTOM_WELCOME_MESSAGE = msg.text
-    bot.send_message(msg.chat.id, f"✅ Welcome message updated!\n\n**Preview:**\n{CUSTOM_WELCOME_MESSAGE.format(user_name='TestUser')}")
-
+    bot.send_message(msg.chat.id, f"✅ Welcome message updated!\n\n**Preview:**\n{CUSTOM_WELCOME_MESSAGE.format(user_name='TestUser'
 @bot.message_handler(commands=['createquiztext'])
 @admin_required
 def handle_text_quiz_command(msg: types.Message):
@@ -1321,9 +1320,9 @@ def handle_feedback_command(msg: types.Message):
 # =============================================================================
 # 8.11. CONGRATULATE WINNERS FEATURE (/bdhai) - SUPER BOT EDITION
 # =============================================================================
- @bot.message_handler(commands=['quizresult']) # <-- COMMAND NAME CHANGED
+ @bot.message_handler(commands=['quizresult']) 
     @admin_required
-    def handle_quiz_result_command(msg: types.Message): # <-- FUNCTION NAME CHANGED
+    def handle_quiz_result_command(msg: types.Message): 
         """
         Analyzes the bot's internal quiz session data and announces the winners.
         This is for quizzes created via /quickquiz or other internal commands.
@@ -1812,7 +1811,7 @@ def format_section_message(section_data, user_name):
         f"{section_data.get('summary_hinglish', 'Summary not available.')}\n\n"
         f"*Example:*\n"
         f"{example}\n\n"
-        f"_{Disclaimer: Please cross-check with the latest amendments.}_" # <-- CORRECTED MARKDOWN
+        f"_{Disclaimer: Please cross-check with the latest amendments.}_" 
     )
         
     return message_text
@@ -2153,7 +2152,7 @@ def process_marathon_duration_and_start(msg: types.Message):
     except Exception as e:
         bot.send_message(msg.chat.id, f"❌ An error occurred: {e}")
 
-@bot.message_handler(commands=['roko']) # <-- COMMAND NAME CHANGED HERE
+@bot.message_handler(commands=['roko']) 
 @admin_required
 def handle_stop_marathon_command(msg: types.Message):
     """Forcefully stops a running Quiz Marathon."""
