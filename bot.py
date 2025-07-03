@@ -1277,9 +1277,8 @@ def handle_congratulate_command(msg: types.Message):
 
     leaderboard_text = msg.reply_to_message.text
 
-# THE LINE IS NOW CORRECTLY ALIGNED
-try:
-    leaderboard_data = parse_leaderboard(leaderboard_text)
+    try:
+        leaderboard_data = parse_leaderboard(leaderboard_text)
         top_winners = leaderboard_data['winners'][:3]
         if not top_winners:
             bot.send_message(msg.chat.id, "🤔 I couldn't find any winners in the format 🥇, 🥈, 🥉. Please make sure you are replying to the correct leaderboard message.")
@@ -1315,6 +1314,7 @@ try:
         
         bot.send_message(msg.chat.id, congrats_message, parse_mode="MarkdownV2")
         
+        # This is now inside the main try block
         try:
             bot.delete_message(msg.chat.id, msg.message_id)
         except Exception:
