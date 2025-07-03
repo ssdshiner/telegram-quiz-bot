@@ -139,12 +139,13 @@ def report_error_to_admin(error_message: str):
         # If sending the error fails, we just print it.
         print(f"CRITICAL: Failed to report error to admin: {e}")
 def is_admin(user_id):
+    """Checks if a user is the bot admin."""
+    return user_id == ADMIN_USER_ID
+
 def escape_markdown(text: str) -> str:
     """Helper function to escape characters for Telegram's MarkdownV2."""
     escape_chars = r'_*[]()~`>#+-=|{}.!'
     return ''.join(f'\\{char}' if char in escape_chars else char for char in text)
-    """Checks if a user is the bot admin."""
-    return user_id == ADMIN_USER_ID
 # ADD THIS NEW HELPER FUNCTION
 def post_daily_quiz():
     """Fetches a random, unused question from Supabase and posts it as a quiz."""
@@ -1391,30 +1392,28 @@ def handle_feedback_command(msg: types.Message):
     user_info = msg.from_user
     full_name = f"{user_info.first_name} {user_info.last_name or ''}".strip()
     username = f"@{user_info.username}" if user_info.username else "No username"
-   safe_feedback_text = escape_markdown(feedback_text)
+   try:
+    # We escape the user-provided text to prevent formatting errors
+    safe_feedback_text = escape_markdown(feedback_text)
+    safe_full_name = escape_markdown(full_name)
+    safe_username = escape_markdown(username)
 
-feedback_msg = (
-    f"📬 *New Feedback*\n\n"
-    f"*From:* {escape_markdown(full_name)} ({escape_markdown(username)})\n"
-    f"*User ID:* `{user_info.id}`\n\n"
-    f"*Message:*\n{safe_feedback_text}"
-)
-
-# ... then find the line that sends the message ...
-
-# Find this line:
-bot.send_message(ADMIN_USER_ID, feedback_msg, parse_mode="Markdown")
-
-# And replace it with this to use the more stable parser:
-bot.send_message(ADMIN_USER_ID, feedback_msg, parse_mode="MarkdownV2")
-    try:
-        # Send the feedback to the admin
-        bot.send_message(ADMIN_USER_ID, feedback_msg, parse_mode="Markdown")
-        # Send confirmation to the user in the group
-        bot.send_message(msg.chat.id, "✅ Thank you for your feedback! It has been sent to the admin. 🙏")
-    except Exception as e:
-        bot.send_message(msg.chat.id, "❌ Sorry, something went wrong while sending your feedback.")
-        print(f"Feedback error: {e}")
+    feedback_msg = (
+        f"📬 *New Feedback*\n\n"
+        f"*From:* {safe_full_name} ({safe_username})\n"
+        f"*User ID:* `{user_info.id}`\n\n"
+        f"*Message:*\n{safe_feedback_text}"
+    )
+    
+    # Send the feedback to the admin using the more stable MarkdownV2
+    bot.send_message(ADMIN_USER_ID, feedback_msg, parse_mode="MarkdownV2")
+    
+    # Send confirmation to the user in the group
+    bot.send_message(msg.chat.id, "✅ Thank you for your feedback! It has been sent to the admin. 🙏")
+    
+except Exception as e:
+    bot.send_message(msg.chat.id, "❌ Sorry, something went wrong while sending your feedback.")
+    print(f"Feedback error: {e}")
 # =============================================================================
 # MASTER POLL ANSWER HANDLER (CORRECTED)
 # =============================================================================
@@ -2157,37 +2156,38 @@ def handle_answer(msg: types.Message):
         bot.send_message(msg.chat.id, "This command can only be used in the main group.")
         return
 
-    try:
-        parts = msg.text.split(' ', 2)
-        if len(parts) < 3:
-            bot.send_message(msg.chat.id, "Invalid format. Use: `/answer [Doubt_ID] [Your Answer]`\n*Example:* `/answer 101 The answer is...`", parse_mode="Markdown")
-            return
-            
-        doubt_id = int(parts[1])
-        answer_text = parts[2].strip()
+ try:
+    parts = msg.text.split(' ', 2)
+    if len(parts) < 3:
+        bot.send_message(msg.chat.id, "Invalid format. Use: `/answer [Doubt_ID] [Your Answer]`\n*Example:* `/answer 101 The answer is...`", parse_mode="Markdown")
+        return
         
-        fetch_response = supabase.table('doubts').select('message_id, all_answer_message_ids').eq('id', doubt_id).limit(1).execute()
-        if not fetch_response.data:
-            bot.send_message(msg.chat.id, f"❌ Doubt with ID #{doubt_id} not found.")
-            return
-        
-        doubt_data = fetch_response.data[0]
-        original_message_id = doubt_data['message_id']
-        all_answers = doubt_data.get('all_answer_message_ids', [])
-        
-       sent_answer_msg = bot.reply_to(original_message_id, f"↪️ *Answer by {escape_markdown(msg.from_user.first_name)}:*\n\n{escape_markdown(answer_text)}", parse_mode="MarkdownV2")
-        
-        all_answers.append(sent_answer_msg.message_id)
-        supabase.table('doubts').update({'all_answer_message_ids': all_answers}).eq('id', doubt_id).execute()
+    doubt_id = int(parts[1])
+    answer_text = parts[2].strip()
+    
+    fetch_response = supabase.table('doubts').select('message_id, all_answer_message_ids').eq('id', doubt_id).limit(1).execute()
+    if not fetch_response.data:
+        bot.send_message(msg.chat.id, f"❌ Doubt with ID #{doubt_id} not found.")
+        return
+    
+    doubt_data = fetch_response.data[0]
+    original_message_id = doubt_data['message_id']
+    all_answers = doubt_data.get('all_answer_message_ids', [])
+    
+    # Correctly send the escaped message
+    sent_answer_msg = bot.reply_to(original_message_id, f"↪️ *Answer by {escape_markdown(msg.from_user.first_name)}:*\n\n{escape_markdown(answer_text)}", parse_mode="MarkdownV2")
+    
+    all_answers.append(sent_answer_msg.message_id)
+    supabase.table('doubts').update({'all_answer_message_ids': all_answers}).eq('id', doubt_id).execute()
 
-        bot.delete_message(msg.chat.id, msg.message_id)
-        
-    except (ValueError, IndexError):
-        # Using send_message for error feedback
-        bot.send_message(msg.chat.id, "Invalid Doubt ID. Please use a number.")
-    except Exception as e:
-        print(f"Error in /answer: {traceback.format_exc()}")
-        bot.send_message(msg.chat.id, f"❌ Oops! Something went wrong while answering.")
+    bot.delete_message(msg.chat.id, msg.message_id)
+    
+except (ValueError, IndexError):
+    # Using send_message for error feedback
+    bot.send_message(msg.chat.id, "Invalid Doubt ID. Please use a number.")
+except Exception as e:
+    print(f"Error in /answer: {traceback.format_exc()}")
+    bot.send_message(msg.chat.id, f"❌ Oops! Something went wrong while answering.")
 @bot.message_handler(commands=['bestanswer'])
 @membership_required
 def handle_best_answer(msg: types.Message):
