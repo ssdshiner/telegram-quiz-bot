@@ -453,7 +453,7 @@ def background_worker():
                 
                 if current_time_ist >= send_time:
                     try:
-                        bot.send_message(GROUP_ID, msg_details['message'], parse_mode="Markdown")
+                        bot.send_message(GROUP_ID, msg_details['message'], parse_mode="MarkdownV2")
                         print(f"✅ Sent scheduled message: {msg_details['message'][:50]}...")
                         # IMPORTANT: Only modify the list after the message is successfully sent
                         if not msg_details.get('recurring', False):
