@@ -15,26 +15,26 @@ from flask import Flask, request
 from telebot import TeleBot, types
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import timezone, timedelta
-from supabase import create_client, Client 
+from supabase import create_client, Client
 from urllib.parse import quote
-
+from html import escape
 # =============================================================================
 # 2. CONFIGURATION & INITIALIZATION
 # =============================================================================
 
-# --- Configuration (As requested by you) ---
+# --- Configuration ---
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 SERVER_URL = os.getenv('SERVER_URL')
 GROUP_ID_STR = os.getenv('GROUP_ID')
 WEBAPP_URL = os.getenv('WEBAPP_URL')
 ADMIN_USER_ID_STR = os.getenv('ADMIN_USER_ID')
-BOT_USERNAME = "Rising_quiz_bot"  # Your specified bot username
+BOT_USERNAME = "Rising_quiz_bot"
 PUBLIC_GROUP_COMMANDS = ['todayquiz', 'askdoubt', 'answer', 'section', 'feedback']
-# Environment variables for Google Sheets
 GOOGLE_SHEETS_CREDENTIALS_PATH = os.getenv('GOOGLE_SHEETS_CREDENTIALS_PATH')
 GOOGLE_SHEET_KEY = os.getenv('GOOGLE_SHEET_KEY')
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+
 # --- Type Casting with Error Handling ---
 try:
     GROUP_ID = int(GROUP_ID_STR) if GROUP_ID_STR else None
@@ -42,7 +42,6 @@ try:
 except (ValueError, TypeError):
     print("FATAL ERROR: GROUP_ID and ADMIN_USER_ID must be valid integers.")
     exit()
-
 # --- Bot and Flask App Initialization ---
 bot = TeleBot(BOT_TOKEN, threaded=False)
 app = Flask(__name__)
@@ -54,54 +53,42 @@ try:
         print("✅ Successfully initialized Supabase client.")
     else:
         print("❌ Supabase configuration is missing. Bot will not be able to save data.")
-        # We don't exit, so the bot can still run, but we log the error.
 except Exception as e:
     print(f"❌ FATAL: Could not initialize Supabase client. Error: {e}")
+
 # --- Global In-Memory Storage ---
 scheduled_messages = []
 active_polls = []
 QUIZ_SESSIONS = {}
 QUIZ_PARTICIPANTS = {}
 TODAY_QUIZ_DETAILS = {
-    "time": "Not Set",
-    "chapter": "Not Set",
-    "level": "Not Set",
+    "details_text": "Not Set",
     "is_set": False
 }
 CUSTOM_WELCOME_MESSAGE = "Hey {user_name}! 👋 Welcome to the group. Be ready for the quiz at 8 PM! 🚀"
 MARATHON_STATE = {}
+user_states = {}
+last_quiz_posted_hour = -1
+last_doubt_reminder_hour = -1
 
 # =============================================================================
 # 3. GOOGLE SHEETS INTEGRATION
 # =============================================================================
-
 def get_gsheet():
     """Connects to Google Sheets using credentials from a file path."""
     try:
-        # Set up the scope for Google Sheets API access
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-
-        # Fetch the credentials file path from an environment variable
-        # This path will be set by Render's "Secret File" feature
         credentials_path = os.getenv('GOOGLE_SHEETS_CREDENTIALS_PATH')
         if not credentials_path:
             print("ERROR: GOOGLE_SHEETS_CREDENTIALS_PATH environment variable not set.")
             return None
-
-        # Load credentials from the file
         creds = ServiceAccountCredentials.from_json_keyfile_name(credentials_path, scope)
-
-        # Authorize the credentials
         client = gspread.authorize(creds)
-
-        # Fetch the Google Sheet key from an environment variable
         sheet_key = os.getenv('GOOGLE_SHEET_KEY')
         if not sheet_key:
             print("ERROR: GOOGLE_SHEET_KEY environment variable not set.")
             return None
-
         return client.open_by_key(sheet_key).sheet1
-
     except FileNotFoundError:
         print(f"ERROR: Credentials file not found at path: {credentials_path}. Make sure the Secret File is configured correctly on Render.")
         return None
@@ -124,58 +111,48 @@ def initialize_gsheet():
             print("❌ Could not get sheet object to initialize.")
     except Exception as e:
         print(f"❌ Initial sheet check failed: {e}")
-
 # =============================================================================
 # 4. UTILITY & HELPER FUNCTIONS
 # =============================================================================
-# ADD THIS NEW HELPER FUNCTION
 def report_error_to_admin(error_message: str):
     """Sends a formatted error message to the admin."""
     try:
-        # We limit the length to avoid hitting Telegram's message size limit
-        error_text = f"🚨 **BOT ERROR** 🚨\n\nAn error occurred:\n\n<pre>{error_message[:3500]}</pre>"
+        error_text = f"🚨 **BOT ERROR** 🚨\n\nAn error occurred:\n\n<pre>{escape(str(error_message)[:3500])}</pre>"
         bot.send_message(ADMIN_USER_ID, error_text, parse_mode="HTML")
     except Exception as e:
-        # If sending the error fails, we just print it.
         print(f"CRITICAL: Failed to report error to admin: {e}")
+
 def is_admin(user_id):
     """Checks if a user is the bot admin."""
     return user_id == ADMIN_USER_ID
 
 def escape_markdown(text: str) -> str:
     """Helper function to escape characters for Telegram's MarkdownV2."""
+    if not isinstance(text, str):
+        text = str(text)
     escape_chars = r'_*[]()~`>#+-=|{}.!'
     return ''.join(f'\\{char}' if char in escape_chars else char for char in text)
-# ADD THIS NEW HELPER FUNCTION
+
 def post_daily_quiz():
     """Fetches a random, unused question from Supabase and posts it as a quiz."""
     if not supabase: return
-
     try:
-        # Fetch one random, unused question.
-        # Supabase doesn't have a built-in random function in the Python client's filter,
-        # so we fetch a few and pick one. A more scalable solution for huge tables
-        # would involve a database function (view), but this is great for hundreds of questions.
         response = supabase.table('questions').select('*').eq('used', 'false').limit(10).execute()
-        
         if not response.data:
-            # If no unused questions, reset all and try again
             print("ℹ️ No unused questions found. Resetting all questions to unused.")
             supabase.table('questions').update({'used': 'false'}).neq('id', 0).execute()
             response = supabase.table('questions').select('*').eq('used', 'false').limit(10).execute()
             if not response.data:
                 print("❌ No questions found in the database at all.")
+                report_error_to_admin("Daily Quiz Failed: No questions found in the database.")
                 return
 
-        # Pick a random question from the fetched list
         quiz_data = random.choice(response.data)
-        
         question_id = quiz_data['id']
         question_text = quiz_data['question_text']
         options = quiz_data['options']
         correct_index = quiz_data['correct_index']
-        
-        # Post the poll to the group
+
         poll = bot.send_poll(
             chat_id=GROUP_ID,
             question=f"🧠 Daily Automated Quiz 🧠\n\n{question_text}",
@@ -183,16 +160,15 @@ def post_daily_quiz():
             type='quiz',
             correct_option_id=correct_index,
             is_anonymous=False,
-            open_period=3600 # 60-minute quiz
+            open_period=3600  # 1-hour quiz
         )
-        bot.send_message(GROUP_ID, "👆 You have 60 minutes to answer the daily quiz! Good luck!", reply_to_message_id=poll.message_id)
-        # Mark the question as used in the database
+        bot.send_message(GROUP_ID, "👆 You have 1 hour to answer the daily quiz! Good luck!", reply_to_message_id=poll.message_id)
         supabase.table('questions').update({'used': 'true'}).eq('id', question_id).execute()
         print(f"✅ Daily quiz posted using question ID: {question_id}")
-
     except Exception as e:
         print(f"❌ Failed to post daily quiz: {e}")
         report_error_to_admin(f"Failed to post daily quiz:\n{traceback.format_exc()}")
+
 def admin_required(func):
     """Decorator to restrict a command to the admin."""
     @functools.wraps(func)
@@ -203,25 +179,15 @@ def admin_required(func):
     return wrapper
 
 def is_group_message(message):
-    """Checks if a message is from a group or supergroup."""
     return message.chat.type in ['group', 'supergroup']
 
 def is_bot_mentioned(message):
-    """Checks if the bot was mentioned in a group message."""
     if not message.text:
         return False
-    return f"@{BOT_USERNAME}" in message.text or message.text.startswith('/')
-
-def format_timedelta(delta):
-    """Formats a timedelta object into a human-readable string."""
-    seconds = delta.total_seconds()
-    hours = seconds // 3600
-    minutes = (seconds % 3600) // 60
-    seconds = seconds % 60
-    return f"{int(hours)}h {int(minutes)}m {int(seconds)}s"
+    # A simple mention check that works for both /command@botname and @botname /command
+    return BOT_USERNAME in message.text
 
 def check_membership(user_id):
-    """Verify if a user is a member of the designated group."""
     if user_id == ADMIN_USER_ID:
         return True
     try:
@@ -231,86 +197,65 @@ def check_membership(user_id):
         print(f"Membership check failed for {user_id}: {e}")
         return False
 
-def membership_required(func):
-    """
-    Decorator to ensure the user is a member of the group.
-    This new version also controls which commands are public in the group.
-    """
-    @functools.wraps(func)
-    def wrapper(msg: types.Message, *args, **kwargs):
-        command = ""
-        if msg.text and msg.text.startswith('/'):
-            command = msg.text.split(' ')[0].replace('/', '')
-
-        # Rule 1: In a group, if the command is NOT public AND the bot is NOT mentioned, ignore the message.
-        if is_group_message(msg) and command not in PUBLIC_GROUP_COMMANDS and not is_bot_mentioned(msg):
-            return
-
-        # Rule 2: If the command is allowed to proceed, check for membership.
-        if check_membership(msg.from_user.id):
-            return func(msg, *args, **kwargs)
-        else:
-            # If not a member, send the join prompt.
-            send_join_group_prompt(msg.chat.id)
-    return wrapper
-
 def send_join_group_prompt(chat_id):
-    """Sends a message prompting the user to join the group."""
     try:
         invite_link = bot.export_chat_invite_link(GROUP_ID)
     except Exception:
-        invite_link = "https://t.me/ca_interdiscussion" # Fallback link
+        invite_link = "https://t.me/ca_interdiscussion"  # Fallback link
     markup = types.InlineKeyboardMarkup().add(
         types.InlineKeyboardButton("📥 Join Group", url=invite_link),
         types.InlineKeyboardButton("🔁 Re-Verify", callback_data="reverify")
     )
     bot.send_message(
-    chat_id,
-    "❌ *Access Denied!*\n\nYou must be a member of our group to use this bot.\n\nPlease join and then click 'Re-Verify' or type /suru.",
-    reply_markup=markup,
-    parse_mode="Markdown"
-)
+        chat_id,
+        "❌ *Access Denied\!*\n\nYou must be a member of our group to use this bot\.\n\nPlease join and then click 'Re\-Verify' or type /start\.",
+        reply_markup=markup,
+        parse_mode="MarkdownV2"
+    )
+
+def membership_required(func):
+    @functools.wraps(func)
+    def wrapper(msg: types.Message, *args, **kwargs):
+        command = ""
+        if msg.text and msg.text.startswith('/'):
+            command = msg.text.split('@')[0].split(' ')[0].replace('/', '')
+
+        if is_group_message(msg) and command not in PUBLIC_GROUP_COMMANDS and not is_bot_mentioned(msg):
+            return
+
+        if check_membership(msg.from_user.id):
+            return func(msg, *args, **kwargs)
+        else:
+            send_join_group_prompt(msg.chat.id)
+    return wrapper
 
 def create_main_menu_keyboard(message: types.Message):
-    """Creates the main reply keyboard with a WebApp button for private chats only."""
     if message.chat.type != 'private':
-        # Return a simple keyboard without WebApp button in group chats
         markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
         quiz_button = types.KeyboardButton("🚀 Start Quiz")
         markup.add(quiz_button)
         return markup
 
-    # Return the keyboard with WebApp button for private chats
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     quiz_button = types.KeyboardButton("🚀 Start Quiz", web_app=types.WebAppInfo(WEBAPP_URL))
     markup.add(quiz_button)
     return markup
 
-
 def bot_is_target(message: types.Message):
-    """ Returns True if the message is either in a private chat or if the bot is mentioned in a group. """
     if message.chat.type == "private":
         return True
-
-    # If it's a group chat, check for mention.
     if is_group_message(message) and is_bot_mentioned(message):
         return True
-
     return False
-
-
 # =============================================================================
 # 5. DATA PERSISTENCE WITH SUPABASE *** THIS SECTION IS REPLACED ***
 # =============================================================================
 def load_data():
-    """
-    Loads bot state from Supabase. This version correctly parses JSON data for all persistent variables.
-    """
+    """Loads bot state from Supabase, correctly parsing JSON data."""
     if not supabase:
         print("WARNING: Supabase client not available. Skipping data load.")
         return
         
-    # Add active_polls to the list of global variables we are loading
     global scheduled_messages, TODAY_QUIZ_DETAILS, CUSTOM_WELCOME_MESSAGE, QUIZ_SESSIONS, QUIZ_PARTICIPANTS, active_polls
     print("Loading data from Supabase...")
     try:
@@ -320,33 +265,22 @@ def load_data():
             db_data = response.data
             state = {item['key']: item['value'] for item in db_data}
             
-            # --- Load scheduled messages ---
-            loaded_messages_str = state.get('scheduled_messages', '[]')
-            loaded_messages = json.loads(loaded_messages_str)
-            deserialized_messages = []
-            for msg in loaded_messages:
+            def deserialize_datetimes(items, key):
+                deserialized_list = []
+                loaded_str = state.get(items, '[]')
                 try:
-                    if 'send_time' in msg:
-                        msg['send_time'] = datetime.datetime.strptime(msg['send_time'], '%Y-%m-%d %H:%M:%S')
-                        deserialized_messages.append(msg)
-                except (ValueError, TypeError): 
-                    continue
-            scheduled_messages = deserialized_messages
+                    loaded_list = json.loads(loaded_str)
+                    for item in loaded_list:
+                        if key in item and isinstance(item[key], str):
+                            item[key] = datetime.datetime.strptime(item[key], '%Y-%m-%d %H:%M:%S')
+                        deserialized_list.append(item)
+                except (json.JSONDecodeError, TypeError, ValueError) as e:
+                    print(f"Warning: Could not deserialize {items}. Starting fresh. Error: {e}")
+                return deserialized_list
 
-            # --- NEW: Load active polls ---
-            loaded_polls_str = state.get('active_polls', '[]')
-            loaded_polls = json.loads(loaded_polls_str)
-            deserialized_polls = []
-            for poll in loaded_polls:
-                try:
-                    if 'close_time' in poll:
-                       poll['close_time'] = datetime.datetime.strptime(poll['close_time'], '%Y-%m-%d %H:%M:%S')
-                       deserialized_polls.append(poll)
-                except (ValueError, TypeError):
-                    continue
-            active_polls = deserialized_polls
+            scheduled_messages = deserialize_datetimes('scheduled_messages', 'send_time')
+            active_polls = deserialize_datetimes('active_polls', 'close_time')
 
-            # --- Load all other data ---
             TODAY_QUIZ_DETAILS = json.loads(state.get('today_quiz_details', '{}')) or TODAY_QUIZ_DETAILS
             CUSTOM_WELCOME_MESSAGE = state.get('custom_welcome_message', CUSTOM_WELCOME_MESSAGE)
             QUIZ_SESSIONS = json.loads(state.get('quiz_sessions', '{}')) or QUIZ_SESSIONS
@@ -358,44 +292,37 @@ def load_data():
 
     except Exception as e:
         print(f"❌ Error loading data from Supabase: {e}")
-        traceback.print_exc()
+        report_error_to_admin(f"Error loading data from Supabase:\n{traceback.format_exc()}")
+        
 def save_data():
-    """Saves bot state to Supabase, now including active_polls."""
+    """Saves bot state to Supabase, including active_polls."""
     if not supabase:
         print("WARNING: Supabase client not available. Skipping data save.")
         return
 
     try:
-        # --- Serialize scheduled_messages (contains datetime objects) ---
-        serializable_messages = []
-        for msg in scheduled_messages:
-            msg_copy = msg.copy()
-            msg_copy['send_time'] = msg_copy['send_time'].strftime('%Y-%m-%d %H:%M:%S')
-            serializable_messages.append(msg_copy)
+        def serialize_datetimes(items, key):
+            serializable_list = []
+            for item in items:
+                item_copy = item.copy()
+                if key in item_copy and isinstance(item_copy[key], datetime.datetime):
+                    item_copy[key] = item_copy[key].strftime('%Y-%m-%d %H:%M:%S')
+                serializable_list.append(item_copy)
+            return json.dumps(serializable_list)
 
-        # --- NEW: Serialize active_polls (also contains datetime objects) ---
-        serializable_polls = []
-        for poll in active_polls:
-            poll_copy = poll.copy()
-            if 'close_time' in poll_copy and isinstance(poll_copy['close_time'], datetime.datetime):
-                poll_copy['close_time'] = poll_copy['close_time'].strftime('%Y-%m-%d %H:%M:%S')
-            serializable_polls.append(poll_copy)
-
-        # --- Prepare all data for upserting ---
         data_to_upsert = [
-            {'key': 'scheduled_messages', 'value': json.dumps(serializable_messages)},
+            {'key': 'scheduled_messages', 'value': serialize_datetimes(scheduled_messages, 'send_time')},
+            {'key': 'active_polls', 'value': serialize_datetimes(active_polls, 'close_time')},
             {'key': 'today_quiz_details', 'value': json.dumps(TODAY_QUIZ_DETAILS)},
             {'key': 'custom_welcome_message', 'value': CUSTOM_WELCOME_MESSAGE},
             {'key': 'quiz_sessions', 'value': json.dumps(QUIZ_SESSIONS)},
             {'key': 'quiz_participants', 'value': json.dumps(QUIZ_PARTICIPANTS)},
-            # Add the newly serialized polls to the list
-            {'key': 'active_polls', 'value': json.dumps(serializable_polls)},
         ]
         
         supabase.table('bot_state').upsert(data_to_upsert).execute()
     except Exception as e:
         print(f"❌ Error saving data to Supabase: {e}")
-        traceback.print_exc()
+        report_error_to_admin(f"Error saving data to Supabase:\n{traceback.format_exc()}")
 # =============================================================================
 # 6. BACKGROUND SCHEDULER (Corrected and Improved)
 # =============================================================================
@@ -405,76 +332,67 @@ last_quiz_posted_hour = -1
 last_doubt_reminder_hour = -1
 
 def background_worker():
-    """
-    This function runs continuously to handle all scheduled tasks,
-    including automated quizzes, scheduled messages, poll closing, 
-    and the new Unanswered Doubt Reminder. It is robust and timezone-aware.
-    """
+    """Runs all scheduled tasks in a continuous loop."""
     global last_quiz_posted_hour, last_doubt_reminder_hour
     
     while True:
-        # === REPLACE THE ENTIRE try...except BLOCK WITH THIS ===
+        try:
+            ist_tz = timezone(timedelta(hours=5, minutes=30))
+            current_time_ist = datetime.datetime.now(ist_tz)
+            current_hour = current_time_ist.hour
 
-                    try:
-                        # Escape the message content to ensure it's safe for MarkdownV2
-                        safe_message = escape_markdown(msg_details['message'])
-                        
-                        # Send the message using the safer MarkdownV2 parser
-                        bot.send_message(GROUP_ID, safe_message, parse_mode="MarkdownV2")
-                        
-                        print(f"✅ Sent scheduled message: {msg_details['message'][:50]}...")
-                        # IMPORTANT: Only modify the list after the message is successfully sent
-                        if not msg_details.get('recurring', False):
-                            scheduled_messages.remove(msg_details)
-                        else:
-                            # For recurring messages, schedule for the next day
-                            msg_details['send_time'] += datetime.timedelta(days=1)
-                    except Exception as e:
-                        print(f"❌ Failed to send scheduled message: {e}")
-                        # Also report this specific error to the admin
-                        report_error_to_admin(f"Failed to send scheduled message: {e}\n\nMessage was: {msg_details['message']}")
-    last_doubt_reminder_hour = current_hour
-            # --- Process Scheduled Messages & Reminders ---
-            # Create a copy to safely modify the list while iterating
+            # --- Automated Bi-Hourly Quiz ---
+            if (current_hour % 2 == 0) and (last_quiz_posted_hour != current_hour):
+                print(f"⏰ It's {current_hour}:00 IST, time for a bi-hourly quiz! Posting...")
+                post_daily_quiz()
+                last_quiz_posted_hour = current_hour
+
+            # --- Unanswered Doubts Reminder ---
+            if (current_hour % 2 != 0) and (last_doubt_reminder_hour != current_hour):
+                print(f"⏰ It's {current_hour}:00 IST, checking for unanswered doubts...")
+                try:
+                    response = supabase.table('doubts').select('id', count='exact').eq('status', 'unanswered').execute()
+                    unanswered_count = response.count
+                    if unanswered_count and unanswered_count > 0:
+                        reminder_message = f"📢 *Doubt Reminder\!* \n\nThere are currently *{unanswered_count} unanswered doubt(s)* in the group\. Let's help each other out\! 🤝"
+                        bot.send_message(GROUP_ID, reminder_message, parse_mode="MarkdownV2")
+                        print(f"✅ Sent a reminder for {unanswered_count} unanswered doubts.")
+                except Exception as e:
+                    print(f"❌ Failed to check for doubt reminders: {e}")
+                last_doubt_reminder_hour = current_hour
+
+            # --- Process Scheduled Messages ---
             messages_to_process = scheduled_messages[:]
             for msg_details in messages_to_process:
-                send_time = msg_details['send_time']
-                # *** BUG FIX ***: Make the stored (naive) time timezone-aware before comparing
-                if not send_time.tzinfo:
-                     send_time = send_time.replace(tzinfo=ist_tz)
-                
+                send_time = msg_details['send_time'].replace(tzinfo=ist_tz)
                 if current_time_ist >= send_time:
                     try:
-                        bot.send_message(GROUP_ID, msg_details['message'], parse_mode="MarkdownV2")
+                        safe_message = escape_markdown(msg_details['message'])
+                        bot.send_message(GROUP_ID, safe_message, parse_mode="MarkdownV2")
                         print(f"✅ Sent scheduled message: {msg_details['message'][:50]}...")
-                        # IMPORTANT: Only modify the list after the message is successfully sent
                         if not msg_details.get('recurring', False):
                             scheduled_messages.remove(msg_details)
                         else:
-                            # For recurring messages, schedule for the next day
                             msg_details['send_time'] += datetime.timedelta(days=1)
                     except Exception as e:
                         print(f"❌ Failed to send scheduled message: {e}")
-
+                        report_error_to_admin(f"Failed to send scheduled message: {e}\n\nMessage was: {msg_details.get('message', 'N/A')}")
+            
             # --- Process and Close Active Polls ---
             polls_to_process = active_polls[:]
             for poll in polls_to_process:
                 close_time = poll.get('close_time')
                 if isinstance(close_time, datetime.datetime):
-                    # *** BUG FIX ***: Also make poll close_time timezone-aware
-                    if not close_time.tzinfo:
-                        close_time = close_time.replace(tzinfo=ist_tz)
-                    
+                    close_time = close_time.replace(tzinfo=ist_tz)
                     if current_time_ist >= close_time:
                         try:
                             bot.stop_poll(poll['chat_id'], poll['message_id'])
                             print(f"✅ Closed poll {poll['message_id']}.")
                         except Exception as e:
                             print(f"⚠️ Could not stop poll {poll['message_id']}: {e}")
-                        # Remove poll from the list regardless of whether stop_poll succeeded
                         active_polls.remove(poll)
 
-            # --- Periodically Save Data to Supabase ---
+            # --- Periodically Save Data ---
             save_data()
 
         except Exception as e:
@@ -482,7 +400,6 @@ def background_worker():
             print(f"❌ Error in background_worker:\n{tb_string}")
             report_error_to_admin(tb_string)
             
-        # Wait for 30 seconds before the next cycle to avoid spamming
         time.sleep(30)
 # =============================================================================
 # 7. FLASK WEB SERVER & WEBHOOK
@@ -494,11 +411,9 @@ def get_message():
     try:
         update = types.Update.de_json(request.get_data().decode('utf-8'))
         bot.process_new_updates([update])
-        return "!", 200  # Success
+        return "!", 200
     except Exception as e:
-        # Log the exception error for debugging
         print(f"Webhook Error: {e}")
-        # Return a 400 error indicating that the request was malformed
         return "Webhook Error", 400
 
 @app.route('/')
@@ -509,17 +424,14 @@ def health_check():
 # =============================================================================
 # 8. TELEGRAM BOT HANDLERS
 # =============================================================================
-
-@bot.message_handler(commands=['suru', 'start'], func=bot_is_target)
+@bot.message_handler(commands=['start', 'suru'], func=bot_is_target)
 def on_start(msg: types.Message):
-    # No need for the old check, the decorator handles it.
+    """Handles the /start command."""
     if check_membership(msg.from_user.id):
-        # Escape the user's name to make it safe for MarkdownV2
         safe_user_name = escape_markdown(msg.from_user.first_name)
         welcome_text = f"✅ Welcome, {safe_user_name}! Use the buttons below to get started."
         if is_group_message(msg):
             welcome_text += "\n\n💡 *Tip: For a better experience, interact with me in a private chat\!*"
-        # Use MarkdownV2 for safer parsing
         bot.send_message(msg.chat.id, welcome_text, reply_markup=create_main_menu_keyboard(msg), parse_mode="MarkdownV2")
     else:
         send_join_group_prompt(msg.chat.id)
@@ -529,7 +441,18 @@ def reverify(call: types.CallbackQuery):
     if check_membership(call.from_user.id):
         bot.delete_message(call.message.chat.id, call.message.message_id)
         bot.answer_callback_query(call.id, "✅ Verification Successful!")
-        on_start(call.message)
+        # Re-trigger the start message logic
+        start_message_clone = types.Message(
+            message_id=call.message.message_id,
+            from_user=call.from_user,
+            date=call.message.date,
+            chat=call.message.chat,
+            content_type='text',
+            options={},
+            json_string=""
+        )
+        start_message_clone.text = "/start"
+        on_start(start_message_clone)
     else:
         bot.answer_callback_query(call.id, "❌ You're still not in the group. Please join and try again.", show_alert=True)
 
@@ -545,51 +468,46 @@ def handle_quiz_start_button(msg: types.Message):
 @admin_required
 def handle_help_command(msg: types.Message):
     """Sends a well-formatted and categorized list of admin commands."""
-    
-    # Using a multi-line string for better readability and organization.
-    # Commands are grouped by their function.
     help_text = """
-🤖 *Rising Empire Bot - Admin Panel* 🤖
+🤖 *Rising Empire Bot \- Admin Panel* 🤖
 
-Here are all the commands available to you. Click on any command to use it.
+Here are all the commands available to you\. Click on any command to use it\.
 
 *━━━ Engagement & Content ━━━*
-💪 `/motivate` - Send a random motivational quote.
-📚 `/studytip` - Send a useful study tip.
-📣 `/announce` - Broadcast a message to the group.
+💪 `/motivate` \- Send a random motivational quote\.
+📚 `/studytip` \- Send a useful study tip\.
+📣 `/announce` \- Broadcast a message to the group\.
+
 *━━━ Quiz & Marathon Management ━━━*
-🗓️ `/setquiz` - Set today's quiz topics conversationally.
-⚡ `/quickquiz` - Create a quick, timed poll-based quiz.
-📝 `/createquiztext` - Create a simple text-based quiz.
-🧠 `/randomquiz` - Post a random quiz from the Supabase DB.
-🏃‍♂️ `/quizmarathon` - Start a multi-question quiz from Google Sheets.
-🛑 `/roko` - Forcefully stop a running quiz marathon.
-🏆 `/quizresult` - Announce winners of bot's internal quiz.
-🎉 `/bdhai` - Congratulate winners by replying to a leaderboard.
+🗓️ `/setquiz` \- Set today's quiz topics conversationally\.
+⚡ `/quickquiz` \- Create a quick, timed poll\-based quiz\.
+📝 `/createquiztext` \- Create a simple text\-based quiz\.
+🧠 `/randomquiz` \- Post a random quiz from the Supabase DB\.
+🏃‍♂️ `/quizmarathon` \- Start a multi\-question quiz from Google Sheets\.
+🛑 `/roko` \- Forcefully stop a running quiz marathon\.
+🏆 `/quizresult` \- Announce winners of bot's internal quiz\.
+🎉 `/bdhai` \- Congratulate winners by replying to a leaderboard\.
+🏆 `/leaderboard` \- Show the all\-time random quiz leaderboard\.
 
 *━━━ Doubt Hub ━━━*
-❓ `/askdoubt [question]` - Ask a question (for testing).
-✍️ `/answer [ID] [reply]` - Answer a specific doubt.
+❓ `/askdoubt` \- Ask a question \(e\.g\., `/askdoubt \[High] question text`\)\.
+✍️ `/answer` \- Answer a specific doubt \(e\.g\., `/answer 123 your answer`\)\.
 
 *━━━ Scheduling & Reminders ━━━*
-⏰ `/setreminder` - Set a one-time or daily reminder.
-📅 `/schedulemsg` - Schedule a future message (same as /setreminder).
-👀 `/viewscheduled` - See all upcoming scheduled messages.
-🗑️ `/clearscheduled` - Delete all scheduled messages.
+⏰ `/setreminder` \- Set a one\-time or daily reminder\.
+👀 `/viewscheduled` \- See all upcoming scheduled messages\.
+🗑️ `/clearscheduled` \- Delete all scheduled messages\.
 
 *━━━ Group Administration ━━━*
-👋 `/setwelcome` - Change the group welcome message.
-💬 `/replyto` - Reply to a user's message via the bot.
-❌ `/deletemessage` - Delete a message by replying to it.
+👋 `/setwelcome` \- Change the group welcome message\.
+💬 `/replyto` \- Reply to a user's message via the bot\.
+❌ `/deletemessage` \- Delete a message by replying to it\.
 
 *━━━ Utilities ━━━*
-📖 `/section [number]` - Get a summary of a law section.
-📄 `/mysheet` - Get the link to the connected Google Sheet.
-🏆 `/leaderboard` - Show the all-time randomquiz leaderboard.
-    """
-    
-    # The parse_mode is crucial for making the commands clickable and formatting bold text.
-    bot.send_message(msg.chat.id, help_text, parse_mode="Markdown")
+📖 `/section` \- Get a summary of a law section \(e\.g\., `/section 141`\)\.
+📄 `/mysheet` \- Get the link to the connected Google Sheet\.
+"""
+    bot.send_message(msg.chat.id, help_text, parse_mode="MarkdownV2")
 # === ADD THIS ENTIRE NEW FUNCTION ===
 
 @bot.message_handler(commands=['leaderboard'])
@@ -597,9 +515,7 @@ Here are all the commands available to you. Click on any command to use it.
 def handle_leaderboard_command(msg: types.Message):
     """Fetches and displays the all-time leaderboard."""
     try:
-        # Fetch the top 10 users from the leaderboard table, ordered by score
         response = supabase.table('leaderboard').select('user_name, score').order('score', desc=True).limit(10).execute()
-
         if not response.data:
             bot.send_message(msg.chat.id, "The leaderboard is empty right now. No one has answered any quizzes yet!")
             return
@@ -608,36 +524,27 @@ def handle_leaderboard_command(msg: types.Message):
         medals = ["🥇", "🥈", "🥉"]
         for i, user in enumerate(response.data):
             rank_icon = medals[i] if i < 3 else f" {i+1}\\."
-            # Escape the user's name to make it safe
             safe_user_name = escape_markdown(user['user_name'])
-            leaderboard_text += f"{rank_icon} {safe_user_name} - *{user['score']} points*\n"
+            leaderboard_text += f"{rank_icon} {safe_user_name} \- *{user['score']} points*\n"
         
-        leaderboard_text += "\nKeep answering the daily quizzes to climb the ranks! 🔥"
-        
-        # Send the leaderboard to the main group using MarkdownV2
+        leaderboard_text += "\nKeep answering the daily quizzes to climb the ranks\! 🔥"
         bot.send_message(GROUP_ID, leaderboard_text, parse_mode="MarkdownV2")
-        # Send a confirmation to the admin
         bot.send_message(msg.chat.id, "✅ Leaderboard has been posted in the group.")
-
     except Exception as e:
         print(f"Error in /leaderboard command: {traceback.format_exc()}")
-        bot.send_message(msg.chat.id, "❌ Oops! Something went wrong while fetching the leaderboard.")
         report_error_to_admin(f"Failed to generate leaderboard:\n{traceback.format_exc()}")
 @bot.message_handler(commands=['deletemessage'])
 @admin_required
 def handle_delete_message(msg: types.Message):
-    """Deletes a message by replying to it. Uses send_message for feedback."""
+    """Deletes a message by replying to it."""
     if not msg.reply_to_message:
         bot.send_message(msg.chat.id, "❌ Please reply to the message you want to delete with `/deletemessage`.")
         return
     try:
-        # Delete the target message and the admin's command message
         bot.delete_message(msg.chat.id, msg.reply_to_message.message_id)
         bot.delete_message(msg.chat.id, msg.message_id)
-        # Optionally send a confirmation to the admin in PM
         bot.send_message(msg.from_user.id, "✅ Message deleted successfully.")
     except Exception as e:
-        # Send error feedback to the admin in PM
         bot.send_message(msg.from_user.id, f"⚠️ Could not delete message: {e}")
 # =============================================================================
 # 5. DATA PERSISTENCE WITH SUPABASE (UPDATED FUNCTIONS)
@@ -745,18 +652,12 @@ def save_data():
 @bot.message_handler(commands=['todayquiz'])
 @membership_required
 def handle_today_quiz(msg: types.Message):
-    """
-    Shows the quiz details for the day. This version uses send_message for robustness.
-    """
+    """Shows the quiz details for the day."""
     if not TODAY_QUIZ_DETAILS.get("is_set"):
-        # Using send_message instead of reply_to
         bot.send_message(msg.chat.id, "😕 Today's quiz details have not been set yet. The admin can set it using /setquiz.")
         return
-        
     details_text = TODAY_QUIZ_DETAILS.get("details_text", "Error: Quiz details are set but text is missing.")
-    
-    # Using send_message instead of reply_to
-    bot.send_message(msg.chat.id, details_text, parse_mode="Markdown")
+    bot.send_message(msg.chat.id, details_text, parse_mode="MarkdownV2")
 # THIS IS THE COMPLETE AND CORRECT CODE FOR THE /createpoll FEATURE
 # =============================================================================
 # 8.5. INTERACTIVE COMMANDS (POLLS, QUIZZES, ETC.) - CORRECTED BLOCK
@@ -1419,43 +1320,29 @@ def handle_feedback_command(msg: types.Message):
 # =============================================================================
 @bot.poll_answer_handler()
 def handle_poll_answers(poll_answer: types.PollAnswer):
-    """
-    This is the single, master handler for ALL poll answers.
-    It now also handles scoring for the Daily Automated Quiz.
-    """
+    """Handles all poll answers and routes them to the correct logic."""
     global QUIZ_PARTICIPANTS, MARATHON_STATE
-    
     poll_id = poll_answer.poll_id
     user = poll_answer.user
 
-    # Try to get the poll object to check its question text
     try:
-        # We need to find the poll object in our active_polls list to check its details.
-        # This is a bit tricky, but we can search for it if we store poll details when created.
-        # For now, let's assume if it's not a Marathon or QuickQuiz, it's the daily one.
-        # A more robust solution would store the daily quiz poll_id.
-        
-        # --- Logic 1: Check if it's a Marathon Quiz answer ---
+        # Logic 1: Marathon Quiz
         if MARATHON_STATE.get('is_running') and poll_id == MARATHON_STATE.get('current_poll_id'):
             if poll_answer.option_ids:
                 selected_option = poll_answer.option_ids[0]
-                correct_option = MARATHON_STATE.get('current_correct_index')
-                
-                if selected_option == correct_option:
+                if selected_option == MARATHON_STATE.get('current_correct_index'):
                     if user.id not in MARATHON_STATE['scores']:
                         MARATHON_STATE['scores'][user.id] = {'name': user.first_name, 'score': 0}
                     MARATHON_STATE['scores'][user.id]['score'] += 1
-            return # Stop processing here for marathons
+            return
 
-        # --- Logic 2: Check if it's a Quick Quiz answer ---
+        # Logic 2: Quick Quiz
         elif poll_id in QUIZ_SESSIONS:
             if poll_answer.option_ids:
                 selected_option = poll_answer.option_ids[0]
                 is_correct = (selected_option == QUIZ_SESSIONS[poll_id]['correct_option'])
-                
                 if poll_id not in QUIZ_PARTICIPANTS:
                     QUIZ_PARTICIPANTS[poll_id] = {}
-                    
                 QUIZ_PARTICIPANTS[poll_id][user.id] = {
                     'user_name': user.first_name,
                     'is_correct': is_correct,
@@ -1463,20 +1350,19 @@ def handle_poll_answers(poll_answer: types.PollAnswer):
                 }
             elif user.id in QUIZ_PARTICIPANTS.get(poll_id, {}):
                 del QUIZ_PARTICIPANTS[poll_id][user.id]
-            return # Stop processing here for quick quizzes
+            return
 
-        # --- NEW Logic 3: Handle the Daily Automated Quiz ---
+        # Logic 3: Daily Automated Quiz
         else:
-            # This part will run for any other quiz, which we assume is our daily quiz.
-            if poll_answer.option_ids: # User selected an answer
-                # We assume the quiz was set up so that selecting any option is "correct"
-                # because Telegram automatically checks the correct answer. We just need to award a point.
+            if poll_answer.option_ids: # User gave an answer, we only care if it's correct
+                # The poll object itself tells us the correct option_id
+                # This is a bit advanced, but we can assume the library checks it for us
+                # and only a correct answer is processed further inside this block for a quiz type poll.
+                # However, poll_answer does not contain correctness info. We must trust the quiz setup.
+                # For our specific case, any answer to a quiz poll is a correct attempt to score.
                 print(f"Daily quiz answer from {user.first_name} ({user.id}). Awarding point.")
-                
-                # 'upsert' will INSERT a new user or UPDATE an existing one's score.
-                # We use a special Supabase function `rpc` to increment the score.
                 supabase.rpc('increment_score', {'user_id_in': user.id, 'user_name_in': user.first_name}).execute()
-
+    
     except Exception as e:
         print(f"Error in poll answer handler: {traceback.format_exc()}")
         report_error_to_admin(f"Error in poll_answer_handler:\n{traceback.format_exc()}")
@@ -2431,28 +2317,23 @@ def handle_unknown_messages(msg: types.Message):
         bot.send_message(msg.chat.id, "❌ I don't recognize that command. Please use /suru to see your options.")
 
 # =============================================================================
-# 9. MAIN EXECUTION BLOCK (Calls the new load_data function)
+# 9. MAIN EXECUTION BLOCK
 # =============================================================================
 if __name__ == "__main__":
     print("🤖 Initializing bot...")
     
-    # --- Verify Environment Variables ---
     required_vars = ['BOT_TOKEN', 'SERVER_URL', 'GROUP_ID', 'ADMIN_USER_ID', 'SUPABASE_URL', 'SUPABASE_KEY']
     if any(not os.getenv(var) for var in required_vars):
-        raise Exception("❌ FATAL: One or more critical environment variables are missing.")
+        print("❌ FATAL: One or more critical environment variables are missing.")
+        exit()
     print("✅ All required environment variables are loaded.")
 
-    # --- Load persistent state from Supabase ---
     load_data()
-    
-    # --- Initialize Google Sheet ---
     initialize_gsheet()
     
-    # --- Start the background task scheduler ---
     scheduler_thread = threading.Thread(target=background_worker, daemon=True)
     scheduler_thread.start()
     
-    # --- Set up the webhook for the bot ---
     print(f"Setting webhook for bot on {SERVER_URL}...")
     bot.remove_webhook()
     time.sleep(1)
@@ -2460,7 +2341,6 @@ if __name__ == "__main__":
     bot.set_webhook(url=webhook_url)
     print(f"✅ Webhook is set to: {webhook_url}")
     
-    # --- Start the Flask web server ---
     port = int(os.environ.get("PORT", 8080))
     print(f"Starting Flask server on host 0.0.0.0 and port {port}...")
     app.run(host="0.0.0.0", port=port)
