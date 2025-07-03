@@ -297,8 +297,11 @@ def bot_is_target(message: types.Message):
 # =============================================================================
 # 5. DATA PERSISTENCE WITH SUPABASE *** THIS SECTION IS REPLACED ***
 # =============================================================================
+
 def load_data():
-    """Loads bot state from Supabase in a safe and robust way."""
+    """
+    Loads bot state from Supabase. This version correctly parses JSON data.
+    """
     if not supabase:
         print("WARNING: Supabase client not available. Skipping data load.")
         return
@@ -306,44 +309,39 @@ def load_data():
     global scheduled_messages, TODAY_QUIZ_DETAILS, CUSTOM_WELCOME_MESSAGE, QUIZ_SESSIONS, QUIZ_PARTICIPANTS
     print("Loading data from Supabase...")
     try:
-        # Fetch all rows from the bot_state table
         response = supabase.table('bot_state').select("*").execute()
         
-        # DEFENSIVE CHECK: The new library nests the data one level deeper.
-        # We also check if the response even has data.
         if hasattr(response, 'data') and response.data:
             db_data = response.data
-            
-            # Convert list of rows into a key-value dictionary for easy access
             state = {item['key']: item['value'] for item in db_data}
             
+            # --- CORRECTED JSON PARSING ---
             # Load scheduled messages and deserialize datetimes
-            loaded_messages = state.get('scheduled_messages', [])
+            loaded_messages_str = state.get('scheduled_messages', '[]')
+            loaded_messages = json.loads(loaded_messages_str)
             deserialized_messages = []
             for msg in loaded_messages:
                 try:
-                    # Ensure the 'send_time' key exists before trying to access it
                     if 'send_time' in msg:
                         msg['send_time'] = datetime.datetime.strptime(msg['send_time'], '%Y-%m-%d %H:%M:%S')
                         deserialized_messages.append(msg)
                 except (ValueError, TypeError): 
-                    continue # Skip malformed entries
+                    continue
             scheduled_messages = deserialized_messages
             
-            # Load other data, using .get() with a default value to prevent errors
-            TODAY_QUIZ_DETAILS = state.get('today_quiz_details', TODAY_QUIZ_DETAILS)
-            CUSTOM_WELCOME_MESSAGE = state.get('custom_welcome_message', CUSTOM_WELCOME_MESSAGE)
-            QUIZ_SESSIONS = state.get('quiz_sessions', QUIZ_SESSIONS)
-            QUIZ_PARTICIPANTS = state.get('quiz_participants', QUIZ_PARTICIPANTS)
+            # Load other data, using .get() with a default value and parsing JSON
+            # Use a fallback of '{}' for json.loads to prevent errors on empty/null data
+            TODAY_QUIZ_DETAILS = json.loads(state.get('today_quiz_details', '{}')) or TODAY_QUIZ_DETAILS
+            CUSTOM_WELCOME_MESSAGE = state.get('custom_welcome_message', CUSTOM_WELCOME_MESSAGE) # This is a string, no parsing needed
+            QUIZ_SESSIONS = json.loads(state.get('quiz_sessions', '{}')) or QUIZ_SESSIONS
+            QUIZ_PARTICIPANTS = json.loads(state.get('quiz_participants', '{}')) or QUIZ_PARTICIPANTS
             
-            print("✅ Data successfully loaded from Supabase.")
+            print("✅ Data successfully loaded and parsed from Supabase.")
         else:
-            # This will be logged the very first time the bot runs with an empty DB
             print("ℹ️ No data found in Supabase table 'bot_state'. Starting with fresh data.")
 
     except Exception as e:
         print(f"❌ Error loading data from Supabase: {e}")
-        # Print the full traceback for better debugging
         traceback.print_exc()
 
 def save_data():
@@ -1820,23 +1818,31 @@ def handle_study_tip_command(msg: types.Message):
 # =============================================================================
 # 8.12. LAW LIBRARY FEATURE (/section) - FINAL & ROBUST VERSION
 # =============================================================================
+# === REPLACE WITH THIS CODE BLOCK ===
+
 def format_section_message(section_data, user_name):
     """
-    Formats the section details into a clean, readable message.
-    This version has corrected Markdown formatting.
+    Formats the section details into a clean, readable message using safer HTML parsing.
     """
-    # Personalize the example with the user's name by replacing a placeholder.
-    example = section_data.get('example_hinglish', 'Example not available.').replace("{user_name}", user_name)
+    # Import the escape function to prevent HTML injection from database content
+    from html import escape
+
+    # Personalize the example and escape all data coming from the DB
+    chapter_info = escape(section_data.get('chapter_info', 'N/A'))
+    section_number = escape(section_data.get('section_number', ''))
+    it_is_about = escape(section_data.get('it_is_about', 'N/A'))
+    summary = escape(section_data.get('summary_hinglish', 'Summary not available.'))
+    example = escape(section_data.get('example_hinglish', 'Example not available.')).replace("{user_name}", user_name)
     
-    # Build the final message string with corrected disclaimer formatting
+    # Build the final message string using HTML tags
     message_text = (
-        f"📖 **{section_data.get('chapter_info', 'N/A')}**\n\n"
-        f"**Section {section_data.get('section_number', '')}: {section_data.get('it_is_about', 'N/A')}**\n\n"
-        f"*It states that:*\n"
-        f"{section_data.get('summary_hinglish', 'Summary not available.')}\n\n"
-        f"*Example:*\n"
-        f"{example}\n\n"
-        f"_{Disclaimer: Please cross-check with the latest amendments.}_" 
+        f"📖 <b>{chapter_info}</b>\n\n"
+        f"<b>Section {section_number}: {it_is_about}</b>\n\n"
+        f"<i>It states that:</i>\n"
+        f"<pre>{summary}</pre>\n\n"
+        f"<i>Example:</i>\n"
+        f"<pre>{example}</pre>\n\n"
+        f"<i>Disclaimer: Please cross-check with the latest amendments.</i>" 
     )
         
     return message_text
@@ -1864,7 +1870,7 @@ def handle_section_command(msg: types.Message):
             user_name = msg.from_user.first_name
             formatted_message = format_section_message(section_data, user_name)
             
-            bot.send_message(msg.chat.id, formatted_message, parse_mode="Markdown")
+            bot.send_message(msg.chat.id, formatted_message, parse_mode="HTML")
             
             # Delete the user's original command to keep the chat clean
             try:
