@@ -529,7 +529,6 @@ Here are all the commands available to you. Click on any command to use it.
 💪 `/motivate` - Send a random motivational quote.
 📚 `/studytip` - Send a useful study tip.
 📣 `/announce` - Broadcast a message to the group.
-
 *━━━ Quiz & Marathon Management ━━━*
 🗓️ `/setquiz` - Set today's quiz topics conversationally.
 ⚡ `/quickquiz` - Create a quick, timed poll-based quiz.
@@ -556,6 +555,7 @@ Here are all the commands available to you. Click on any command to use it.
 ❌ `/deletemessage` - Delete a message by replying to it.
 
 *━━━ Utilities ━━━*
+📖 `/section [number]` - Get a summary of a law section.
 📄 `/mysheet` - Get the link to the connected Google Sheet.
     """
     
@@ -1808,6 +1808,69 @@ def handle_study_tip_command(msg: types.Message):
     tip = random.choice(tips)
     bot.send_message(GROUP_ID, tip, parse_mode="Markdown")
     bot.send_message(msg.chat.id, "✅ Study tip sent to the group!")
+# =============================================================================
+# 8.12. LAW LIBRARY FEATURE (/section)
+# =============================================================================
+
+def format_section_message(section_data, user_name):
+    """Formats the section details into a clean, readable message."""
+    
+    # Check if the section is in syllabus
+    if section_data.get('is_in_syllabus'):
+        summary = section_data.get('summary_hinglish', 'Summary not available.')
+        # Personalize the example with the user's name
+        example = section_data.get('example_hinglish', 'Example not available.').replace("Saurabh bhai", user_name)
+        
+        message_text = (
+            f"📖 **{section_data.get('chapter_info', 'N/A')}**\n\n"
+            f"**Section {section_data.get('section_number', '')}: {section_data.get('it_is_about', 'N/A')}**\n\n"
+            f"*It states that:*\n"
+            f"{summary}\n\n"
+            f"*Example:*\n"
+            f"{example}\n\n"
+            f"_{{Disclaimer: Please cross-check with the latest amendments.}}_"
+        )
+    else:
+        # Format for sections not in the syllabus
+        message_text = (
+            f"📖 **{section_data.get('chapter_info', 'N/A')}**\n\n"
+            f"**Section {section_data.get('section_number', '')}: {section_data.get('it_is_about', 'N/A')}**\n\n"
+            f"_{{This section is not explicitly part of the CA Intermediate syllabus. The details below are for general knowledge only.}}\n\n"
+            f"_{{Disclaimer: Please cross-check with the latest amendments.}}_"
+        )
+        
+    return message_text
+
+@bot.message_handler(commands=['section'])
+def handle_section_command(msg: types.Message):
+    """
+    Fetches details for a specific law section from the Supabase database.
+    """
+    try:
+        # Extract the section number from the command, e.g., "/section 141"
+        parts = msg.text.split(' ', 1)
+        if len(parts) < 2:
+            bot.reply_to(msg, "Please provide a section number after the command.\n*Example:* `/section 141`", parse_mode="Markdown")
+            return
+            
+        section_number_to_find = parts[1].strip()
+
+        # Query the database to find the section
+        response = supabase.table('law_sections').select('*').eq('section_number', section_number_to_find).limit(1).execute()
+
+        if response.data:
+            # If section is found, format and send the message
+            section_data = response.data[0]
+            user_name = msg.from_user.first_name # Get the user's name for the example
+            formatted_message = format_section_message(section_data, user_name)
+            bot.reply_to(msg, formatted_message, parse_mode="Markdown")
+        else:
+            # If section is not found in the database
+            bot.reply_to(msg, f"Sorry, I couldn't find any details for Section '{section_number_to_find}'. Please check the section number.")
+
+    except Exception as e:
+        print(f"Error in /section command: {traceback.format_exc()}")
+        bot.reply_to(msg, "❌ Oops! Something went wrong while fetching the details.")
 
 # =============================================================================
 # 8.10. SUPER DOUBT HUB FEATURE (Interactive, AI-like, with Best Answer System)
