@@ -206,8 +206,8 @@ def send_join_group_prompt(chat_id):
     )
     bot.send_message(
         chat_id,
-        # The '!' characters are now escaped with '\'
-        "❌ *Access Denied\* \n\nYou must be a member of our group to use this bot\.\n\nPlease join and then click 'Re\-Verify' or type /suru\.",
+        # CLEANED UP: The '!' and its '\' are both removed.
+        "❌ *Access Denied* \n\nYou must be a member of our group to use this bot\.\n\nPlease join and then click 'Re\-Verify' or type /suru\.",
         reply_markup=markup,
         parse_mode="MarkdownV2"
     )
