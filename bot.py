@@ -521,7 +521,7 @@ def handle_help_command(msg: types.Message):
     # Using a multi-line string for better readability and organization.
     # Commands are grouped by their function.
     help_text = """
- *Rising Empire Bot - Admin Panel* 🤖
+🤖 *Rising Empire Bot - Admin Panel* 🤖
 
 Here are all the commands available to you. Click on any command to use it.
 
@@ -537,7 +537,8 @@ Here are all the commands available to you. Click on any command to use it.
 🧠 `/randomquiz` - Post a random quiz from the Supabase DB.
 🏃‍♂️ `/quizmarathon` - Start a multi-question quiz from Google Sheets.
 🛑 `/roko` - Forcefully stop a running quiz marathon.
-🏆 `/announcewinners` - Announce winners of the last quiz.
+🏆 `/quizresult` - Announce winners of bot's internal quiz.
+🎉 `/bdhai` - Congratulate winners by replying to a leaderboard.
 
 *━━━ Doubt Hub ━━━*
 ❓ `/askdoubt [question]` - Ask a question (for testing).
@@ -572,21 +573,106 @@ def handle_delete_message(msg: types.Message):
         bot.delete_message(msg.chat.id, msg.message_id)
     except Exception as e:
         bot.reply_to(msg, f"⚠️ Could not delete message: {e}")
+# =============================================================================
+# 5. DATA PERSISTENCE WITH SUPABASE (UPDATED FUNCTIONS)
+# =============================================================================
+
+def load_data():
+    """
+    Loads bot state from Supabase. This version correctly parses JSON data.
+    """
+    if not supabase:
+        print("WARNING: Supabase client not available. Skipping data load.")
+        return
+        
+    global scheduled_messages, TODAY_QUIZ_DETAILS, CUSTOM_WELCOME_MESSAGE, QUIZ_SESSIONS, QUIZ_PARTICIPANTS
+    print("Loading data from Supabase...")
+    try:
+        response = supabase.table('bot_state').select("*").execute()
+        
+        if hasattr(response, 'data') and response.data:
+            db_data = response.data
+            state = {item['key']: item['value'] for item in db_data}
+            
+            # --- CORRECTED JSON PARSING ---
+            # Load scheduled messages and deserialize datetimes
+            loaded_messages_str = state.get('scheduled_messages', '[]')
+            loaded_messages = json.loads(loaded_messages_str)
+            deserialized_messages = []
+            for msg in loaded_messages:
+                try:
+                    if 'send_time' in msg:
+                        msg['send_time'] = datetime.datetime.strptime(msg['send_time'], '%Y-%m-%d %H:%M:%S')
+                        deserialized_messages.append(msg)
+                except (ValueError, TypeError): 
+                    continue
+            scheduled_messages = deserialized_messages
+            
+            # Load other data, using .get() with a default value and parsing JSON
+            TODAY_QUIZ_DETAILS = json.loads(state.get('today_quiz_details', '{}')) or TODAY_QUIZ_DETAILS
+            CUSTOM_WELCOME_MESSAGE = state.get('custom_welcome_message', CUSTOM_WELCOME_MESSAGE) # This is a string, no parsing needed
+            QUIZ_SESSIONS = json.loads(state.get('quiz_sessions', '{}')) or QUIZ_SESSIONS
+            QUIZ_PARTICIPANTS = json.loads(state.get('quiz_participants', '{}')) or QUIZ_PARTICIPANTS
+            
+            print("✅ Data successfully loaded and parsed from Supabase.")
+        else:
+            print("ℹ️ No data found in Supabase table 'bot_state'. Starting with fresh data.")
+
+    except Exception as e:
+        print(f"❌ Error loading data from Supabase: {e}")
+        traceback.print_exc()
+
+# You don't need to change save_data(), but it's here for context.
+def save_data():
+    """Saves bot state to Supabase."""
+    if not supabase:
+        print("WARNING: Supabase client not available. Skipping data save.")
+        return
+
+    try:
+        # Serialize datetimes for scheduled messages before saving
+        serializable_messages = []
+        for msg in scheduled_messages:
+            msg_copy = msg.copy()
+            msg_copy['send_time'] = msg_copy['send_time'].strftime('%Y-%m-%d %H:%M:%S')
+            serializable_messages.append(msg_copy)
+
+        data_to_upsert = [
+            {'key': 'scheduled_messages', 'value': json.dumps(serializable_messages)},
+            {'key': 'today_quiz_details', 'value': json.dumps(TODAY_QUIZ_DETAILS)},
+            {'key': 'custom_welcome_message', 'value': CUSTOM_WELCOME_MESSAGE},
+            {'key': 'quiz_sessions', 'value': json.dumps(QUIZ_SESSIONS)},
+            {'key': 'quiz_participants', 'value': json.dumps(QUIZ_PARTICIPANTS)},
+        ]
+        
+        supabase.table('bot_state').upsert(data_to_upsert).execute()
+    except Exception as e:
+        print(f"❌ Error saving data to Supabase: {e}")
+        traceback.print_exc()
+
+# =============================================================================
+# 8. TELEGRAM BOT HANDLERS (UPDATED /todayquiz)
+# =============================================================================
 
 @bot.message_handler(commands=['todayquiz'])
 @membership_required
 def handle_today_quiz(msg: types.Message):
-    if not TODAY_QUIZ_DETAILS["is_set"]:
-        bot.reply_to(msg, "😕 Today's quiz details not set yet.")
+    """
+    Shows the quiz details for the day. This version is compatible with the 
+    new conversational /setquiz command.
+    """
+    # Check if the details are set and not empty
+    if not TODAY_QUIZ_DETAILS.get("is_set"):
+        bot.reply_to(msg, "😕 Today's quiz details have not been set yet. The admin can set it using /setquiz.")
         return
-    details_text = (
-        f"📚 *Today's Quiz Details*\n\n"
-        f"⏰ **Time:** {TODAY_QUIZ_DETAILS['time']}\n"
-        f"📖 **Chapter:** {TODAY_QUIZ_DETAILS['chapter']}\n"
-        f"📊 **Level:** {TODAY_QUIZ_DETAILS['level']}\n\n"
-        f"Good luck! 👍"
-    )
+        
+    # The new format stores the full announcement text directly.
+    details_text = TODAY_QUIZ_DETAILS.get("details_text", "Error: Quiz details are set but text is missing.")
+    
+    # Send the pre-formatted message
     bot.reply_to(msg, details_text, parse_mode="Markdown")
+
+
 # THIS IS THE COMPLETE AND CORRECT CODE FOR THE /createpoll FEATURE
 # =============================================================================
 # 8.5. INTERACTIVE COMMANDS (POLLS, QUIZZES, ETC.) - CORRECTED BLOCK
@@ -825,24 +911,38 @@ def process_schedule_or_reminder(msg: types.Message):
 @bot.message_handler(commands=['replyto'])
 @admin_required
 def handle_respond_command(msg: types.Message):
-    """Allows the admin to reply to a user's message directly in the group."""
+    """
+    Allows the admin to reply to a user's message. The bot posts the reply,
+    sends a private confirmation to the admin, and deletes the admin's command.
+    """
     if not msg.reply_to_message:
-        bot.send_message(msg.chat.id, "❌ Please reply to a message with `/replyto Your response...` to use this command.")
+        bot.reply_to(msg, "❌ Please use this command by replying to the message you want to answer.")
         return
+        
     response_text = msg.text.replace('/replyto', '').strip()
     if not response_text:
-        bot.send_message(msg.chat.id, "❌ Please provide some text for your response after the command.")
+        bot.reply_to(msg, "❌ Please provide your response after the `/replyto` command.")
         return
+        
     try:
+        # Step 1: Post the formatted response in the group, replying to the original user's message.
         bot.send_message(
-            GROUP_ID,
+            GROUP_ID, # Always sends to the main group
             f"📢 *Admin Response:*\n\n{response_text}",
             reply_to_message_id=msg.reply_to_message.message_id,
             parse_mode="Markdown"
         )
-        bot.send_message(msg.chat.id, "✅ Your response has been sent to the group!")
+        
+        # Step 2: Send a private confirmation message to you (the admin).
+        bot.send_message(msg.from_user.id, "✅ Your response has been posted in the group!")
+
+        # Step 3: Delete your original command message (e.g., "/replyto ...") from the group.
+        bot.delete_message(msg.chat.id, msg.message_id)
+        
     except Exception as e:
-        bot.send_message(msg.chat.id, f"❌ Failed to send response: {e}")
+        print(f"Error in /replyto command: {traceback.format_exc()}")
+        # Send an error message to you (the admin) in private.
+        bot.send_message(msg.from_user.id, f"❌ Failed to send response: {e}")
 
 @bot.message_handler(commands=['viewscheduled'])
 @admin_required
@@ -1232,37 +1332,183 @@ def handle_poll_answers(poll_answer: types.PollAnswer):
         elif user.id in QUIZ_PARTICIPANTS.get(poll_id, {}):
             del QUIZ_PARTICIPANTS[poll_id][user.id]
 
-@bot.message_handler(commands=['announcewinners'])
-@admin_required
-def handle_announce_winners(msg: types.Message):
-    if not QUIZ_SESSIONS:
-        bot.reply_to(msg, "😕 No quizzes conducted in this session.")
-        return
-    try:
-        last_quiz_id = list(QUIZ_SESSIONS.keys())[-1]
-        quiz_start_time = QUIZ_SESSIONS[last_quiz_id]['start_time']
-        participants = QUIZ_PARTICIPANTS.get(last_quiz_id)
-        
-        if not participants:
-            bot.send_message(GROUP_ID, "🏁 The last quiz had no participants.")
+    @bot.message_handler(commands=['quizresult']) # <-- COMMAND NAME CHANGED
+    @admin_required
+    def handle_quiz_result_command(msg: types.Message): # <-- FUNCTION NAME CHANGED
+        """
+        Analyzes the bot's internal quiz session data and announces the winners.
+        This is for quizzes created via /quickquiz or other internal commands.
+        """
+        if not QUIZ_SESSIONS:
+            bot.reply_to(msg, "😕 No quizzes have been conducted in this session yet.")
             return
-        
-        correct_participants = {uid: data for uid, data in participants.items() if data['is_correct']}
-        if not correct_participants:
-            bot.send_message(GROUP_ID, "🤔 No one answered the last quiz correctly.")
+        try:
+            # Get the data from the very last quiz conducted by the bot
+            last_quiz_id = list(QUIZ_SESSIONS.keys())[-1]
+            quiz_start_time_iso = QUIZ_SESSIONS[last_quiz_id].get('start_time')
+            quiz_start_time = datetime.datetime.fromisoformat(quiz_start_time_iso)
+            
+            participants = QUIZ_PARTICIPANTS.get(last_quiz_id)
+            
+            if not participants:
+                bot.send_message(GROUP_ID, "🏁 The last quiz had no participants.")
+                return
+            
+            # Filter for correct participants and calculate their time taken
+            correct_participants = []
+            for uid, data in participants.items():
+                if data.get('is_correct'):
+                    time_taken = (data['answered_at'] - quiz_start_time).total_seconds()
+                    correct_participants.append({
+                        'name': data['user_name'],
+                        'time': time_taken
+                    })
+
+            if not correct_participants:
+                bot.send_message(GROUP_ID, "🤔 No one answered the last quiz correctly.")
+                return
+
+            # Sort winners by the time they took to answer (fastest first)
+            sorted_winners = sorted(correct_participants, key=lambda x: x['time'])
+            
+            # Build the result message
+            result_text = "🎉 *Internal Quiz Results* 🎉\n\n🏆 Top performers for the last quiz:\n"
+            medals = ["🥇", "🥈", "🥉"]
+            for i, winner in enumerate(sorted_winners[:10]): # Top 10
+                rank = medals[i] if i < 3 else f" {i+1}."
+                result_text += f"\n{rank} {winner['name']} - *{winner['time']:.2f} seconds*"
+            
+            result_text += "\n\nGreat job to all participants! 🚀"
+            
+            bot.send_message(GROUP_ID, result_text, parse_mode="Markdown")
+            bot.reply_to(msg, "✅ Quiz results announced in the group!")
+
+        except Exception as e:
+            print(f"Error in /quizresult: {traceback.format_exc()}")
+            bot.reply_to(msg, f"❌ Error announcing winners: {e}")
+# =============================================================================
+# 8.11. CONGRATULATE WINNERS FEATURE (/bdhai) - SUPER BOT EDITION
+# =============================================================================
+
+def parse_time_to_seconds(time_str):
+    """Converts time string like '4 min 37 sec' or '56.1 sec' to total seconds."""
+    seconds = 0
+    if 'min' in time_str:
+        parts = time_str.split('min')
+        seconds += int(parts[0].strip()) * 60
+        if 'sec' in parts[1]:
+            seconds += float(parts[1].replace('sec', '').strip())
+    elif 'sec' in time_str:
+        seconds += float(time_str.replace('sec', '').strip())
+    return seconds
+
+def parse_leaderboard(text):
+    """
+    Parses the leaderboard to extract quiz title, total questions, and top winners with detailed info.
+    """
+    data = {'quiz_title': None, 'total_questions': None, 'winners': []}
+
+    # Extract Quiz Title
+    title_match = re.search(r"The quiz '(.*?)' has finished!", text)
+    if title_match:
+        data['quiz_title'] = title_match.group(1)
+
+    # Extract Total Questions
+    questions_match = re.search(r"(\d+) questions answered", text)
+    if questions_match:
+        data['total_questions'] = int(questions_match.group(1))
+
+    # This regex now captures rank, name, score, and time for all ranks, not just top 3
+    pattern = re.compile(r"(🥇|🥈|🥉|\s*\d+\.\s+)(.*?)\s+–\s+(\d+)\s+\((.*?)\)")
+    
+    lines = text.split('\n')
+    for line in lines:
+        match = pattern.search(line)
+        if match:
+            winner_data = {
+                'rank_icon': match.group(1).strip(),
+                'name': match.group(2).strip(),
+                'score': int(match.group(3).strip()),
+                'time_str': match.group(4).strip(),
+                'time_in_seconds': parse_time_to_seconds(match.group(4).strip())
+            }
+            data['winners'].append(winner_data)
+            
+    return data
+
+@bot.message_handler(commands=['bdhai'])
+@admin_required
+def handle_congratulate_command(msg: types.Message):
+    """
+    Analyzes a leaderboard, calculates percentages, finds fastest fingers,
+    and sends a dynamic, personalized congratulatory message.
+    """
+    if not msg.reply_to_message or not msg.reply_to_message.text:
+        bot.reply_to(msg, "❌ Please use this command by replying to the leaderboard message from the quiz bot.")
+        return
+
+    leaderboard_text = msg.reply_to_message.text
+    
+    try:
+        # Step 1: Parse the leaderboard to get all data
+        leaderboard_data = parse_leaderboard(leaderboard_text)
+        top_winners = leaderboard_data['winners'][:3] # We only focus on top 3 for the main message
+
+        if not top_winners:
+            bot.reply_to(msg, "🤔 I couldn't find any winners. Please make sure you are replying to the correct leaderboard message.")
             return
 
-        sorted_winners = sorted(correct_participants.values(), key=lambda x: x['answered_at'])
-        result_text = "🎉 *Quiz Results* 🎉\n\n🏆 Top performers:\n"
-        medals = ["🥇", "🥈", "🥉"]
-        for i, winner in enumerate(sorted_winners[:3]):
-            time_taken = (winner['answered_at'] - quiz_start_time).total_seconds()
-            result_text += f"\n{medals[i]} {i+1}. {winner['user_name']} - *{time_taken:.2f}s*"
-        result_text += "\n\nGreat job to all participants! 🚀"
-        bot.send_message(GROUP_ID, result_text, parse_mode="Markdown")
-        bot.reply_to(msg, "✅ Winners announced!")
+        # Step 2: Prepare a dynamic and personalized message
+        quiz_title = leaderboard_data.get('quiz_title', 'the recent quiz')
+        total_questions = leaderboard_data.get('total_questions', 0)
+
+        intro_messages = [
+            f"🎉 The results for *{quiz_title}* are in, and the performance was electrifying! Huge congratulations to our toppers!",
+            f"🚀 What a performance in *{quiz_title}*! Let's give a huge round of applause for our champions!",
+            f"🔥 The competition in *{quiz_title}* was intense! A massive shout-out to our top performers!",
+            f"✨ Excellence on display in *{quiz_title}*! Heartiest congratulations to the winners!",
+            f"🏆 The results are out for *{quiz_title}*! Absolutely brilliant efforts from everyone. Here are our stars!"
+        ]
+        congrats_message = random.choice(intro_messages) + "\n\n"
+
+        # Step 3: Analyze and build winner strings
+        for winner in top_winners:
+            percentage = (winner['score'] / total_questions * 100) if total_questions > 0 else 0
+            congrats_message += (
+                f"{winner['rank_icon']} **{winner['name']}**\n"
+                f" ► Score: *{winner['score']}/{total_questions}* ({percentage:.2f}%)\n"
+                f" ► Time: *{winner['time_str']}*\n\n"
+            )
+
+        # Step 4: Add special analysis and remarks
+        congrats_message += "*━━━ Performance Insights ━━━*\n"
+        
+        # Find the fastest among the top 3
+        fastest_winner = min(top_winners, key=lambda x: x['time_in_seconds'])
+        congrats_message += f"⚡️ **Speed King/Queen:** A special mention to *{fastest_winner['name']}* for being the fastest among the toppers!\n"
+
+        # Find the slowest among the top 3 (but only if their score is high)
+        if len(top_winners) > 1:
+            slowest_winner = max(top_winners, key=lambda x: x['time_in_seconds'])
+            # Check if the slowest winner is not the same as the fastest (for 2-person leaderboards)
+            # and if their score is decent (e.g., > 50%)
+            slowest_percentage = (slowest_winner['score'] / total_questions * 100) if total_questions > 0 else 0
+            if slowest_winner['name'] != fastest_winner['name'] and slowest_percentage > 50:
+                congrats_message += f"🎯 **Accuracy Champion:** Great job, *{slowest_winner['name']}*! Your accuracy is top-notch. A little focus on speed, and you'll be unstoppable!\n"
+
+        congrats_message += "\nKeep pushing your limits, everyone! The next leaderboard is waiting for you. 🔥"
+
+        # Step 5: Send the final message
+        bot.send_message(msg.chat.id, congrats_message, parse_mode="Markdown")
+        
+        try:
+            bot.delete_message(msg.chat.id, msg.message_id)
+        except Exception:
+            pass
+
     except Exception as e:
-        bot.reply_to(msg, f"❌ Error announcing winners: {e}")
+        print(f"Error in /bdhai command: {traceback.format_exc()}")
+        bot.reply_to(msg, f"❌ Oops! Something went wrong while generating the message. Error: {e}")
 
 @bot.message_handler(commands=['motivate'])
 @admin_required
@@ -1564,37 +1810,70 @@ def handle_study_tip_command(msg: types.Message):
     bot.send_message(msg.chat.id, "✅ Study tip sent to the group!")
 
 # =============================================================================
-# 8.10. SUPER DOUBT HUB FEATURE (Priority, Related Doubts, Best Answer)
+# 8.10. SUPER DOUBT HUB FEATURE (Interactive, AI-like, with Best Answer System)
 # =============================================================================
 
 def find_related_doubts(question_text):
-    """Finds related doubts from the database based on keywords."""
-    # This is a simple keyword search. For better results, more advanced NLP can be used.
+    """
+    Finds the single most relevant, high-quality doubt from the database.
+    """
     keywords = [word for word in question_text.split() if len(word) > 4]
     if not keywords:
         return None
-
-    # Building the search query for Supabase
     query_string = " | ".join(keywords)
     try:
-        # Use text_search for full-text search capabilities
-        response = supabase.table('doubts').select('id, question').text_search('question', query_string, config='english').limit(3).execute()
-        return response.data if response.data else None
+        # Find the single best match from doubts that have a 'best_answer_text'
+        response = supabase.table('doubts') \
+            .select('id, question, best_answer_text') \
+            .not_.is_('best_answer_text', None) \
+            .text_search('question', query_string, config='english') \
+            .limit(1) \
+            .execute()
+        return response.data[0] if response.data else None
     except Exception as e:
-        print(f"Note: Text search for related doubts failed. This might need configuration in Supabase. Error: {e}")
-        # If text search fails, just return None
+        print(f"Note: Text search for related doubts failed: {e}")
         return None
+
+def create_new_doubt(chat_id, user, question_text, priority):
+    """Helper function to create a new doubt entry and post it."""
+    try:
+        student_name = user.first_name
+        student_id = user.id
+        
+        insert_response = supabase.table('doubts').insert({
+            'group_id': chat_id, 'student_name': student_name, 'student_id': student_id,
+            'question': question_text, 'status': 'unanswered', 'priority': priority
+        }).execute()
+        
+        doubt_id = insert_response.data[0]['id']
+        
+        status_icon = "❗" if priority == 'high' else "🔥" if priority == 'urgent' else "❓"
+        formatted_message = (
+            f"<b>#Doubt{doubt_id}: Unanswered {status_icon}</b>\n\n"
+            f"<b>Student:</b> {student_name}\n"
+            f"<b>Question:</b>\n<pre>{question_text}</pre>\n\n"
+            f"<i>You can help by replying with:</i>\n<code>/answer {doubt_id} [your answer]</code>"
+        )
+        sent_doubt_msg = bot.send_message(chat_id, formatted_message, parse_mode="HTML")
+        
+        supabase.table('doubts').update({'message_id': sent_doubt_msg.message_id}).eq('id', doubt_id).execute()
+        
+        if priority in ['high', 'urgent']:
+            bot.pin_chat_message(chat_id, sent_doubt_msg.message_id, disable_notification=True)
+            
+    except Exception as e:
+        print(f"Error in create_new_doubt: {traceback.format_exc()}")
+        bot.send_message(chat_id, "❌ Oops! Something went wrong while creating your doubt. Please try again.")
 
 @bot.message_handler(commands=['askdoubt'])
 def handle_askdoubt(msg: types.Message):
-    """Handles the /askdoubt command, now with priority and related doubt finding."""
+    """Handles the /askdoubt command, now with an interactive confirmation flow."""
     if not is_group_message(msg):
         bot.reply_to(msg, "This command can only be used in the main group.")
         return
 
     command_text = msg.text.replace('/askdoubt', '').strip()
     
-    # Check for priority flags like [High] or [Urgent]
     priority = 'normal'
     if command_text.lower().startswith('[high]'):
         priority = 'high'
@@ -1606,56 +1885,83 @@ def handle_askdoubt(msg: types.Message):
         question_text = command_text
 
     if not question_text:
-        bot.reply_to(msg, "Please write your question after the command. \n*Example:* `/askdoubt [High] What is AS 22?`", parse_mode="Markdown")
+        bot.reply_to(msg, (
+            "Please write your question after the command.\n\n"
+            "💡 **Tip:** Put clear and concise questions. Ensure keywords are spelled correctly for best results.\n"
+            "*Example:* `/askdoubt [High] What is the difference between AS 19 and Ind AS 116?`"
+        ), parse_mode="Markdown")
         return
 
-    try:
-        student_name = msg.from_user.first_name
-        student_id = msg.from_user.id
-        
-        # --- Related Doubts Finder ---
-        related_doubts = find_related_doubts(question_text)
-        related_text = ""
-        if related_doubts:
-            related_text = "\n\n*P.S. Is your question related to any of these?*\n"
-            for doubt in related_doubts:
-                related_text += f"➡️ _Doubt #{doubt['id']}: {doubt['question'][:50]}..._\n"
-        
-        # 1. Insert doubt into Supabase to get the new ID
-        insert_response = supabase.table('doubts').insert({
-            'group_id': msg.chat.id, 'student_name': student_name, 'student_id': student_id,
-            'question': question_text, 'status': 'unanswered', 'priority': priority
-        }).execute()
-        
-        doubt_id = insert_response.data[0]['id']
-        
-        # 2. Format and post the main doubt message
-        status_icon = "❗" if priority == 'high' else "🔥" if priority == 'urgent' else "❓"
-        formatted_message = (
-            f"<b>#Doubt{doubt_id}: Unanswered {status_icon}</b>\n\n"
-            f"<b>Student:</b> {student_name}\n"
-            f"<b>Question:</b>\n<pre>{question_text}</pre>\n\n"
-            f"<i>You can help by replying with:</i>\n<code>/answer {doubt_id} [your answer]</code>"
+    # --- Related Doubts Finder 2.0 in action! ---
+    related_doubt = find_related_doubts(question_text)
+    
+    if related_doubt:
+        # If a similar doubt is found, ask the user for confirmation
+        markup = types.InlineKeyboardMarkup()
+        # Pass necessary info in callback_data
+        yes_callback = f"show_ans_{related_doubt['id']}"
+        no_callback = f"ask_new_{hash(question_text)}" # Use hash to keep it short
+        markup.add(
+            types.InlineKeyboardButton("Yes, Show Answer", callback_data=yes_callback),
+            types.InlineKeyboardButton("No, It's Different", callback_data=no_callback)
         )
-        sent_doubt_msg = bot.send_message(msg.chat.id, formatted_message, parse_mode="HTML")
         
-        # 3. If related doubts were found, send them as a reply to the main doubt message
-        if related_text:
-            bot.send_message(msg.chat.id, related_text, reply_to_message_id=sent_doubt_msg.message_id, parse_mode="Markdown")
+        # Store the user's question temporarily for the 'No' option
+        user_states[f"doubt_{hash(question_text)}"] = {'question': question_text, 'priority': priority}
 
-        # 4. Update the record with the message_id for future edits
-        supabase.table('doubts').update({'message_id': sent_doubt_msg.message_id}).eq('id', doubt_id).execute()
-        
-        # 5. Pin the message if priority is high or urgent
-        if priority in ['high', 'urgent']:
-            bot.pin_chat_message(msg.chat.id, sent_doubt_msg.message_id, disable_notification=True)
-
-        # 6. Delete the user's original command to keep the chat clean
+        bot.send_message(
+            msg.chat.id,
+            f"Hold on, {msg.from_user.first_name}! Is your question similar to this previously answered doubt?\n\n"
+            f"➡️ *#Doubt{related_doubt['id']}:* _{related_doubt['question'][:150]}..._\n\n"
+            "Please confirm:",
+            reply_markup=markup,
+            parse_mode="Markdown"
+        )
+        # We don't delete the user's message yet, we wait for their choice.
+    else:
+        # If no related doubt is found, create a new one directly
+        create_new_doubt(msg.chat.id, msg.from_user, question_text, priority)
         bot.delete_message(msg.chat.id, msg.message_id)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('show_ans_') or call.data.startswith('ask_new_'))
+def handle_doubt_confirmation(call: types.CallbackQuery):
+    """Handles the 'Yes' or 'No' button press from the related doubt prompt."""
+    user_id = call.from_user.id
+    
+    if call.data.startswith('show_ans_'):
+        doubt_id = int(call.data.split('_')[-1])
         
-    except Exception as e:
-        print(f"Error in /askdoubt: {traceback.format_exc()}")
-        bot.reply_to(msg, f"❌ Oops! Something went wrong. Please try again.")
+        # Fetch the best answer for the related doubt
+        response = supabase.table('doubts').select('best_answer_text').eq('id', doubt_id).limit(1).execute()
+        if response.data and response.data[0]['best_answer_text']:
+            best_answer = response.data[0]['best_answer_text']
+            bot.edit_message_text(
+                f"Great! Here is the best answer for a similar doubt (*#Doubt{doubt_id}*):\n\n"
+                f"```\n{best_answer}\n```",
+                call.message.chat.id,
+                call.message.message_id,
+                parse_mode="Markdown"
+            )
+        else:
+            bot.edit_message_text("Sorry, I couldn't find the answer for that doubt. Please ask as a new question.", call.message.chat.id, call.message.message_id)
+
+    elif call.data.startswith('ask_new_'):
+        question_hash = call.data.split('_')[-1]
+        
+        # Retrieve the user's original question from the state
+        original_doubt_data = user_states.get(f"doubt_{question_hash}")
+        if original_doubt_data:
+            bot.edit_message_text("Okay, posting it as a new doubt for you!", call.message.chat.id, call.message.message_id)
+            create_new_doubt(
+                call.message.chat.id,
+                call.from_user,
+                original_doubt_data['question'],
+                original_doubt_data['priority']
+            )
+            # Clean up the state
+            del user_states[f"doubt_{question_hash}"]
+        else:
+            bot.edit_message_text("Sorry, something went wrong. Please try asking your doubt again using /askdoubt.", call.message.chat.id, call.message.message_id)
 
 @bot.message_handler(commands=['answer'])
 def handle_answer(msg: types.Message):
@@ -1673,7 +1979,6 @@ def handle_answer(msg: types.Message):
         doubt_id = int(parts[1])
         answer_text = parts[2].strip()
         
-        # Fetch the original doubt's message_id
         fetch_response = supabase.table('doubts').select('message_id, all_answer_message_ids').eq('id', doubt_id).limit(1).execute()
         if not fetch_response.data:
             bot.reply_to(msg, f"❌ Doubt with ID #{doubt_id} not found.")
@@ -1683,14 +1988,11 @@ def handle_answer(msg: types.Message):
         original_message_id = doubt_data['message_id']
         all_answers = doubt_data.get('all_answer_message_ids', [])
         
-        # Post the answer as a reply to the original doubt message
         sent_answer_msg = bot.reply_to(original_message_id, f"↪️ *Answer by {msg.from_user.first_name}:*\n\n{answer_text}", parse_mode="Markdown")
         
-        # Add the new answer's message ID to the list in Supabase
         all_answers.append(sent_answer_msg.message_id)
         supabase.table('doubts').update({'all_answer_message_ids': all_answers}).eq('id', doubt_id).execute()
 
-        # Delete the user's /answer command message
         bot.delete_message(msg.chat.id, msg.message_id)
         
     except Exception as e:
@@ -1699,7 +2001,7 @@ def handle_answer(msg: types.Message):
 
 @bot.message_handler(commands=['bestanswer'])
 def handle_best_answer(msg: types.Message):
-    """Handles marking an answer as the best one. Can be used by original asker or admin."""
+    """Handles marking an answer as the best one, and cleans up other answers."""
     try:
         parts = msg.text.split(' ', 1)
         if len(parts) < 2:
@@ -1713,7 +2015,6 @@ def handle_best_answer(msg: types.Message):
         doubt_id = int(parts[1])
         best_answer_msg = msg.reply_to_message
         
-        # Fetch the doubt to verify permissions
         fetch_response = supabase.table('doubts').select('*').eq('id', doubt_id).limit(1).execute()
         if not fetch_response.data:
             bot.reply_to(msg, f"❌ Doubt with ID #{doubt_id} not found.")
@@ -1721,54 +2022,47 @@ def handle_best_answer(msg: types.Message):
             
         doubt_data = fetch_response.data[0]
         
-        # Check permissions: Only original asker or an admin can mark the best answer
         if not (msg.from_user.id == doubt_data['student_id'] or is_admin(msg.from_user.id)):
             bot.reply_to(msg, "❌ You can only mark the best answer for your own doubt.")
             return
             
-        # Update the main doubt message to show the best answer permanently
+        # Extract clean text from the answer
+        best_answer_text = best_answer_msg.text.split(':', 1)[-1].strip()
+
         updated_message_text = (
             f"<b>#Doubt{doubt_id}: Answered! ✅</b>\n\n"
             f"<b>Student:</b> {doubt_data['student_name']}\n"
             f"<b>Question:</b>\n<pre>{doubt_data['question']}</pre>\n\n"
-            f"<i>🏆 Best answer chosen by {msg.from_user.first_name}:</i>\n<pre>{best_answer_msg.text.split(':', 1)[-1].strip()}</pre>"
+            f"<i>🏆 Best answer chosen by {msg.from_user.first_name}:</i>\n<pre>{best_answer_text}</pre>"
         )
         bot.edit_message_text(updated_message_text, chat_id=msg.chat.id, message_id=doubt_data['message_id'], parse_mode="HTML")
         
-        # Unpin the message if it was pinned
         if doubt_data['priority'] in ['high', 'urgent']:
             try:
                 bot.unpin_chat_message(msg.chat.id, doubt_data['message_id'])
             except Exception as e:
                 print(f"Could not unpin message for doubt {doubt_id}: {e}")
 
-        # Update Supabase with best answer details
         supabase.table('doubts').update({
             'status': 'answered',
             'best_answer_by_id': best_answer_msg.from_user.id,
-            'best_answer_text': best_answer_msg.text
+            'best_answer_text': best_answer_text # Store the clean text
         }).eq('id', doubt_id).execute()
         
         # Cleanup: Delete all other temporary answer messages
         all_answer_ids = doubt_data.get('all_answer_message_ids', [])
         for answer_id in all_answer_ids:
-            if answer_id != best_answer_msg.message_id:
-                try:
-                    bot.delete_message(msg.chat.id, answer_id)
-                except Exception:
-                    pass # Ignore if message is already deleted or not found
+            try:
+                bot.delete_message(msg.chat.id, answer_id)
+            except Exception:
+                pass 
         
-        # Delete the /bestanswer command message
         bot.delete_message(msg.chat.id, msg.message_id)
-        # Delete the chosen best answer message as its content is now part of the main doubt
-        try:
-            bot.delete_message(msg.chat.id, best_answer_msg.message_id)
-        except Exception:
-            pass
 
     except Exception as e:
         print(f"Error in /bestanswer: {traceback.format_exc()}")
         bot.reply_to(msg, f"❌ Oops! Something went wrong.")
+
 # =============================================================================
 # 8.8. QUIZ MARATHON FEATURE (from Google Sheets) - WITH SCORING, EXPLANATIONS & STOP
 # =============================================================================
