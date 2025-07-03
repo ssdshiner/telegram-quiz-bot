@@ -2,6 +2,7 @@
 # 1. IMPORTS
 # =============================================================================
 import os
+import re
 import json
 import gspread
 import datetime
@@ -68,7 +69,7 @@ TODAY_QUIZ_DETAILS = {
     "is_set": False
 }
 CUSTOM_WELCOME_MESSAGE = "Hey {user_name}! 👋 Welcome to the group. Be ready for the quiz at 8 PM! 🚀"
-
+MARATHON_STATE = {}
 
 # =============================================================================
 # 3. GOOGLE SHEETS INTEGRATION
@@ -344,29 +345,38 @@ def load_data():
         traceback.print_exc()
 
 def save_data():
-    """Saves bot state to Supabase."""
+    """Saves bot state to Supabase, now including active_polls."""
     if not supabase:
         print("WARNING: Supabase client not available. Skipping data save.")
         return
 
     try:
-        # Serialize datetimes for scheduled messages before saving
+        # --- Serialize scheduled_messages (contains datetime objects) ---
         serializable_messages = []
         for msg in scheduled_messages:
             msg_copy = msg.copy()
             msg_copy['send_time'] = msg_copy['send_time'].strftime('%Y-%m-%d %H:%M:%S')
             serializable_messages.append(msg_copy)
 
-        # Prepare data in the format Supabase expects: a list of dictionaries
+        # --- NEW: Serialize active_polls (also contains datetime objects) ---
+        serializable_polls = []
+        for poll in active_polls:
+            poll_copy = poll.copy()
+            if 'close_time' in poll_copy and isinstance(poll_copy['close_time'], datetime.datetime):
+                poll_copy['close_time'] = poll_copy['close_time'].strftime('%Y-%m-%d %H:%M:%S')
+            serializable_polls.append(poll_copy)
+
+        # --- Prepare all data for upserting ---
         data_to_upsert = [
             {'key': 'scheduled_messages', 'value': json.dumps(serializable_messages)},
             {'key': 'today_quiz_details', 'value': json.dumps(TODAY_QUIZ_DETAILS)},
-            {'key': 'custom_welcome_message', 'value': CUSTOM_WELCOME_MESSAGE}, # Welcome msg is a string, no need for dumps
+            {'key': 'custom_welcome_message', 'value': CUSTOM_WELCOME_MESSAGE},
             {'key': 'quiz_sessions', 'value': json.dumps(QUIZ_SESSIONS)},
             {'key': 'quiz_participants', 'value': json.dumps(QUIZ_PARTICIPANTS)},
+            # Add the newly serialized polls to the list
+            {'key': 'active_polls', 'value': json.dumps(serializable_polls)},
         ]
         
-        # 'upsert' will INSERT new keys and UPDATE existing ones based on the primary key ('key')
         supabase.table('bot_state').upsert(data_to_upsert).execute()
     except Exception as e:
         print(f"❌ Error saving data to Supabase: {e}")
@@ -493,7 +503,7 @@ def health_check():
 # 8. TELEGRAM BOT HANDLERS
 # =============================================================================
 
-@bot.message_handler(commands=['suru'], func=bot_is_target)
+@bot.message_handler(commands=['suru', 'start'], func=bot_is_target)
 def on_start(msg: types.Message):
     # No need for the old check, the decorator handles it.
     if check_membership(msg.from_user.id):
@@ -592,13 +602,14 @@ def handle_delete_message(msg: types.Message):
 
 def load_data():
     """
-    Loads bot state from Supabase. This version correctly parses JSON data.
+    Loads bot state from Supabase. This version correctly parses JSON data for all persistent variables.
     """
     if not supabase:
         print("WARNING: Supabase client not available. Skipping data load.")
         return
         
-    global scheduled_messages, TODAY_QUIZ_DETAILS, CUSTOM_WELCOME_MESSAGE, QUIZ_SESSIONS, QUIZ_PARTICIPANTS
+    # Add active_polls to the list of global variables we are loading
+    global scheduled_messages, TODAY_QUIZ_DETAILS, CUSTOM_WELCOME_MESSAGE, QUIZ_SESSIONS, QUIZ_PARTICIPANTS, active_polls
     print("Loading data from Supabase...")
     try:
         response = supabase.table('bot_state').select("*").execute()
@@ -607,8 +618,7 @@ def load_data():
             db_data = response.data
             state = {item['key']: item['value'] for item in db_data}
             
-            # --- CORRECTED JSON PARSING ---
-            # Load scheduled messages and deserialize datetimes
+            # --- Load scheduled messages ---
             loaded_messages_str = state.get('scheduled_messages', '[]')
             loaded_messages = json.loads(loaded_messages_str)
             deserialized_messages = []
@@ -620,10 +630,23 @@ def load_data():
                 except (ValueError, TypeError): 
                     continue
             scheduled_messages = deserialized_messages
-            
-            # Load other data, using .get() with a default value and parsing JSON
+
+            # --- NEW: Load active polls ---
+            loaded_polls_str = state.get('active_polls', '[]')
+            loaded_polls = json.loads(loaded_polls_str)
+            deserialized_polls = []
+            for poll in loaded_polls:
+                try:
+                    if 'close_time' in poll:
+                       poll['close_time'] = datetime.datetime.strptime(poll['close_time'], '%Y-%m-%d %H:%M:%S')
+                       deserialized_polls.append(poll)
+                except (ValueError, TypeError):
+                    continue
+            active_polls = deserialized_polls
+
+            # --- Load all other data ---
             TODAY_QUIZ_DETAILS = json.loads(state.get('today_quiz_details', '{}')) or TODAY_QUIZ_DETAILS
-            CUSTOM_WELCOME_MESSAGE = state.get('custom_welcome_message', CUSTOM_WELCOME_MESSAGE) # This is a string, no parsing needed
+            CUSTOM_WELCOME_MESSAGE = state.get('custom_welcome_message', CUSTOM_WELCOME_MESSAGE)
             QUIZ_SESSIONS = json.loads(state.get('quiz_sessions', '{}')) or QUIZ_SESSIONS
             QUIZ_PARTICIPANTS = json.loads(state.get('quiz_participants', '{}')) or QUIZ_PARTICIPANTS
             
@@ -634,7 +657,6 @@ def load_data():
     except Exception as e:
         print(f"❌ Error loading data from Supabase: {e}")
         traceback.print_exc()
-
 # You don't need to change save_data(), but it's here for context.
 def save_data():
     """Saves bot state to Supabase."""
@@ -1845,6 +1867,7 @@ def format_section_message(section_data, user_name):
     return message_text
 
 @bot.message_handler(commands=['section'])
+@membership_required
 def handle_section_command(msg: types.Message):
     """
     Fetches details for a specific law section from the Supabase database.
@@ -1940,6 +1963,7 @@ def create_new_doubt(chat_id, user, question_text, priority):
         bot.send_message(chat_id, "❌ Oops! Something went wrong while creating your doubt. Please try again.")
 
 @bot.message_handler(commands=['askdoubt'])
+@membership_required
 def handle_askdoubt(msg: types.Message):
     """Handles the /askdoubt command, now with an interactive confirmation flow."""
     if not is_group_message(msg):
@@ -2038,6 +2062,7 @@ def handle_doubt_confirmation(call: types.CallbackQuery):
             bot.edit_message_text("Sorry, something went wrong. Please try asking your doubt again using /askdoubt.", call.message.chat.id, call.message.message_id)
 
 @bot.message_handler(commands=['answer'])
+@membership_required
 def handle_answer(msg: types.Message):
     """Handles the /answer command. Uses send_message for error feedback."""
     if not is_group_message(msg):
@@ -2076,12 +2101,13 @@ def handle_answer(msg: types.Message):
         print(f"Error in /answer: {traceback.format_exc()}")
         bot.send_message(msg.chat.id, f"❌ Oops! Something went wrong while answering.")
 @bot.message_handler(commands=['bestanswer'])
+@membership_required
 def handle_best_answer(msg: types.Message):
     """Handles marking an answer as the best one, and cleans up other answers."""
     try:
         parts = msg.text.split(' ', 1)
         if len(parts) < 2:
-            bot.reply_to(msg, "Invalid format. Use: `/bestanswer [Doubt_ID]` by *replying* to the best answer.")
+            bot.reply_to(msg, "Invalid format. Use: `/bestanswer [Doubt_ID]` by *replying* to the best answer.", parse_mode="Markdown")
             return
         
         if not msg.reply_to_message:
