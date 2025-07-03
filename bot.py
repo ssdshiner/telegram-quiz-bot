@@ -669,7 +669,6 @@ def process_poll_q_and_opts(msg: types.Message):
         
         question, options = parts[0].strip(), [opt.strip() for opt in parts[1:]]
         if not (2 <= len(options) <= 10):
-            # Using send_message for robustness
             bot.send_message(msg.chat.id, "❌ A poll must have between 2 and 10 options. Please try again.")
             return
 
@@ -678,12 +677,12 @@ def process_poll_q_and_opts(msg: types.Message):
         close_time = datetime.datetime.now() + datetime.timedelta(minutes=duration)
         active_polls.append({'chat_id': sent_poll.chat.id, 'message_id': sent_poll.message_id, 'close_time': close_time})
         
-        bot.send_message(msg.chat.id, "✅ Poll sent successfully to the group")
+        # CORRECTED: Removed "!"
+        bot.send_message(msg.chat.id, "✅ Poll sent successfully to the group.")
         
     except Exception as e:
         bot.send_message(msg.chat.id, f"❌ Error creating poll: {e}. Please start over with /createpoll.")
     finally:
-        # Clean up the state regardless of success or failure
         if user_id in user_states:
             del user_states[user_id]
 
@@ -1091,7 +1090,7 @@ def handle_feedback_command(msg: types.Message):
     """Handles user feedback. Uses send_message for responses."""
     feedback_text = msg.text.replace('/feedback', '').strip()
     if not feedback_text:
-        bot.send_message(msg.chat.id, "✍️ Please provide your feedback after the command.\nExample: `/feedback The quizzes are helpful`")
+        bot.send_message(msg.chat.id, "✍️ Please provide your feedback after the command.\nExample: `/feedback The quizzes are helpful.`")
         return
         
     user_info = msg.from_user
@@ -1099,7 +1098,6 @@ def handle_feedback_command(msg: types.Message):
     username = f"@{user_info.username}" if user_info.username else "No username"
 
     try:
-        # We escape the user-provided text to prevent formatting errors
         safe_feedback_text = escape_markdown(feedback_text)
         safe_full_name = escape_markdown(full_name)
         safe_username = escape_markdown(username)
@@ -1111,11 +1109,10 @@ def handle_feedback_command(msg: types.Message):
             f"*Message:*\n{safe_feedback_text}"
         )
         
-        # Send the feedback to the admin using the more stable MarkdownV2
         bot.send_message(ADMIN_USER_ID, feedback_msg, parse_mode="MarkdownV2")
         
-        # Send confirmation to the user in the group
-        bot.send_message(msg.chat.id, "✅ Thank you for your feedback It has been sent to the admin. 🙏")
+        # CORRECTED: Removed "!"
+        bot.send_message(msg.chat.id, "✅ Thank you for your feedback. It has been sent to the admin. 🙏")
         
     except Exception as e:
         bot.send_message(msg.chat.id, "❌ Sorry, something went wrong while sending your feedback.")
@@ -1333,35 +1330,35 @@ def handle_motivation_command(msg: types.Message):
         # ===============================================
         # --- Hinglish & Relatable Quotes for CA Students ---
         # ===============================================
-        "📖 Books se ishq karoge, toh ICAI bhi tumse pyaar karega. Result dekh lena",
-        "😴 Sapne wo nahi jo sone par aate hain, sapne wo hain jo tumhein sone nahi dete... especially during exam season",
-        "✍️ Har attempt ek naya 'Provision' hai, bas 'Amendment' ke saath taiyaar raho",
-        "Don't tell people your plans. Show them your results. Aur result ke din, show them your ICAI certificate",
-        "The goal is not to be better than anyone else, but to be better than you were yesterday. Kal se ek section toh zyada yaad kar hi sakte ho",
-        "Ye 'Study Material' ka bojh nahi, Rank-holder banne ka raasta hai. Uthao aur aage badho",
-        "Thoda aur padh le, baad mein 'Exemption' ka maza hi kuch aur hoga",
-        "CA banne ka safar ek marathon hai, 100-meter race nahi. Stamina banaye rakho",
-        "Jis din result aayega, ye saari raaton ki neend qurbaani safal ho jaayegi. Keep hustling",
-        "Confidence is key. Aur confidence aata hai Mock Test dene se. Darr ke aage jeet hai",
-        "Duniya 'turnover' dekhti hai, tum 'net profit' pe focus karo. Quality study matters",
+        "📖 Books se ishq karoge, toh ICAI bhi tumse pyaar karega. Result dekh lena.",
+        "😴 Sapne wo nahi jo sone par aate hain, sapne wo hain jo tumhein sone nahi dete... especially during exam season.",
+        "✍️ Har attempt ek naya 'Provision' hai, bas 'Amendment' ke saath taiyaar raho.",
+        "Don't tell people your plans. Show them your results. Aur result ke din, show them your ICAI certificate.",
+        "The goal is not to be better than anyone else, but to be better than you were yesterday. Kal se ek section toh zyada yaad kar hi sakte ho.",
+        "Ye 'Study Material' ka bojh nahi, Rank-holder banne ka raasta hai. Uthao aur aage badho.",
+        "Thoda aur padh le, baad mein 'Exemption' ka maza hi kuch aur hoga.",
+        "CA banne ka safar ek marathon hai, 100-meter race nahi. Stamina banaye rakho.",
+        "Jis din result aayega, ye saari raaton ki neend qurbaani safal ho jaayegi. Keep hustling.",
+        "Confidence is key. Aur confidence aata hai Mock Test dene se. Darr ke aage jeet hai.",
+        "Duniya 'turnover' dekhti hai, tum 'net profit' pe focus karo. Quality study matters.",
         "Social media ka 'scroll' nahi, Bare Act ka 'scroll' karo. Zyada 'valuable' hai.",
-        "Har 'Standard on Auditing' tumhari professional life ka standard set karega. Dhyan se padho",
+        "Har 'Standard on Auditing' tumhari professional life ka standard set karega. Dhyan se padho.",
         "Procrastination is the thief of time... and attempts. Aaj ka kaam kal par mat daalo.",
         "Result ke din 'party' karni hai ya 'pachtana' hai, choice aaj ki mehnat par depend karti hai.",
 
         # ===============================================
         # --- Subject-Specific Motivation ---
         # ===============================================
-        "⚖️ **Law:** Life is like a 'Bare Act'. Thoda complicated, but har 'section' ka ek matlab hai. Keep reading",
+        "⚖️ **Law:** Life is like a 'Bare Act'. Thoda complicated, but har 'section' ka ek matlab hai. Keep reading.",
         "📊 **Accounts:** Zindagi ko balance sheet ki tarah balance karna seekho. Assets (Knowledge) badhao, Liabilities (Doubts) ghatao.",
-        "🧾 **Taxation:** Don't let 'due dates' scare you. Plan your studies like you plan your taxes - efficiently and on time",
-        "🛡️ **Audit:** Har galti ek 'misstatement' hai. 'Verify' karo, 'rectify' karo, aur aage badho. That's the spirit of an auditor",
-        "💰 **Costing:** Har minute ki 'cost' hai. Invest your time wisely for the best 'return' on your rank",
+        "🧾 **Taxation:** Don't let 'due dates' scare you. Plan your studies like you plan your taxes - efficiently and on time.",
+        "🛡️ **Audit:** Har galti ek 'misstatement' hai. 'Verify' karo, 'rectify' karo, aur aage badho. That's the spirit of an auditor.",
+        "💰 **Costing:** Har minute ki 'cost' hai. Invest your time wisely for the best 'return' on your rank.",
         "📈 **Financial Management:** Apne 'Portfolio' of knowledge ko diversify karo, risk kam hoga aur rank ka 'return' badhega.",
-        "📉 **Economics:** Demand for CAs is always high. Supply your best efforts to clear the exam",
+        "📉 **Economics:** Demand for CAs is always high. Supply your best efforts to clear the exam.",
         "🤝 **Ethics:** Your integrity is your biggest asset. Study with honesty, practice with honesty.",
         "📝 **Advanced Accounting:** Har 'AS' aur 'Ind AS' ek puzzle hai. Solve karte jao, expert bante jao.",
-        "💼 **Corporate Law:** 'Memorandum' aur 'Articles' sirf companies ke nahi, apne study plan ke bhi banao. Clarity rahegi",
+        "💼 **Corporate Law:** 'Memorandum' aur 'Articles' sirf companies ke nahi, apne study plan ke bhi banao. Clarity rahegi.",
         "🔢 **GST:** Zindagi mein itne 'credits' kamao ki 'output tax liability' (failure) hamesha zero rahe.",
         "🌍 **International Tax:** Sirf desh mein nahi, videsh mein bhi naam karna hai. Har 'DTAA' ek naya door open karta hai.",
         "⚙️ **Strategic Management:** Sirf padhna nahi, 'strategize' karna bhi zaroori hai. Plan your chapters, win the exam.",
@@ -1375,7 +1372,7 @@ def handle_motivation_command(msg: types.Message):
             "🕉️ *Shloka from the Gita:*\n"
             "कर्मण्येवाधिकारस्ते मा फलेषु कदाचन |\n"
             "मा कर्मफलहेतुर्भूर्मा ते सङ्गोऽस्त्वकर्मणि ||\n\n"
-            "**Meaning:** Tumhara adhikaar sirf apne karm (padhai) par hai, uske phal (result) par nahi. Isliye, result ki chinta kiye bina apna best do"
+            "**Meaning:** Tumhara adhikaar sirf apne karm (padhai) par hai, uske phal (result) par nahi. Isliye, result ki chinta kiye bina apna best do."
         ),
         (
             "🕉️ *Shloka from the Gita:*\n"
@@ -1387,7 +1384,7 @@ def handle_motivation_command(msg: types.Message):
             "🕉️ *Shloka from the Gita:*\n"
             "उद्धरेदात्मनात्मानं नात्मानमवसादयेत् |\n"
             "आत्मैव ह्यात्मनो बन्धुरात्मैव रिपुरात्मनः ||\n\n"
-            "**Meaning:** Insaan ko apna uddhar khud karna chahiye. Tum khud ke sabse acche dost ho, aur khud ke hi sabse bade dushman. Choose to be your best friend"
+            "**Meaning:** Insaan ko apna uddhar khud karna chahiye. Tum khud ke sabse acche dost ho, aur khud ke hi sabse bade dushman. Choose to be your best friend."
         ),
         (
             "🕉️ *Shloka from the Gita:*\n"
@@ -1423,7 +1420,7 @@ def handle_motivation_command(msg: types.Message):
             "🕉️ *Shloka from the Gita:*\n"
             "हतो वा प्राप्स्यसि स्वर्गं जित्वा वा भोक्ष्यसे महीम् |\n"
             "तस्मादुत्तिष्ठ कौन्तेय युद्धाय कृतनिश्चयः ||\n\n"
-            "**Meaning:** Agar tum is yuddh (exam) mein haare, toh bhi seekh milegi. Agar jeete, toh poori duniya (success) tumhari hai. Isliye, utho aur ladho"
+            "**Meaning:** Agar tum is yuddh (exam) mein haare, toh bhi seekh milegi. Agar jeete, toh poori duniya (success) tumhari hai. Isliye, utho aur ladho."
         ),
         (
             "🕉️ *Shloka from the Gita:*\n"
@@ -1453,7 +1450,7 @@ def handle_motivation_command(msg: types.Message):
     
     # Send a random quote from the master list
     bot.send_message(GROUP_ID, random.choice(quotes), parse_mode="Markdown")
-    bot.send_message(msg.chat.id, "✅ Motivation sent to the group")
+    bot.send_message(msg.chat.id, "✅ Motivation sent to the group.")
 
 @bot.message_handler(commands=['studytip'])
 @admin_required
@@ -2039,13 +2036,15 @@ def run_quiz_marathon(admin_chat_id, duration_per_question):
         if not questions_list: raise Exception("The Google Sheet is empty.")
         
         total_questions = len(questions_list)
-        bot.send_message(GROUP_ID, f"🏁 **Quiz Marathon Begins** 🏁\n\nGet ready for {total_questions} questions. Each question is for {duration_per_question} seconds. Let's go", parse_mode="Markdown")
+        # CORRECTED: Removed "!" from the announcement
+        bot.send_message(GROUP_ID, f"🏁 **Quiz Marathon Begins** 🏁\n\nGet ready for {total_questions} questions. Each question is for {duration_per_question} seconds. Let's go.", parse_mode="Markdown")
         time.sleep(3)
 
         # 3. Loop through questions
         for i, quiz_data in enumerate(questions_list):
             if not MARATHON_STATE.get('is_running'):
-                bot.send_message(GROUP_ID, "🏃‍♂️💨 The marathon was stopped by the admin")
+                # CORRECTED: Removed "!"
+                bot.send_message(GROUP_ID, "🏃‍♂️💨 The marathon was stopped by the admin.")
                 break # Exit the loop if stop command was issued
 
             question_text = quiz_data.get('Question', 'No Question Text')
@@ -2072,6 +2071,7 @@ def run_quiz_marathon(admin_chat_id, duration_per_question):
                 time.sleep(1)
         
         # 4. Announce results
+        # CORRECTED: Removed "!" from the announcement
         bot.send_message(GROUP_ID, "🎉 **Marathon Finished** 🎉\n\nCalculating the results, please wait...", parse_mode="Markdown")
         time.sleep(2)
         announce_marathon_results(admin_chat_id)
