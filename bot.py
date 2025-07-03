@@ -521,7 +521,7 @@ def handle_help_command(msg: types.Message):
     # Using a multi-line string for better readability and organization.
     # Commands are grouped by their function.
     help_text = """
-� *Rising Empire Bot - Admin Panel* 🤖
+ *Rising Empire Bot - Admin Panel* 🤖
 
 Here are all the commands available to you. Click on any command to use it.
 
@@ -560,7 +560,7 @@ Here are all the commands available to you. Click on any command to use it.
     
     # The parse_mode is crucial for making the commands clickable and formatting bold text.
     bot.send_message(msg.chat.id, help_text, parse_mode="Markdown")
-�
+
 @bot.message_handler(commands=['deletemessage'])
 @admin_required
 def handle_delete_message(msg: types.Message):
