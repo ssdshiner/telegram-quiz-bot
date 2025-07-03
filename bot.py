@@ -413,35 +413,28 @@ def background_worker():
     global last_quiz_posted_hour, last_doubt_reminder_hour
     
     while True:
-        try:
-            # Use a consistent timezone (IST) for all time-based operations
-            ist_tz = timezone(timedelta(hours=5, minutes=30))
-            current_time_ist = datetime.datetime.now(ist_tz)
-            current_hour = current_time_ist.hour
+        # === REPLACE THE ENTIRE try...except BLOCK WITH THIS ===
 
-            # --- Automated Bi-Hourly Quiz Trigger (on EVEN hours) ---
-            is_quiz_time = (current_hour % 2 == 0)
-            if is_quiz_time and last_quiz_posted_hour != current_hour:
-                print(f"⏰ It's {current_hour}:00 IST, time for a bi-hourly quiz! Posting...")
-                post_daily_quiz()
-                last_quiz_posted_hour = current_hour
-
-            # --- Unanswered Doubts Reminder (on ODD hours) ---
-            is_reminder_time = (current_hour % 2 != 0)
-            if is_reminder_time and last_doubt_reminder_hour != current_hour:
-                print(f"⏰ It's {current_hour}:00 IST, checking for unanswered doubts...")
-                try:
-                    response = supabase.table('doubts').select('id', count='exact').eq('status', 'unanswered').execute()
-                    unanswered_count = response.count
-                    if unanswered_count and unanswered_count > 0:
-                        reminder_message = f"📢 **Doubt Reminder!**\n\nThere are currently *{unanswered_count} unanswered doubt(s)* in the group. Let's help each other out! 🤝"
-                        bot.send_message(GROUP_ID, reminder_message, parse_mode="Markdown")
-                        print(f"✅ Sent a reminder for {unanswered_count} unanswered doubts.")
-                except Exception as e:
-                    print(f"❌ Failed to check for doubt reminders: {e}")
+                    try:
+                        # Escape the message content to ensure it's safe for MarkdownV2
+                        safe_message = escape_markdown(msg_details['message'])
+                        
+                        # Send the message using the safer MarkdownV2 parser
+                        bot.send_message(GROUP_ID, safe_message, parse_mode="MarkdownV2")
+                        
+                        print(f"✅ Sent scheduled message: {msg_details['message'][:50]}...")
+                        # IMPORTANT: Only modify the list after the message is successfully sent
+                        if not msg_details.get('recurring', False):
+                            scheduled_messages.remove(msg_details)
+                        else:
+                            # For recurring messages, schedule for the next day
+                            msg_details['send_time'] += datetime.timedelta(days=1)
+                    except Exception as e:
+                        print(f"❌ Failed to send scheduled message: {e}")
+                        # Also report this specific error to the admin
+                        report_error_to_admin(f"Failed to send scheduled message: {e}\n\nMessage was: {msg_details['message']}")
                 
                 last_doubt_reminder_hour = current_hour
-
             # --- Process Scheduled Messages & Reminders ---
             # Create a copy to safely modify the list while iterating
             messages_to_process = scheduled_messages[:]
