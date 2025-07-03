@@ -1562,131 +1562,213 @@ def handle_study_tip_command(msg: types.Message):
     tip = random.choice(tips)
     bot.send_message(GROUP_ID, tip, parse_mode="Markdown")
     bot.send_message(msg.chat.id, "✅ Study tip sent to the group!")
+
 # =============================================================================
-# 8.10. SMART DOUBT HUB FEATURE
+# 8.10. SUPER DOUBT HUB FEATURE (Priority, Related Doubts, Best Answer)
 # =============================================================================
 
-def format_doubt_message(doubt_id, student_name, question, status="Unanswered ❓", answerer_name=None, answer_text=None):
-    """Formats the doubt message in a clean, readable way."""
-    
-    header = f"**#Doubt{doubt_id}: {status}**"
-    
-    # Use HTML for better formatting control, especially for nested text
-    message_text = (
-        f"<b>#Doubt{doubt_id}: {status}</b>\n\n"
-        f"<b>Student:</b> {student_name}\n"
-        f"<b>Question:</b>\n<pre>{question}</pre>\n\n"
-    )
+def find_related_doubts(question_text):
+    """Finds related doubts from the database based on keywords."""
+    # This is a simple keyword search. For better results, more advanced NLP can be used.
+    keywords = [word for word in question_text.split() if len(word) > 4]
+    if not keywords:
+        return None
 
-    if status == "Answered! ✅" and answerer_name and answer_text:
-        message_text += f"<i>↪️ Answered by {answerer_name}:</i>\n<pre>{answer_text}</pre>"
-    else:
-        message_text += f"<i>Reply to this message with /answer {doubt_id} [your answer] to help.</i>"
-        
-    return message_text
+    # Building the search query for Supabase
+    query_string = " | ".join(keywords)
+    try:
+        # Use text_search for full-text search capabilities
+        response = supabase.table('doubts').select('id, question').text_search('question', query_string, config='english').limit(3).execute()
+        return response.data if response.data else None
+    except Exception as e:
+        print(f"Note: Text search for related doubts failed. This might need configuration in Supabase. Error: {e}")
+        # If text search fails, just return None
+        return None
 
 @bot.message_handler(commands=['askdoubt'])
 def handle_askdoubt(msg: types.Message):
-    """Handles the /askdoubt command from any user in the group."""
+    """Handles the /askdoubt command, now with priority and related doubt finding."""
     if not is_group_message(msg):
         bot.reply_to(msg, "This command can only be used in the main group.")
         return
 
-    question_text = msg.text.replace('/askdoubt', '').strip()
+    command_text = msg.text.replace('/askdoubt', '').strip()
+    
+    # Check for priority flags like [High] or [Urgent]
+    priority = 'normal'
+    if command_text.lower().startswith('[high]'):
+        priority = 'high'
+        question_text = command_text[6:].strip()
+    elif command_text.lower().startswith('[urgent]'):
+        priority = 'urgent'
+        question_text = command_text[8:].strip()
+    else:
+        question_text = command_text
+
     if not question_text:
-        bot.reply_to(msg, "Please write your question after the /askdoubt command.")
+        bot.reply_to(msg, "Please write your question after the command. \n*Example:* `/askdoubt [High] What is AS 22?`", parse_mode="Markdown")
         return
 
     try:
         student_name = msg.from_user.first_name
         student_id = msg.from_user.id
-
-        # 1. Insert the initial doubt into Supabase to get the new ID
+        
+        # --- Related Doubts Finder ---
+        related_doubts = find_related_doubts(question_text)
+        related_text = ""
+        if related_doubts:
+            related_text = "\n\n*P.S. Is your question related to any of these?*\n"
+            for doubt in related_doubts:
+                related_text += f"➡️ _Doubt #{doubt['id']}: {doubt['question'][:50]}..._\n"
+        
+        # 1. Insert doubt into Supabase to get the new ID
         insert_response = supabase.table('doubts').insert({
-            'group_id': msg.chat.id,
-            'student_name': student_name,
-            'student_id': student_id,
-            'question': question_text,
-            'status': 'unanswered'
+            'group_id': msg.chat.id, 'student_name': student_name, 'student_id': student_id,
+            'question': question_text, 'status': 'unanswered', 'priority': priority
         }).execute()
         
-        # The new Supabase client returns data differently
-        if not (insert_response.data and len(insert_response.data) > 0):
-             raise Exception("Failed to insert doubt into database.")
-        
         doubt_id = insert_response.data[0]['id']
-
-        # 2. Format and post the doubt message to the group
-        formatted_message = format_doubt_message(doubt_id, student_name, question_text)
+        
+        # 2. Format and post the main doubt message
+        status_icon = "❗" if priority == 'high' else "🔥" if priority == 'urgent' else "❓"
+        formatted_message = (
+            f"<b>#Doubt{doubt_id}: Unanswered {status_icon}</b>\n\n"
+            f"<b>Student:</b> {student_name}\n"
+            f"<b>Question:</b>\n<pre>{question_text}</pre>\n\n"
+            f"<i>You can help by replying with:</i>\n<code>/answer {doubt_id} [your answer]</code>"
+        )
         sent_doubt_msg = bot.send_message(msg.chat.id, formatted_message, parse_mode="HTML")
+        
+        # 3. If related doubts were found, send them as a reply to the main doubt message
+        if related_text:
+            bot.send_message(msg.chat.id, related_text, reply_to_message_id=sent_doubt_msg.message_id, parse_mode="Markdown")
 
-        # 3. Update the Supabase record with the message_id of the bot's message
+        # 4. Update the record with the message_id for future edits
         supabase.table('doubts').update({'message_id': sent_doubt_msg.message_id}).eq('id', doubt_id).execute()
+        
+        # 5. Pin the message if priority is high or urgent
+        if priority in ['high', 'urgent']:
+            bot.pin_chat_message(msg.chat.id, sent_doubt_msg.message_id, disable_notification=True)
 
-        # 4. Delete the user's original /askdoubt command to keep the chat clean
+        # 6. Delete the user's original command to keep the chat clean
         bot.delete_message(msg.chat.id, msg.message_id)
         
     except Exception as e:
         print(f"Error in /askdoubt: {traceback.format_exc()}")
-        bot.reply_to(msg, f"❌ Oops! Something went wrong. Please try again. Error: {e}")
-
+        bot.reply_to(msg, f"❌ Oops! Something went wrong. Please try again.")
 
 @bot.message_handler(commands=['answer'])
 def handle_answer(msg: types.Message):
-    """Handles the /answer command to reply to a specific doubt."""
+    """Handles the /answer command and logs the answer's message ID."""
     if not is_group_message(msg):
         bot.reply_to(msg, "This command can only be used in the main group.")
         return
 
     try:
-        # Parse the command: /answer 101 The answer is...
         parts = msg.text.split(' ', 2)
         if len(parts) < 3:
-            bot.reply_to(msg, "Invalid format. Use: `/answer [Doubt_ID] [Your Answer]`")
+            bot.reply_to(msg, "Invalid format. Use: `/answer [Doubt_ID] [Your Answer]`\n*Example:* `/answer 101 The answer is...`", parse_mode="Markdown")
             return
             
         doubt_id = int(parts[1])
         answer_text = parts[2].strip()
-        answerer_name = msg.from_user.first_name
-        answerer_id = msg.from_user.id
-
-        # 1. Fetch the doubt details from Supabase
-        fetch_response = supabase.table('doubts').select('*').eq('id', doubt_id).limit(1).execute()
+        
+        # Fetch the original doubt's message_id
+        fetch_response = supabase.table('doubts').select('message_id, all_answer_message_ids').eq('id', doubt_id).limit(1).execute()
         if not fetch_response.data:
             bot.reply_to(msg, f"❌ Doubt with ID #{doubt_id} not found.")
             return
         
         doubt_data = fetch_response.data[0]
         original_message_id = doubt_data['message_id']
+        all_answers = doubt_data.get('all_answer_message_ids', [])
         
-        # 2. Update the original doubt message with the new answer
-        updated_message_text = format_doubt_message(
-            doubt_id,
-            doubt_data['student_name'],
-            doubt_data['question'],
-            status="Answered! ✅",
-            answerer_name=answerer_name,
-            answer_text=answer_text
-        )
-        bot.edit_message_text(updated_message_text, chat_id=msg.chat.id, message_id=original_message_id, parse_mode="HTML")
+        # Post the answer as a reply to the original doubt message
+        sent_answer_msg = bot.reply_to(original_message_id, f"↪️ *Answer by {msg.from_user.first_name}:*\n\n{answer_text}", parse_mode="Markdown")
+        
+        # Add the new answer's message ID to the list in Supabase
+        all_answers.append(sent_answer_msg.message_id)
+        supabase.table('doubts').update({'all_answer_message_ids': all_answers}).eq('id', doubt_id).execute()
 
-        # 3. Update the Supabase record to mark it as answered
-        supabase.table('doubts').update({
-            'status': 'answered',
-            'answered_by_name': answerer_name,
-            'answered_by_id': answerer_id,
-            'answer_text': answer_text
-        }).eq('id', doubt_id).execute()
-
-        # 4. Delete the user's /answer command
+        # Delete the user's /answer command message
         bot.delete_message(msg.chat.id, msg.message_id)
         
-    except (ValueError, IndexError):
-        bot.reply_to(msg, "Invalid Doubt ID. Please use a number.")
     except Exception as e:
         print(f"Error in /answer: {traceback.format_exc()}")
-        bot.reply_to(msg, f"❌ Oops! Something went wrong while answering. Error: {e}")
+        bot.reply_to(msg, f"❌ Oops! Something went wrong while answering.")
 
+@bot.message_handler(commands=['bestanswer'])
+def handle_best_answer(msg: types.Message):
+    """Handles marking an answer as the best one. Can be used by original asker or admin."""
+    try:
+        parts = msg.text.split(' ', 1)
+        if len(parts) < 2:
+            bot.reply_to(msg, "Invalid format. Use: `/bestanswer [Doubt_ID]` by *replying* to the best answer.")
+            return
+        
+        if not msg.reply_to_message:
+            bot.reply_to(msg, "Please reply to the answer message you want to mark as 'best'.")
+            return
+            
+        doubt_id = int(parts[1])
+        best_answer_msg = msg.reply_to_message
+        
+        # Fetch the doubt to verify permissions
+        fetch_response = supabase.table('doubts').select('*').eq('id', doubt_id).limit(1).execute()
+        if not fetch_response.data:
+            bot.reply_to(msg, f"❌ Doubt with ID #{doubt_id} not found.")
+            return
+            
+        doubt_data = fetch_response.data[0]
+        
+        # Check permissions: Only original asker or an admin can mark the best answer
+        if not (msg.from_user.id == doubt_data['student_id'] or is_admin(msg.from_user.id)):
+            bot.reply_to(msg, "❌ You can only mark the best answer for your own doubt.")
+            return
+            
+        # Update the main doubt message to show the best answer permanently
+        updated_message_text = (
+            f"<b>#Doubt{doubt_id}: Answered! ✅</b>\n\n"
+            f"<b>Student:</b> {doubt_data['student_name']}\n"
+            f"<b>Question:</b>\n<pre>{doubt_data['question']}</pre>\n\n"
+            f"<i>🏆 Best answer chosen by {msg.from_user.first_name}:</i>\n<pre>{best_answer_msg.text.split(':', 1)[-1].strip()}</pre>"
+        )
+        bot.edit_message_text(updated_message_text, chat_id=msg.chat.id, message_id=doubt_data['message_id'], parse_mode="HTML")
+        
+        # Unpin the message if it was pinned
+        if doubt_data['priority'] in ['high', 'urgent']:
+            try:
+                bot.unpin_chat_message(msg.chat.id, doubt_data['message_id'])
+            except Exception as e:
+                print(f"Could not unpin message for doubt {doubt_id}: {e}")
+
+        # Update Supabase with best answer details
+        supabase.table('doubts').update({
+            'status': 'answered',
+            'best_answer_by_id': best_answer_msg.from_user.id,
+            'best_answer_text': best_answer_msg.text
+        }).eq('id', doubt_id).execute()
+        
+        # Cleanup: Delete all other temporary answer messages
+        all_answer_ids = doubt_data.get('all_answer_message_ids', [])
+        for answer_id in all_answer_ids:
+            if answer_id != best_answer_msg.message_id:
+                try:
+                    bot.delete_message(msg.chat.id, answer_id)
+                except Exception:
+                    pass # Ignore if message is already deleted or not found
+        
+        # Delete the /bestanswer command message
+        bot.delete_message(msg.chat.id, msg.message_id)
+        # Delete the chosen best answer message as its content is now part of the main doubt
+        try:
+            bot.delete_message(msg.chat.id, best_answer_msg.message_id)
+        except Exception:
+            pass
+
+    except Exception as e:
+        print(f"Error in /bestanswer: {traceback.format_exc()}")
+        bot.reply_to(msg, f"❌ Oops! Something went wrong.")
 # =============================================================================
 # 8.8. QUIZ MARATHON FEATURE (from Google Sheets) - WITH SCORING, EXPLANATIONS & STOP
 # =============================================================================
