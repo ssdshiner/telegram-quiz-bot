@@ -739,7 +739,8 @@ def process_poll_q_and_opts(msg: types.Message):
         
         question, options = parts[0].strip(), [opt.strip() for opt in parts[1:]]
         if not (2 <= len(options) <= 10):
-            bot.reply_to(msg, "❌ A poll must have between 2 and 10 options. Please try again.")
+            # Using send_message for robustness
+            bot.send_message(msg.chat.id, "❌ A poll must have between 2 and 10 options. Please try again.")
             return
 
         full_question = f"{question}\n\n⏰ Closes in {duration} minute{'s' if duration > 1 else ''}"
@@ -747,10 +748,10 @@ def process_poll_q_and_opts(msg: types.Message):
         close_time = datetime.datetime.now() + datetime.timedelta(minutes=duration)
         active_polls.append({'chat_id': sent_poll.chat.id, 'message_id': sent_poll.message_id, 'close_time': close_time})
         
-        bot.reply_to(msg, "✅ Poll sent successfully to the group!")
+        bot.send_message(msg.chat.id, "✅ Poll sent successfully to the group!")
         
     except Exception as e:
-        bot.reply_to(msg, f"❌ Error creating poll: {e}. Please start over with /createpoll.")
+        bot.send_message(msg.chat.id, f"❌ Error creating poll: {e}. Please start over with /createpoll.")
     finally:
         # Clean up the state regardless of success or failure
         if user_id in user_states:
@@ -842,10 +843,10 @@ def process_text_quiz_options_and_answer(msg: types.Message):
 def handle_mysheet(msg: types.Message):
     """Provides the admin with a link to the configured Google Sheet."""
     if not GOOGLE_SHEET_KEY:
-        bot.reply_to(msg, "❌ The Google Sheet Key has not been configured by the administrator.")
+        bot.send_message(msg.chat.id, "❌ The Google Sheet Key has not been configured by the administrator.")
         return
     sheet_url = f"https://docs.google.com/spreadsheets/d/{GOOGLE_SHEET_KEY}"
-    bot.reply_to(msg, f"📄 Here is the link to the Google Sheet:\n{sheet_url}")
+    bot.send_message(msg.chat.id, f"📄 Here is the link to the Google Sheet:\n{sheet_url}")
 
 # =============================================================================
 # 8.6. GENERAL ADMIN COMMANDS (CLEANED UP)
@@ -1225,7 +1226,8 @@ def process_welcome_message(msg: types.Message):
         return
     global CUSTOM_WELCOME_MESSAGE
     CUSTOM_WELCOME_MESSAGE = msg.text
-    bot.send_message(msg.chat.id, f"✅ Welcome message updated!\n\n**Preview:**\n{CUSTOM_WELCOME_MESSAGE.format(user_name='TestUser')
+    # The missing parenthesis has been added here
+    bot.send_message(msg.chat.id, f"✅ Welcome message updated!\n\n**Preview:**\n{CUSTOM_WELCOME_MESSAGE.format(user_name='TestUser')}")
 @bot.message_handler(commands=['createquiztext'])
 @admin_required
 def handle_text_quiz_command(msg: types.Message):
@@ -1420,29 +1422,30 @@ def parse_leaderboard(text):
             
     return data
 
+# =============================================================================
+# UPDATE 4: handle_congratulate_command (/bdhai) (Reply Error Fix)
+# =============================================================================
 @bot.message_handler(commands=['bdhai'])
 @admin_required
 def handle_congratulate_command(msg: types.Message):
     """
-    Analyzes a leaderboard, calculates percentages, finds fastest fingers,
-    and sends a dynamic, personalized congratulatory message.
+    Analyzes a leaderboard and sends a personalized congratulatory message.
+    This version is more robust and uses send_message for error handling.
     """
     if not msg.reply_to_message or not msg.reply_to_message.text:
-        bot.reply_to(msg, "❌ Please use this command by replying to the leaderboard message from the quiz bot.")
+        bot.send_message(msg.chat.id, "❌ Please use this command by replying to the leaderboard message from the quiz bot.")
         return
 
     leaderboard_text = msg.reply_to_message.text
     
     try:
-        # Step 1: Parse the leaderboard to get all data
         leaderboard_data = parse_leaderboard(leaderboard_text)
-        top_winners = leaderboard_data['winners'][:3] # We only focus on top 3 for the main message
+        top_winners = leaderboard_data['winners'][:3]
 
         if not top_winners:
-            bot.reply_to(msg, "🤔 I couldn't find any winners. Please make sure you are replying to the correct leaderboard message.")
+            bot.send_message(msg.chat.id, "🤔 I couldn't find any winners in the format 🥇, 🥈, 🥉. Please make sure you are replying to the correct leaderboard message.")
             return
 
-        # Step 2: Prepare a dynamic and personalized message
         quiz_title = leaderboard_data.get('quiz_title', 'the recent quiz')
         total_questions = leaderboard_data.get('total_questions', 0)
 
@@ -1450,12 +1453,9 @@ def handle_congratulate_command(msg: types.Message):
             f"🎉 The results for *{quiz_title}* are in, and the performance was electrifying! Huge congratulations to our toppers!",
             f"🚀 What a performance in *{quiz_title}*! Let's give a huge round of applause for our champions!",
             f"🔥 The competition in *{quiz_title}* was intense! A massive shout-out to our top performers!",
-            f"✨ Excellence on display in *{quiz_title}*! Heartiest congratulations to the winners!",
-            f"🏆 The results are out for *{quiz_title}*! Absolutely brilliant efforts from everyone. Here are our stars!"
         ]
         congrats_message = random.choice(intro_messages) + "\n\n"
 
-        # Step 3: Analyze and build winner strings
         for winner in top_winners:
             percentage = (winner['score'] / total_questions * 100) if total_questions > 0 else 0
             congrats_message += (
@@ -1464,25 +1464,18 @@ def handle_congratulate_command(msg: types.Message):
                 f" ► Time: *{winner['time_str']}*\n\n"
             )
 
-        # Step 4: Add special analysis and remarks
         congrats_message += "*━━━ Performance Insights ━━━*\n"
-        
-        # Find the fastest among the top 3
         fastest_winner = min(top_winners, key=lambda x: x['time_in_seconds'])
         congrats_message += f"⚡️ **Speed King/Queen:** A special mention to *{fastest_winner['name']}* for being the fastest among the toppers!\n"
 
-        # Find the slowest among the top 3 (but only if their score is high)
         if len(top_winners) > 1:
             slowest_winner = max(top_winners, key=lambda x: x['time_in_seconds'])
-            # Check if the slowest winner is not the same as the fastest (for 2-person leaderboards)
-            # and if their score is decent (e.g., > 50%)
             slowest_percentage = (slowest_winner['score'] / total_questions * 100) if total_questions > 0 else 0
             if slowest_winner['name'] != fastest_winner['name'] and slowest_percentage > 50:
                 congrats_message += f"🎯 **Accuracy Champion:** Great job, *{slowest_winner['name']}*! Your accuracy is top-notch. A little focus on speed, and you'll be unstoppable!\n"
 
         congrats_message += "\nKeep pushing your limits, everyone! The next leaderboard is waiting for you. 🔥"
 
-        # Step 5: Send the final message
         bot.send_message(msg.chat.id, congrats_message, parse_mode="Markdown")
         
         try:
@@ -1492,7 +1485,7 @@ def handle_congratulate_command(msg: types.Message):
 
     except Exception as e:
         print(f"Error in /bdhai command: {traceback.format_exc()}")
-        bot.reply_to(msg, f"❌ Oops! Something went wrong while generating the message. Error: {e}")
+        bot.send_message(msg.chat.id, f"❌ Oops! Something went wrong while generating the message. Error: {e}")
 
 @bot.message_handler(commands=['motivate'])
 @admin_required
