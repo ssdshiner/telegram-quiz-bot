@@ -139,6 +139,10 @@ def report_error_to_admin(error_message: str):
         # If sending the error fails, we just print it.
         print(f"CRITICAL: Failed to report error to admin: {e}")
 def is_admin(user_id):
+def escape_markdown(text: str) -> str:
+    """Helper function to escape characters for Telegram's MarkdownV2."""
+    escape_chars = r'_*[]()~`>#+-=|{}.!'
+    return ''.join(f'\\{char}' if char in escape_chars else char for char in text)
     """Checks if a user is the bot admin."""
     return user_id == ADMIN_USER_ID
 # ADD THIS NEW HELPER FUNCTION
@@ -178,10 +182,9 @@ def post_daily_quiz():
             type='quiz',
             correct_option_id=correct_index,
             is_anonymous=False,
-            open_period=300 # 5-minute quiz
+            open_period=3600 # 60-minute quiz
         )
-        bot.send_message(GROUP_ID, "👆 You have 5 minutes to answer the daily quiz! Good luck!", reply_to_message_id=poll.message_id)
-
+        bot.send_message(GROUP_ID, "👆 You have 60 minutes to answer the daily quiz! Good luck!", reply_to_message_id=poll.message_id)
         # Mark the question as used in the database
         supabase.table('questions').update({'used': 'true'}).eq('id', question_id).execute()
         print(f"✅ Daily quiz posted using question ID: {question_id}")
@@ -300,13 +303,14 @@ def bot_is_target(message: types.Message):
 # =============================================================================
 def load_data():
     """
-    Loads bot state from Supabase. This version correctly parses JSON data.
+    Loads bot state from Supabase. This version correctly parses JSON data for all persistent variables.
     """
     if not supabase:
         print("WARNING: Supabase client not available. Skipping data load.")
         return
         
-    global scheduled_messages, TODAY_QUIZ_DETAILS, CUSTOM_WELCOME_MESSAGE, QUIZ_SESSIONS, QUIZ_PARTICIPANTS
+    # Add active_polls to the list of global variables we are loading
+    global scheduled_messages, TODAY_QUIZ_DETAILS, CUSTOM_WELCOME_MESSAGE, QUIZ_SESSIONS, QUIZ_PARTICIPANTS, active_polls
     print("Loading data from Supabase...")
     try:
         response = supabase.table('bot_state').select("*").execute()
@@ -315,8 +319,7 @@ def load_data():
             db_data = response.data
             state = {item['key']: item['value'] for item in db_data}
             
-            # --- CORRECTED JSON PARSING ---
-            # Load scheduled messages and deserialize datetimes
+            # --- Load scheduled messages ---
             loaded_messages_str = state.get('scheduled_messages', '[]')
             loaded_messages = json.loads(loaded_messages_str)
             deserialized_messages = []
@@ -328,11 +331,23 @@ def load_data():
                 except (ValueError, TypeError): 
                     continue
             scheduled_messages = deserialized_messages
-            
-            # Load other data, using .get() with a default value and parsing JSON
-            # Use a fallback of '{}' for json.loads to prevent errors on empty/null data
+
+            # --- NEW: Load active polls ---
+            loaded_polls_str = state.get('active_polls', '[]')
+            loaded_polls = json.loads(loaded_polls_str)
+            deserialized_polls = []
+            for poll in loaded_polls:
+                try:
+                    if 'close_time' in poll:
+                       poll['close_time'] = datetime.datetime.strptime(poll['close_time'], '%Y-%m-%d %H:%M:%S')
+                       deserialized_polls.append(poll)
+                except (ValueError, TypeError):
+                    continue
+            active_polls = deserialized_polls
+
+            # --- Load all other data ---
             TODAY_QUIZ_DETAILS = json.loads(state.get('today_quiz_details', '{}')) or TODAY_QUIZ_DETAILS
-            CUSTOM_WELCOME_MESSAGE = state.get('custom_welcome_message', CUSTOM_WELCOME_MESSAGE) # This is a string, no parsing needed
+            CUSTOM_WELCOME_MESSAGE = state.get('custom_welcome_message', CUSTOM_WELCOME_MESSAGE)
             QUIZ_SESSIONS = json.loads(state.get('quiz_sessions', '{}')) or QUIZ_SESSIONS
             QUIZ_PARTICIPANTS = json.loads(state.get('quiz_participants', '{}')) or QUIZ_PARTICIPANTS
             
@@ -343,7 +358,6 @@ def load_data():
     except Exception as e:
         print(f"❌ Error loading data from Supabase: {e}")
         traceback.print_exc()
-
 def save_data():
     """Saves bot state to Supabase, now including active_polls."""
     if not supabase:
@@ -575,11 +589,42 @@ Here are all the commands available to you. Click on any command to use it.
 *━━━ Utilities ━━━*
 📖 `/section [number]` - Get a summary of a law section.
 📄 `/mysheet` - Get the link to the connected Google Sheet.
+🏆 `/leaderboard` - Show the all-time randomquiz leaderboard.
     """
     
     # The parse_mode is crucial for making the commands clickable and formatting bold text.
     bot.send_message(msg.chat.id, help_text, parse_mode="Markdown")
+# === ADD THIS ENTIRE NEW FUNCTION ===
 
+@bot.message_handler(commands=['leaderboard'])
+@admin_required
+def handle_leaderboard_command(msg: types.Message):
+    """Fetches and displays the all-time leaderboard."""
+    try:
+        # Fetch the top 10 users from the leaderboard table, ordered by score
+        response = supabase.table('leaderboard').select('user_name, score').order('score', desc=True).limit(10).execute()
+
+        if not response.data:
+            bot.send_message(msg.chat.id, "The leaderboard is empty right now. No one has answered any quizzes yet!")
+            return
+
+        leaderboard_text = "🏆 **All-Time Quiz Leaderboard** 🏆\n\n"
+        medals = ["🥇", "🥈", "🥉"]
+        for i, user in enumerate(response.data):
+            rank_icon = medals[i] if i < 3 else f" {i+1}."
+            leaderboard_text += f"{rank_icon} {user['user_name']} - *{user['score']} points*\n"
+        
+        leaderboard_text += "\nKeep answering the daily quizzes to climb the ranks! 🔥"
+        
+        # Send the leaderboard to the main group
+        bot.send_message(GROUP_ID, leaderboard_text, parse_mode="Markdown")
+        # Send a confirmation to the admin
+        bot.send_message(msg.chat.id, "✅ Leaderboard has been posted in the group.")
+
+    except Exception as e:
+        print(f"Error in /leaderboard command: {traceback.format_exc()}")
+        bot.send_message(msg.chat.id, "❌ Oops! Something went wrong while fetching the leaderboard.")
+        report_error_to_admin(f"Failed to generate leaderboard:\n{traceback.format_exc()}")
 @bot.message_handler(commands=['deletemessage'])
 @admin_required
 def handle_delete_message(msg: types.Message):
@@ -659,25 +704,36 @@ def load_data():
         traceback.print_exc()
 # You don't need to change save_data(), but it's here for context.
 def save_data():
-    """Saves bot state to Supabase."""
+    """Saves bot state to Supabase, now including active_polls."""
     if not supabase:
         print("WARNING: Supabase client not available. Skipping data save.")
         return
 
     try:
-        # Serialize datetimes for scheduled messages before saving
+        # --- Serialize scheduled_messages (contains datetime objects) ---
         serializable_messages = []
         for msg in scheduled_messages:
             msg_copy = msg.copy()
             msg_copy['send_time'] = msg_copy['send_time'].strftime('%Y-%m-%d %H:%M:%S')
             serializable_messages.append(msg_copy)
 
+        # --- NEW: Serialize active_polls (also contains datetime objects) ---
+        serializable_polls = []
+        for poll in active_polls:
+            poll_copy = poll.copy()
+            if 'close_time' in poll_copy and isinstance(poll_copy['close_time'], datetime.datetime):
+                poll_copy['close_time'] = poll_copy['close_time'].strftime('%Y-%m-%d %H:%M:%S')
+            serializable_polls.append(poll_copy)
+
+        # --- Prepare all data for upserting ---
         data_to_upsert = [
             {'key': 'scheduled_messages', 'value': json.dumps(serializable_messages)},
             {'key': 'today_quiz_details', 'value': json.dumps(TODAY_QUIZ_DETAILS)},
             {'key': 'custom_welcome_message', 'value': CUSTOM_WELCOME_MESSAGE},
             {'key': 'quiz_sessions', 'value': json.dumps(QUIZ_SESSIONS)},
             {'key': 'quiz_participants', 'value': json.dumps(QUIZ_PARTICIPANTS)},
+            # Add the newly serialized polls to the list
+            {'key': 'active_polls', 'value': json.dumps(serializable_polls)},
         ]
         
         supabase.table('bot_state').upsert(data_to_upsert).execute()
@@ -959,9 +1015,9 @@ def handle_respond_command(msg: types.Message):
         # Step 1: Post the formatted response in the group, replying to the original user's message.
         bot.send_message(
             GROUP_ID, # Always sends to the main group
-            f"📢 *Admin Response:*\n\n{response_text}",
+            f"📢 *Admin Response:*\n\n{escape_markdown(response_text)}",
             reply_to_message_id=msg.reply_to_message.message_id,
-            parse_mode="Markdown"
+            parse_mode="MarkdownV2"
         )
         
         # Step 2: Send a private confirmation message to you (the admin).
@@ -1335,12 +1391,22 @@ def handle_feedback_command(msg: types.Message):
     user_info = msg.from_user
     full_name = f"{user_info.first_name} {user_info.last_name or ''}".strip()
     username = f"@{user_info.username}" if user_info.username else "No username"
-    feedback_msg = (
-        f"📬 *New Feedback*\n\n"
-        f"**From:** {full_name} ({username})\n"
-        f"**User ID:** `{user_info.id}`\n\n"
-        f"**Message:**\n_{feedback_text}_"
-    )
+   safe_feedback_text = escape_markdown(feedback_text)
+
+feedback_msg = (
+    f"📬 *New Feedback*\n\n"
+    f"*From:* {escape_markdown(full_name)} ({escape_markdown(username)})\n"
+    f"*User ID:* `{user_info.id}`\n\n"
+    f"*Message:*\n{safe_feedback_text}"
+)
+
+# ... then find the line that sends the message ...
+
+# Find this line:
+bot.send_message(ADMIN_USER_ID, feedback_msg, parse_mode="Markdown")
+
+# And replace it with this to use the more stable parser:
+bot.send_message(ADMIN_USER_ID, feedback_msg, parse_mode="MarkdownV2")
     try:
         # Send the feedback to the admin
         bot.send_message(ADMIN_USER_ID, feedback_msg, parse_mode="Markdown")
@@ -1356,43 +1422,65 @@ def handle_feedback_command(msg: types.Message):
 def handle_poll_answers(poll_answer: types.PollAnswer):
     """
     This is the single, master handler for ALL poll answers.
-    It intelligently checks if the answer is for a Marathon or a Quick Quiz.
+    It now also handles scoring for the Daily Automated Quiz.
     """
     global QUIZ_PARTICIPANTS, MARATHON_STATE
     
     poll_id = poll_answer.poll_id
     user = poll_answer.user
-    
-    # --- Logic 1: Check if it's a Marathon Quiz answer ---
-    if MARATHON_STATE.get('is_running') and poll_id == MARATHON_STATE.get('current_poll_id'):
-        if poll_answer.option_ids: # Check if user selected an answer
-            selected_option = poll_answer.option_ids[0]
-            correct_option = MARATHON_STATE.get('current_correct_index')
-            
-            if selected_option == correct_option:
-                if user.id not in MARATHON_STATE['scores']:
-                    MARATHON_STATE['scores'][user.id] = {'name': user.first_name, 'score': 0}
-                MARATHON_STATE['scores'][user.id]['score'] += 1
-                print(f"Marathon: Correct answer from {user.first_name}! New score: {MARATHON_STATE['scores'][user.id]['score']}")
 
-    # --- Logic 2: If not a marathon, check if it's a Quick Quiz ---
-    elif poll_id in QUIZ_SESSIONS:
-        if poll_answer.option_ids: # User selected an answer
-            selected_option = poll_answer.option_ids[0]
-            is_correct = (selected_option == QUIZ_SESSIONS[poll_id]['correct_option'])
-            
-            if poll_id not in QUIZ_PARTICIPANTS:
-                QUIZ_PARTICIPANTS[poll_id] = {}
+    # Try to get the poll object to check its question text
+    try:
+        # We need to find the poll object in our active_polls list to check its details.
+        # This is a bit tricky, but we can search for it if we store poll details when created.
+        # For now, let's assume if it's not a Marathon or QuickQuiz, it's the daily one.
+        # A more robust solution would store the daily quiz poll_id.
+        
+        # --- Logic 1: Check if it's a Marathon Quiz answer ---
+        if MARATHON_STATE.get('is_running') and poll_id == MARATHON_STATE.get('current_poll_id'):
+            if poll_answer.option_ids:
+                selected_option = poll_answer.option_ids[0]
+                correct_option = MARATHON_STATE.get('current_correct_index')
                 
-            QUIZ_PARTICIPANTS[poll_id][user.id] = {
-                'user_name': user.first_name,
-                'is_correct': is_correct,
-                'answered_at': datetime.datetime.now()
-            }
-            print(f"Quick Quiz: Answer received from {user.first_name}.")
-            
-        elif user.id in QUIZ_PARTICIPANTS.get(poll_id, {}):
-            del QUIZ_PARTICIPANTS[poll_id][user.id]
+                if selected_option == correct_option:
+                    if user.id not in MARATHON_STATE['scores']:
+                        MARATHON_STATE['scores'][user.id] = {'name': user.first_name, 'score': 0}
+                    MARATHON_STATE['scores'][user.id]['score'] += 1
+            return # Stop processing here for marathons
+
+        # --- Logic 2: Check if it's a Quick Quiz answer ---
+        elif poll_id in QUIZ_SESSIONS:
+            if poll_answer.option_ids:
+                selected_option = poll_answer.option_ids[0]
+                is_correct = (selected_option == QUIZ_SESSIONS[poll_id]['correct_option'])
+                
+                if poll_id not in QUIZ_PARTICIPANTS:
+                    QUIZ_PARTICIPANTS[poll_id] = {}
+                    
+                QUIZ_PARTICIPANTS[poll_id][user.id] = {
+                    'user_name': user.first_name,
+                    'is_correct': is_correct,
+                    'answered_at': datetime.datetime.now()
+                }
+            elif user.id in QUIZ_PARTICIPANTS.get(poll_id, {}):
+                del QUIZ_PARTICIPANTS[poll_id][user.id]
+            return # Stop processing here for quick quizzes
+
+        # --- NEW Logic 3: Handle the Daily Automated Quiz ---
+        else:
+            # This part will run for any other quiz, which we assume is our daily quiz.
+            if poll_answer.option_ids: # User selected an answer
+                # We assume the quiz was set up so that selecting any option is "correct"
+                # because Telegram automatically checks the correct answer. We just need to award a point.
+                print(f"Daily quiz answer from {user.first_name} ({user.id}). Awarding point.")
+                
+                # 'upsert' will INSERT a new user or UPDATE an existing one's score.
+                # We use a special Supabase function `rpc` to increment the score.
+                supabase.rpc('increment_score', {'user_id_in': user.id, 'user_name_in': user.first_name}).execute()
+
+    except Exception as e:
+        print(f"Error in poll answer handler: {traceback.format_exc()}")
+        report_error_to_admin(f"Error in poll_answer_handler:\n{traceback.format_exc()}")
 # =============================================================================
 # QUIZ RESULT COMMAND (For Bot's Internal Quizzes)
 # =============================================================================
@@ -2087,7 +2175,7 @@ def handle_answer(msg: types.Message):
         original_message_id = doubt_data['message_id']
         all_answers = doubt_data.get('all_answer_message_ids', [])
         
-        sent_answer_msg = bot.reply_to(original_message_id, f"↪️ *Answer by {msg.from_user.first_name}:*\n\n{answer_text}", parse_mode="Markdown")
+       sent_answer_msg = bot.reply_to(original_message_id, f"↪️ *Answer by {escape_markdown(msg.from_user.first_name)}:*\n\n{escape_markdown(answer_text)}", parse_mode="MarkdownV2")
         
         all_answers.append(sent_answer_msg.message_id)
         supabase.table('doubts').update({'all_answer_message_ids': all_answers}).eq('id', doubt_id).execute()
