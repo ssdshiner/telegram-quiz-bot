@@ -1285,20 +1285,19 @@ def handle_congratulate_command(msg: types.Message):
             bot.send_message(msg.chat.id, "🤔 I couldn't find any winners in the format 🥇, 🥈, 🥉. Please make sure you are replying to the correct leaderboard message.")
             return
 
-        # Escape all variable text that comes from the parsed message
         quiz_title = escape_markdown(leaderboard_data.get('quiz_title', 'the recent quiz'))
         total_questions = leaderboard_data.get('total_questions', 0)
 
+        # CORRECTED: All '!' have been replaced with '.'
         intro_messages = [
-            f"🎉 The results for *{quiz_title}* are in, and the performance was electrifying! Huge congratulations to our toppers!",
-            f"🚀 What a performance in *{quiz_title}*! Let's give a huge round of applause for our champions!",
-            f"🔥 The competition in *{quiz_title}* was intense! A massive shout-out to our top performers!"
+            f"🎉 The results for *{quiz_title}* are in, and the performance was electrifying. Huge congratulations to our toppers.",
+            f"🚀 What a performance in *{quiz_title}*. Let's give a huge round of applause for our champions.",
+            f"🔥 The competition in *{quiz_title}* was intense. A massive shout-out to our top performers."
         ]
         congrats_message = random.choice(intro_messages) + "\n\n"
         
         for winner in top_winners:
             percentage = (winner['score'] / total_questions * 100) if total_questions > 0 else 0
-            # Escape the winner's name and time string
             safe_winner_name = escape_markdown(winner['name'])
             safe_time_str = escape_markdown(winner['time_str'])
             congrats_message += (
@@ -1309,13 +1308,14 @@ def handle_congratulate_command(msg: types.Message):
         
         congrats_message += "*━━━ Performance Insights ━━━*\n"
         fastest_winner_name = escape_markdown(min(top_winners, key=lambda x: x['time_in_seconds'])['name'])
-        congrats_message += f"⚡️ *Speed King/Queen:* A special mention to *{fastest_winner_name}* for being the fastest among the toppers!\n"
+        # CORRECTED: '!' replaced with '.'
+        congrats_message += f"⚡️ *Speed King/Queen:* A special mention to *{fastest_winner_name}* for being the fastest among the toppers.\n"
 
-        congrats_message += "\nKeep pushing your limits, everyone! The next leaderboard is waiting for you\. 🔥"
+        # CORRECTED: '!' replaced. Note the escaped '.' -> '\.' for MarkdownV2
+        congrats_message += "\nKeep pushing your limits, everyone. The next leaderboard is waiting for you\. 🔥"
         
         bot.send_message(msg.chat.id, congrats_message, parse_mode="MarkdownV2")
         
-        # This is now inside the main try block
         try:
             bot.delete_message(msg.chat.id, msg.message_id)
         except Exception:
