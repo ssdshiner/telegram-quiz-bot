@@ -1225,7 +1225,7 @@ def process_welcome_message(msg: types.Message):
         return
     global CUSTOM_WELCOME_MESSAGE
     CUSTOM_WELCOME_MESSAGE = msg.text
-    bot.send_message(msg.chat.id, f"✅ Welcome message updated!\n\n**Preview:**\n{CUSTOM_WELCOME_MESSAGE.format(user_name='TestUser'
+    bot.send_message(msg.chat.id, f"✅ Welcome message updated!\n\n**Preview:**\n{CUSTOM_WELCOME_MESSAGE.format(user_name='TestUser')
 @bot.message_handler(commands=['createquiztext'])
 @admin_required
 def handle_text_quiz_command(msg: types.Message):
