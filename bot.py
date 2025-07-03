@@ -519,7 +519,7 @@ def handle_help_command(msg: types.Message):
         "❌ `/deletemessage` - Delete messages\n"
         "🏆 `/announcewinners` - Announce quiz winners\n"
         "👋 `/setwelcome` - Set welcome message\n"
-        "🗓️ `/setquiz` - Set today's quiz\n"
+        "🗓️ `/setquiz` - Set today's quiz details conversationally\n"
         "💪 `/motivate` - Send motivation\n"
         "📚 `/studytip` - Send study tip\n"
     )
@@ -894,28 +894,187 @@ def handle_random_quiz_command(msg: types.Message):
         print(error_message)
         report_error_to_admin(traceback.format_exc())
         bot.send_message(msg.chat.id, error_message)
+# =============================================================================
+# 8.9. CONVERSATIONAL /setquiz FEATURE
+# =============================================================================
+
+def cleanup_user_state(user_id):
+    """Safely removes a user from the state dictionary."""
+    if user_id in user_states:
+        del user_states[user_id]
 
 @bot.message_handler(commands=['setquiz'])
 @admin_required
-def handle_set_quiz_details(msg: types.Message):
-    """Starts the process for setting today's quiz topic details."""
-    prompt = bot.send_message(msg.chat.id, "📝 Send today's quiz details in the format:\n`Time | Chapter | Level`\n\nOr /cancel.", parse_mode="Markdown")
-    bot.register_next_step_handler(prompt, process_quiz_details)
+def handle_set_quiz_command(msg: types.Message):
+    """Starts the conversational flow to set quiz details for a specific date."""
+    user_id = msg.from_user.id
+    # Initialize the state for this user
+    user_states[user_id] = {
+        'step': 'awaiting_quiz_date',
+        'quiz_data': {
+            'date': None,
+            'quizzes': []
+        }
+    }
+    prompt = bot.send_message(
+        user_id,
+        "🗓️ **Step 1: Set Quiz Date**\n\n"
+        "Please enter the date for the quizzes (e.g., '03 July 2025').\n\n"
+        "Or type /cancel to abort.",
+        parse_mode="Markdown"
+    )
+    bot.register_next_step_handler(prompt, process_quiz_date)
 
-def process_quiz_details(msg: types.Message):
-    """Processes and saves today's quiz details."""
+def process_quiz_date(msg: types.Message):
+    """Processes the date and asks for the first quiz's details."""
+    user_id = msg.from_user.id
     if msg.text and msg.text.lower() == '/cancel':
-        bot.send_message(msg.chat.id, "❌ Operation cancelled.")
+        cleanup_user_state(user_id)
+        bot.send_message(user_id, "❌ Operation cancelled.")
         return
-    try:
-        global TODAY_QUIZ_DETAILS
-        parts = msg.text.split(' | ')
-        if len(parts) != 3: raise ValueError("Invalid format. Expected Time | Chapter | Level.")
-        TODAY_QUIZ_DETAILS.update({"time": parts[0].strip(), "chapter": parts[1].strip(), "level": parts[2].strip(), "is_set": True})
-        bot.send_message(msg.chat.id, "✅ Today's quiz details have been set!")
-    except Exception as e:
-        bot.send_message(msg.chat.id, f"❌ Error setting quiz details: {e}. Please try again.")
 
+    # Save the date
+    user_states[user_id]['quiz_data']['date'] = msg.text.strip()
+    
+    # Move to the next step
+    user_states[user_id]['step'] = 'awaiting_quiz_number'
+    prompt = bot.send_message(
+        user_id,
+        f"✅ Date set to: *{msg.text.strip()}*\n\n"
+        "📝 **Step 2: Add Quiz 1 Details**\n\n"
+        "What is the **Quiz Number**? (e.g., '1' or '1A')",
+        parse_mode="Markdown"
+    )
+    bot.register_next_step_handler(prompt, process_quiz_number)
+
+def process_quiz_number(msg: types.Message):
+    """Processes the quiz number and asks for the time."""
+    user_id = msg.from_user.id
+    if msg.text and msg.text.lower() == '/cancel':
+        cleanup_user_state(user_id)
+        bot.send_message(user_id, "❌ Operation cancelled.")
+        return
+
+    # Start a new dictionary for the current quiz
+    user_states[user_id]['current_quiz'] = {'number': msg.text.strip()}
+    
+    user_states[user_id]['step'] = 'awaiting_quiz_time'
+    prompt = bot.send_message(user_id, "⏰ What is the **Time** for this quiz? (e.g., '8:00 PM')")
+    bot.register_next_step_handler(prompt, process_quiz_time)
+
+def process_quiz_time(msg: types.Message):
+    """Processes the quiz time and asks for the subject."""
+    user_id = msg.from_user.id
+    if msg.text and msg.text.lower() == '/cancel':
+        cleanup_user_state(user_id)
+        bot.send_message(user_id, "❌ Operation cancelled.")
+        return
+        
+    user_states[user_id]['current_quiz']['time'] = msg.text.strip()
+    
+    user_states[user_id]['step'] = 'awaiting_quiz_subject'
+    prompt = bot.send_message(user_id, "📝 What is the **Subject**?")
+    bot.register_next_step_handler(prompt, process_quiz_subject)
+
+def process_quiz_subject(msg: types.Message):
+    """Processes the subject and asks for the chapter."""
+    user_id = msg.from_user.id
+    if msg.text and msg.text.lower() == '/cancel':
+        cleanup_user_state(user_id)
+        bot.send_message(user_id, "❌ Operation cancelled.")
+        return
+        
+    user_states[user_id]['current_quiz']['subject'] = msg.text.strip()
+    
+    user_states[user_id]['step'] = 'awaiting_quiz_chapter'
+    prompt = bot.send_message(user_id, "📖 What is the **Chapter**?")
+    bot.register_next_step_handler(prompt, process_quiz_chapter)
+
+def process_quiz_chapter(msg: types.Message):
+    """Processes the chapter and asks for the topic."""
+    user_id = msg.from_user.id
+    if msg.text and msg.text.lower() == '/cancel':
+        cleanup_user_state(user_id)
+        bot.send_message(user_id, "❌ Operation cancelled.")
+        return
+        
+    user_states[user_id]['current_quiz']['chapter'] = msg.text.strip()
+    
+    user_states[user_id]['step'] = 'awaiting_quiz_topic'
+    prompt = bot.send_message(user_id, "🧩 What is the **Topic**?")
+    bot.register_next_step_handler(prompt, process_quiz_topic)
+
+def process_quiz_topic(msg: types.Message):
+    """Processes the topic and asks the user if they want to add another quiz."""
+    user_id = msg.from_user.id
+    if msg.text and msg.text.lower() == '/cancel':
+        cleanup_user_state(user_id)
+        bot.send_message(user_id, "❌ Operation cancelled.")
+        return
+        
+    user_states[user_id]['current_quiz']['topic'] = msg.text.strip()
+    
+    # Add the completed quiz to the list for the day
+    user_states[user_id]['quiz_data']['quizzes'].append(user_states[user_id]['current_quiz'])
+    del user_states[user_id]['current_quiz'] # Clean up temporary storage
+    
+    # Ask to add another quiz
+    markup = types.InlineKeyboardMarkup()
+    markup.add(
+        types.InlineKeyboardButton("Yes, Add Another Quiz", callback_data="add_another_quiz"),
+        types.InlineKeyboardButton("No, Finish & Post", callback_data="finish_set_quiz")
+    )
+    bot.send_message(user_id, "✅ Quiz details saved! Do you want to add another quiz for the same date?", reply_markup=markup)
+
+# This handler will catch the button presses for "Yes" or "No"
+@bot.callback_query_handler(func=lambda call: call.data in ['add_another_quiz', 'finish_set_quiz'])
+def handle_set_quiz_decision(call: types.CallbackQuery):
+    """Handles the admin's decision to add another quiz or finish."""
+    user_id = call.from_user.id
+    
+    if call.data == 'add_another_quiz':
+        bot.edit_message_text("Okay, let's add the next quiz.", call.message.chat.id, call.message.message_id)
+        user_states[user_id]['step'] = 'awaiting_quiz_number'
+        prompt = bot.send_message(
+            user_id,
+            "📝 **Add Next Quiz Details**\n\n"
+            "What is the **Quiz Number** for this new quiz? (e.g., '2')",
+            parse_mode="Markdown"
+        )
+        bot.register_next_step_handler(prompt, process_quiz_number)
+
+    elif call.data == 'finish_set_quiz':
+        bot.edit_message_text("✅ All quizzes for the date have been set. Generating the final announcement...", call.message.chat.id, call.message.message_id)
+        
+        # --- Format the final message ---
+        quiz_data = user_states[user_id]['quiz_data']
+        final_text = f"🚨 Quiz – {quiz_data['date']} | Rising Empire Group |"
+        
+        for quiz in quiz_data['quizzes']:
+            final_text += (
+                f"\n\n*Quiz {quiz['number']}* :-\n"
+                f"⏰ {quiz.get('time', 'N/A')}\n"
+                f"📝 Subject: {quiz.get('subject', 'N/A')}\n"
+                f"📖 Chapter: {quiz.get('chapter', 'N/A')}\n"
+                f"🧩 Topic: {quiz.get('topic', 'N/A')}"
+            )
+            
+        final_text += "\n\n\nBe tuned to 👉 https://t.me/ca_internotes"
+
+        # Save this final text to TODAY_QUIZ_DETAILS to be used by /todayquiz
+        global TODAY_QUIZ_DETAILS
+        TODAY_QUIZ_DETAILS = {
+            "details_text": final_text,
+            "is_set": True
+        }
+        
+        # Send a preview to the admin
+        bot.send_message(user_id, "*Preview of the announcement:*", parse_mode="Markdown")
+        bot.send_message(user_id, final_text)
+        bot.send_message(user_id, "This announcement is now set. Users can see it with the /todayquiz command.")
+        
+        # Clean up the state
+        cleanup_user_state(user_id)
 @bot.message_handler(commands=['setwelcome'])
 @admin_required
 def handle_set_welcome(msg: types.Message):
