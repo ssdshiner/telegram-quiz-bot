@@ -209,7 +209,7 @@ def send_join_group_prompt(chat_id):
         # CLEANED UP: The '!' and its '\' are both removed.
         "❌ *Access Denied* \n\nYou must be a member of our group to use this bot\.\n\nPlease join and then click 'Re\-Verify' or type /suru\.",
         reply_markup=markup,
-        parse_mode="MarkdownV2"
+        parse_mode="Markdown"
     )
 
 def membership_required(func):
@@ -351,7 +351,7 @@ def background_worker():
                     unanswered_count = response.count
                     if unanswered_count and unanswered_count > 0:
                         reminder_message = f"📢 *Doubt Reminder\* \n\nThere are currently *{unanswered_count} unanswered doubt(s)* in the group\. Let's help each other out\ 🤝"
-                        bot.send_message(GROUP_ID, reminder_message, parse_mode="MarkdownV2")
+                        bot.send_message(GROUP_ID, reminder_message, parse_mode="Markdown")
                         print(f"✅ Sent a reminder for {unanswered_count} unanswered doubts.")
                 except Exception as e:
                     print(f"❌ Failed to check for doubt reminders: {e}")
@@ -415,7 +415,7 @@ def on_start(msg: types.Message):
     if check_membership(msg.from_user.id):
         safe_user_name = escape_markdown(msg.from_user.first_name)
         welcome_text = f"✅ Welcome, {safe_user_name} Use the buttons below to get started."
-        bot.send_message(msg.chat.id, welcome_text, reply_markup=create_main_menu_keyboard(msg), parse_mode="MarkdownV2")
+        bot.send_message(msg.chat.id, welcome_text, reply_markup=create_main_menu_keyboard(msg), parse_mode="Markdown")
     else:
         send_join_group_prompt(msg.chat.id)
 
@@ -480,7 +480,7 @@ Here are all the commands available to you\. Click on any command to use it\.
 📖 `/section` \- Get a summary of a law section \(e\.g\., `/section 141`\)\.
 📄 `/mysheet` \- Get the link to the connected Google Sheet\.
 """
-    bot.send_message(msg.chat.id, help_text, parse_mode="MarkdownV2")
+    bot.send_message(msg.chat.id, help_text, parse_mode="Markdown")
 # === ADD THIS ENTIRE NEW FUNCTION ===
 
 @bot.message_handler(commands=['leaderboard'])
@@ -501,7 +501,7 @@ def handle_leaderboard_command(msg: types.Message):
             leaderboard_text += f"{rank_icon} {safe_user_name} \- *{user['score']} points*\n"
         
         leaderboard_text += "\nKeep answering the daily quizzes to climb the ranks\ 🔥"
-        bot.send_message(GROUP_ID, leaderboard_text, parse_mode="MarkdownV2")
+        bot.send_message(GROUP_ID, leaderboard_text, parse_mode="Markdown")
         bot.send_message(msg.chat.id, "✅ Leaderboard has been posted in the group.")
     except Exception as e:
         print(f"Error in /leaderboard command: {traceback.format_exc()}")
@@ -602,7 +602,7 @@ def handle_today_quiz(msg: types.Message):
         bot.send_message(msg.chat.id, "😕 Today's quiz details have not been set yet. The admin can set it using /setquiz.")
         return
     details_text = TODAY_QUIZ_DETAILS.get("details_text", "Error: Quiz details are set but text is missing.")
-    bot.send_message(msg.chat.id, details_text, parse_mode="MarkdownV2")
+    bot.send_message(msg.chat.id, details_text, parse_mode="Markdown")
 # THIS IS THE COMPLETE AND CORRECT CODE FOR THE /createpoll FEATURE
 # =============================================================================
 # 8.5. INTERACTIVE COMMANDS (POLLS, QUIZZES, ETC.) - CORRECTED BLOCK
@@ -1109,7 +1109,7 @@ def handle_feedback_command(msg: types.Message):
             f"*Message:*\n{safe_feedback_text}"
         )
         
-        bot.send_message(ADMIN_USER_ID, feedback_msg, parse_mode="MarkdownV2")
+        bot.send_message(ADMIN_USER_ID, feedback_msg, parse_mode="Markdown")
         
         # CORRECTED: Removed "!"
         bot.send_message(msg.chat.id, "✅ Thank you for your feedback. It has been sent to the admin. 🙏")
@@ -1311,7 +1311,7 @@ def handle_congratulate_command(msg: types.Message):
         # CORRECTED: '!' replaced. Note the escaped '.' -> '\.' for MarkdownV2
         congrats_message += "\nKeep pushing your limits, everyone. The next leaderboard is waiting for you\. 🔥"
         
-        bot.send_message(msg.chat.id, congrats_message, parse_mode="MarkdownV2")
+        bot.send_message(msg.chat.id, congrats_message, parse_mode="Markdown")
         
         try:
             bot.delete_message(msg.chat.id, msg.message_id)
@@ -1796,7 +1796,7 @@ def handle_askdoubt(msg: types.Message):
             f"➡️ *#Doubt{related_doubt['id']}:* _{safe_question_preview}\.\.\._\n\n"
             "Please confirm:",
             reply_markup=markup,
-            parse_mode="MarkdownV2"
+            parse_mode="Markdown"
         )
 
         # We don't delete the user's message yet, we wait for their choice.
@@ -1882,7 +1882,7 @@ def handle_answer(msg: types.Message):
             chat_id=msg.chat.id,
             text=f"↪️ *Answer by {safe_answerer_name}:*\n\n{safe_answer_text}",
             reply_to_message_id=original_message_id,
-            parse_mode="MarkdownV2"
+            parse_mode="Markdown"
         )
         
         all_answers.append(sent_answer_msg.message_id)
