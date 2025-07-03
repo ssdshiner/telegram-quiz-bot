@@ -1380,6 +1380,8 @@ def handle_cancel_command(msg: types.Message):
     else:
         # If they were not in any process, inform them
         bot.send_message(msg.chat.id, "🤷 Nothing to cancel. You were not in the middle of any operation.")
+# === REPLACE YOUR ENTIRE handle_feedback_command FUNCTION WITH THIS ===
+
 @bot.message_handler(commands=['feedback'])
 @membership_required
 def handle_feedback_command(msg: types.Message):
@@ -1392,28 +1394,29 @@ def handle_feedback_command(msg: types.Message):
     user_info = msg.from_user
     full_name = f"{user_info.first_name} {user_info.last_name or ''}".strip()
     username = f"@{user_info.username}" if user_info.username else "No username"
-   try:
-    # We escape the user-provided text to prevent formatting errors
-    safe_feedback_text = escape_markdown(feedback_text)
-    safe_full_name = escape_markdown(full_name)
-    safe_username = escape_markdown(username)
 
-    feedback_msg = (
-        f"📬 *New Feedback*\n\n"
-        f"*From:* {safe_full_name} ({safe_username})\n"
-        f"*User ID:* `{user_info.id}`\n\n"
-        f"*Message:*\n{safe_feedback_text}"
-    )
-    
-    # Send the feedback to the admin using the more stable MarkdownV2
-    bot.send_message(ADMIN_USER_ID, feedback_msg, parse_mode="MarkdownV2")
-    
-    # Send confirmation to the user in the group
-    bot.send_message(msg.chat.id, "✅ Thank you for your feedback! It has been sent to the admin. 🙏")
-    
-except Exception as e:
-    bot.send_message(msg.chat.id, "❌ Sorry, something went wrong while sending your feedback.")
-    print(f"Feedback error: {e}")
+    try:
+        # We escape the user-provided text to prevent formatting errors
+        safe_feedback_text = escape_markdown(feedback_text)
+        safe_full_name = escape_markdown(full_name)
+        safe_username = escape_markdown(username)
+
+        feedback_msg = (
+            f"📬 *New Feedback*\n\n"
+            f"*From:* {safe_full_name} ({safe_username})\n"
+            f"*User ID:* `{user_info.id}`\n\n"
+            f"*Message:*\n{safe_feedback_text}"
+        )
+        
+        # Send the feedback to the admin using the more stable MarkdownV2
+        bot.send_message(ADMIN_USER_ID, feedback_msg, parse_mode="MarkdownV2")
+        
+        # Send confirmation to the user in the group
+        bot.send_message(msg.chat.id, "✅ Thank you for your feedback! It has been sent to the admin. 🙏")
+        
+    except Exception as e:
+        bot.send_message(msg.chat.id, "❌ Sorry, something went wrong while sending your feedback.")
+        print(f"Feedback error: {e}")
 # =============================================================================
 # MASTER POLL ANSWER HANDLER (CORRECTED)
 # =============================================================================
