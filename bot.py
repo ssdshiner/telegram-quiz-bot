@@ -314,15 +314,15 @@ def load_data():
     if not supabase:
         print("WARNING: Supabase client not available. Skipping data load.")
         return
-        
+
     global TODAY_QUIZ_DETAILS, QUIZ_SESSIONS, QUIZ_PARTICIPANTS, active_polls
     print("Loading data from Supabase...")
     try:
         response = supabase.table('bot_state').select("*").execute()
-        
+
         if hasattr(response, 'data') and response.data:
             db_data = response.data
-            state = {item['key']: item['value'] for item in db_data}
+            state = {item['key']: item['value'] for item in db_data} # Fix: Indentation error
             
             def deserialize_datetimes(items, key):
                 deserialized_list = []
@@ -335,13 +335,13 @@ def load_data():
                         deserialized_list.append(item)
                 except (json.JSONDecodeError, TypeError, ValueError) as e:
                     print(f"Warning: Could not deserialize {items}. Starting fresh. Error: {e}")
-                return deserialized_list
-            active_polls = deserialize_datetimes('active_polls', 'close_time')
+                return deserialized_list # Fix: Indentation error
+            active_polls = deserialize_datetimes('active_polls', 'close_time') # Fix: Indentation error
 
-            TODAY_QUIZ_DETAILS = json.loads(state.get('today_quiz_details', '{}')) or TODAY_QUIZ_DETAILS
-            
-            QUIZ_SESSIONS = json.loads(state.get('quiz_sessions', '{}')) or QUIZ_SESSIONS
-            QUIZ_PARTICIPANTS = json.loads(state.get('quiz_participants', '{}')) or QUIZ_PARTICIPANTS
+            TODAY_QUIZ_DETAILS = json.loads(state.get('today_quiz_details', '{}')) or TODAY_QUIZ_DETAILS # Fix: Indentation error
+
+            QUIZ_SESSIONS = json.loads(state.get('quiz_sessions', '{}')) or QUIZ_SESSIONS # Fix: Indentation error
+            QUIZ_PARTICIPANTS = json.loads(state.get('quiz_participants', '{}')) or QUIZ_PARTICIPANTS # Fix: Indentation error
             
             print("✅ Data successfully loaded and parsed from Supabase.")
         else:
@@ -349,7 +349,7 @@ def load_data():
 
     except Exception as e:
         print(f"❌ Error loading data from Supabase: {e}")
-        report_error_to_admin(f"Error loading data from Supabase:\n{traceback.format_exc()}")
+        report_error_to_admin(f"Error loading data from Supabase:\n{traceback.format_exc()}") # Fix: Indentation error
         
 def save_data():
     """Saves bot state to Supabase, including active_polls."""
@@ -367,17 +367,17 @@ def save_data():
                 serializable_list.append(item_copy)
             return json.dumps(serializable_list)
 
-        data_to_upsert = [
-            
-            {'key': 'active_polls', 'value': serialize_datetimes(active_polls, 'close_time')},
+        data_to_upsert = [ # Fix: Indentation error
+
+            {'key': 'active_polls', 'value': serialize_datetimes(active_polls, 'close_time')}, # Fix: Indentation error
             {'key': 'today_quiz_details', 'value': json.dumps(TODAY_QUIZ_DETAILS)},
             {'key': 'quiz_sessions', 'value': json.dumps(QUIZ_SESSIONS)},
             {'key': 'quiz_participants', 'value': json.dumps(QUIZ_PARTICIPANTS)},
         ]
-        
+
         supabase.table('bot_state').upsert(data_to_upsert).execute()
     except Exception as e:
-        print(f"❌ Error saving data to Supabase: {e}")
+        print(f"❌ Error saving data to Supabase: {e}") # Fix: Indentation error
         report_error_to_admin(f"Error saving data to Supabase:\n{traceback.format_exc()}")
 # =============================================================================
 # 6. BACKGROUND SCHEDULER (Corrected and Improved)
@@ -390,7 +390,7 @@ last_doubt_reminder_hour = -1
 def background_worker():
     """Runs all scheduled tasks in a continuous loop."""
     global last_quiz_posted_hour, last_doubt_reminder_hour
-    
+
     while True:
         try:
             ist_tz = timezone(timedelta(hours=5, minutes=30))
@@ -412,22 +412,22 @@ def background_worker():
                     if unanswered_count and unanswered_count > 0:
                         reminder_message = f"📢 *Doubt Reminder\* \n\nThere are currently *{unanswered_count} unanswered doubt(s)* in the group\. Let's help each other out\ 🤝"
                         bot.send_message(GROUP_ID, reminder_message, parse_mode="Markdown")
-                        print(f"✅ Sent a reminder for {unanswered_count} unanswered doubts.")
+                        print(f"✅ Sent a reminder for {unanswered_count} unanswered doubts.") # Fix: Indentation error
                 except Exception as e:
                     print(f"❌ Failed to check for doubt reminders: {e}")
                 last_doubt_reminder_hour = current_hour
 
-            
+
             # --- Process and Close Active Polls ---
-            polls_to_process = active_polls[:]
+            polls_to_process = active_polls[:] # Fix: Indentation error
             for poll in polls_to_process:
                 close_time = poll.get('close_time')
                 if isinstance(close_time, datetime.datetime):
                     close_time = close_time.replace(tzinfo=ist_tz)
                     if current_time_ist >= close_time:
                         try:
-                            bot.stop_poll(poll['chat_id'], poll['message_id'])
-                            print(f"✅ Closed poll {poll['message_id']}.")
+                            bot.stop_poll(poll['chat_id'], poll['message_id']) # Fix: Indentation error
+                            print(f"✅ Closed poll {poll['message_id']}.") # Fix: Indentation error
                         except Exception as e:
                             print(f"⚠️ Could not stop poll {poll['message_id']}: {e}")
                         active_polls.remove(poll)
@@ -579,17 +579,17 @@ def load_data():
     if not supabase:
         print("WARNING: Supabase client not available. Skipping data load.")
         return
-        
+
     # Add active_polls to the list of global variables we are loading
     global  TODAY_QUIZ_DETAILS, QUIZ_SESSIONS, QUIZ_PARTICIPANTS, active_polls
     print("Loading data from Supabase...")
     try:
         response = supabase.table('bot_state').select("*").execute()
-        
+
         if hasattr(response, 'data') and response.data:
             db_data = response.data
             state = {item['key']: item['value'] for item in db_data}
-            
+
             # --- NEW: Load active polls ---
             loaded_polls_str = state.get('active_polls', '[]')
             loaded_polls = json.loads(loaded_polls_str)
@@ -598,13 +598,13 @@ def load_data():
                 try:
                     if 'close_time' in poll:
                        poll['close_time'] = datetime.datetime.strptime(poll['close_time'], '%Y-%m-%d %H:%M:%S')
-                       deserialized_polls.append(poll)
+                       deserialized_polls.append(poll) # Fix: Indentation error
                 except (ValueError, TypeError):
                     continue
             active_polls = deserialized_polls
 
             # --- Load all other data ---
-            TODAY_QUIZ_DETAILS = json.loads(state.get('today_quiz_details', '{}')) or TODAY_QUIZ_DETAILS
+            TODAY_QUIZ_DETAILS = json.loads(state.get('today_quiz_details', '{}')) or TODAY_QUIZ_DETAILS # Fix: Indentation error
             
             QUIZ_SESSIONS = json.loads(state.get('quiz_sessions', '{}')) or QUIZ_SESSIONS
             QUIZ_PARTICIPANTS = json.loads(state.get('quiz_participants', '{}')) or QUIZ_PARTICIPANTS
@@ -635,16 +635,16 @@ def save_data():
 
         # --- Prepare all data for upserting ---
         data_to_upsert = [
-            
-            {'key': 'today_quiz_details', 'value': json.dumps(TODAY_QUIZ_DETAILS)},
+
+            {'key': 'today_quiz_details', 'value': json.dumps(TODAY_QUIZ_DETAILS)}, # Fix: Indentation error
             {'key': 'quiz_sessions', 'value': json.dumps(QUIZ_SESSIONS)},
             {'key': 'quiz_participants', 'value': json.dumps(QUIZ_PARTICIPANTS)},
             # Add the newly serialized polls to the list
             {'key': 'active_polls', 'value': json.dumps(serializable_polls)},
         ]
-        
+
         supabase.table('bot_state').upsert(data_to_upsert).execute()
-    except Exception as e:
+    except Exception as e: # Fix: Indentation error
         print(f"❌ Error saving data to Supabase: {e}")
         traceback.print_exc()
 
@@ -846,67 +846,67 @@ def handle_mysheet(msg: types.Message):
 @bot.message_handler(commands=['message'])
 @admin_required
 def handle_message_command(msg: types.Message):
-"""Sends a direct message to the group in one go."""
-try:
-# Extract the message text after the command
-message_text = msg.text.replace('/message', '').strip()
-if not message_text:
-bot.send_message(msg.chat.id, "❌ Please type a message after the command.\nExample: /message Hello everyone!", parse_mode="Markdown")
-return
-    # Send the message to the main group
-    bot.send_message(GROUP_ID, message_text, parse_mode="Markdown")
+    """Sends a direct message to the group in one go."""
+    try:
+        # Extract the message text after the command
+        message_text = msg.text.replace('/message', '').strip()
+        if not message_text:
+            bot.send_message(msg.chat.id, "❌ Please type a message after the command.\nExample: /message Hello everyone!", parse_mode="Markdown")
+            return
+        # Send the message to the main group
+        bot.send_message(GROUP_ID, message_text, parse_mode="Markdown")
+        
+        # Send a confirmation back to the admin
+        bot.send_message(msg.chat.id, "✅ Your message has been sent to the group!")
     
-    # Send a confirmation back to the admin
-    bot.send_message(msg.chat.id, "✅ Your message has been sent to the group!")
-
-except Exception as e:
-    error_message = f"Failed to send direct message: {e}"
-    print(error_message)
-    report_error_to_admin(traceback.format_exc())
-    bot.send_message(msg.chat.id, f"❌ Oops! Something went wrong: {e}")</code></pre>
+    except Exception as e:
+        error_message = f"Failed to send direct message: {e}"
+        print(error_message)
+        report_error_to_admin(traceback.format_exc())
+        bot.send_message(msg.chat.id, f"❌ Oops! Something went wrong: {e}")
 # NEW: Smart Notification Command
 @bot.message_handler(commands=['notify'])
 @admin_required
 def handle_notify_command(msg: types.Message):
-"""Sends a quiz notification. Starts a live countdown if time is <= 10 mins."""
-try:
-parts = msg.text.split(' ')
-if len(parts) < 2:
-bot.send_message(msg.chat.id, "❌ Please specify the minutes.\nExample: /notify 15", parse_mode="Markdown")
-return
-    minutes = int(parts[1])
-    if minutes <= 0:
-        bot.send_message(msg.chat.id, "❌ Please enter a positive number for minutes.")
-        return
+    """Sends a quiz notification. Starts a live countdown if time is <= 10 mins."""
+    try:
+        parts = msg.text.split(' ')
+        if len(parts) < 2:
+            bot.send_message(msg.chat.id, "❌ Please specify the minutes.\nExample: /notify 15", parse_mode="Markdown")
+            return
+        minutes = int(parts[1])
+        if minutes <= 0:
+            bot.send_message(msg.chat.id, "❌ Please enter a positive number for minutes.")
+            return
 
-    # If time is 10 mins or less, start the LIVE countdown
-    if minutes <= 10:
-        duration_seconds = minutes * 60
-        initial_text = f"⏳ *Quiz starts in: {minutes:02d}:00* ⏳\n\nGet ready with your pens and paper!"
-        
-        # Send the first message to the group
-        sent_msg = bot.send_message(GROUP_ID, initial_text, parse_mode="Markdown")
-        
-        # Start the countdown in a new thread
-        countdown_thread = threading.Thread(target=live_countdown, args=(GROUP_ID, sent_msg.message_id, duration_seconds))
-        countdown_thread.daemon = True # Allows the main program to exit even if threads are running
-        countdown_thread.start()
-        
-        bot.send_message(msg.chat.id, f"✅ Live countdown for {minutes} minute(s) started in the group!")
+        # If time is 10 mins or less, start the LIVE countdown
+        if minutes <= 10:
+            duration_seconds = minutes * 60
+            initial_text = f"⏳ *Quiz starts in: {minutes:02d}:00* ⏳\n\nGet ready with your pens and paper!"
 
-    # If time is more than 10 mins, send a simple static message
-    else:
-        message_text = f"🔔 **Reminder:**\n\nThe quiz is scheduled to start in approximately *{minutes} minutes*. Get ready!"
-        bot.send_message(GROUP_ID, message_text, parse_mode="Markdown")
-        bot.send_message(msg.chat.id, f"✅ Notification for {minutes} minutes sent to the group!")
+            # Send the first message to the group
+            sent_msg = bot.send_message(GROUP_ID, initial_text, parse_mode="Markdown")
 
-except (ValueError, IndexError):
-    bot.send_message(msg.chat.id, "❌ Invalid format. Please use a number for minutes. Example: `/notify 10`")
-except Exception as e:
-    error_message = f"Failed to send notification: {e}"
-    print(error_message)
-    report_error_to_admin(traceback.format_exc())
-    bot.send_message(msg.chat.id, f"❌ Oops! Something went wrong: {e}")</code></pre>
+            # Start the countdown in a new thread
+            countdown_thread = threading.Thread(target=live_countdown, args=(GROUP_ID, sent_msg.message_id, duration_seconds))
+            countdown_thread.daemon = True # Allows the main program to exit even if threads are running
+            countdown_thread.start()
+
+            bot.send_message(msg.chat.id, f"✅ Live countdown for {minutes} minute(s) started in the group!")
+
+        # If time is more than 10 mins, send a simple static message
+        else:
+            message_text = f"🔔 **Reminder:**\n\nThe quiz is scheduled to start in approximately *{minutes} minutes*. Get ready!"
+            bot.send_message(GROUP_ID, message_text, parse_mode="Markdown")
+            bot.send_message(msg.chat.id, f"✅ Notification for {minutes} minutes sent to the group!")
+
+    except (ValueError, IndexError):
+        bot.send_message(msg.chat.id, "❌ Invalid format. Please use a number for minutes. Example: `/notify 10`")
+    except Exception as e:
+        error_message = f"Failed to send notification: {e}"
+        print(error_message)
+        report_error_to_admin(traceback.format_exc())
+        bot.send_message(msg.chat.id, f"❌ Oops! Something went wrong: {e}")
 # ...existing code...
 @bot.message_handler(commands=['quickquiz'])
 @admin_required
@@ -1039,7 +1039,7 @@ def process_quiz_time(msg: types.Message):
         cleanup_user_state(user_id)
         bot.send_message(user_id, "❌ Operation cancelled.")
         return
-        
+
     user_states[user_id]['current_quiz']['time'] = msg.text.strip()
     
     user_states[user_id]['step'] = 'awaiting_quiz_subject'
@@ -1053,7 +1053,7 @@ def process_quiz_subject(msg: types.Message):
         cleanup_user_state(user_id)
         bot.send_message(user_id, "❌ Operation cancelled.")
         return
-        
+
     user_states[user_id]['current_quiz']['subject'] = msg.text.strip()
     
     user_states[user_id]['step'] = 'awaiting_quiz_chapter'
@@ -1067,7 +1067,7 @@ def process_quiz_chapter(msg: types.Message):
         cleanup_user_state(user_id)
         bot.send_message(user_id, "❌ Operation cancelled.")
         return
-        
+
     user_states[user_id]['current_quiz']['chapter'] = msg.text.strip()
     
     user_states[user_id]['step'] = 'awaiting_quiz_topic'
@@ -1081,7 +1081,7 @@ def process_quiz_topic(msg: types.Message):
         cleanup_user_state(user_id)
         bot.send_message(user_id, "❌ Operation cancelled.")
         return
-        
+
     user_states[user_id]['current_quiz']['topic'] = msg.text.strip()
     
     # Add the completed quiz to the list for the day
@@ -1166,7 +1166,7 @@ def process_text_quiz(msg: types.Message):
         if len(lines) < 6: raise ValueError("Invalid format. Please provide a question, 4 options, and an answer, each on a new line.")
         
         question = lines[0].replace('Question:', '').strip()
-        options = [line.strip() for line in lines[1:5]]
+        options = [line.strip() for line in lines[1:5]] # Fix: Indentation error
         answer = lines[5].replace('Answer:', '').strip().upper()
         
         if answer not in ['A', 'B', 'C', 'D']: raise ValueError("Answer must be A, B, C, or D.")
@@ -1278,7 +1278,7 @@ def handle_poll_answers(poll_answer: types.PollAnswer):
                     'is_correct': is_correct,
                     'answered_at': datetime.datetime.now()
                 }
-            elif user.id in QUIZ_PARTICIPANTS.get(poll_id, {}):
+            elif user.id in QUIZ_PARTICIPANTS.get(poll_id, {}): # Fix: Indentation error
                 del QUIZ_PARTICIPANTS[poll_id][user.id]
             return
 
@@ -1315,7 +1315,7 @@ def handle_quiz_result_command(msg: types.Message):
         quiz_start_time = datetime.datetime.fromisoformat(quiz_start_time_iso)
         
         participants = QUIZ_PARTICIPANTS.get(last_quiz_id)
-        
+
         if not participants:
             bot.send_message(GROUP_ID, "🏁 The last quiz had no participants.")
             return
@@ -1323,8 +1323,8 @@ def handle_quiz_result_command(msg: types.Message):
         correct_participants = []
         for uid, data in participants.items():
             if data.get('is_correct'):
-                time_taken = (data['answered_at'] - quiz_start_time).total_seconds()
-                correct_participants.append({
+                time_taken = (data['answered_at'] - quiz_start_time).total_seconds() # Fix: Indentation error
+                correct_participants.append({ # Fix: Indentation error
                     'name': data['user_name'],
                     'time': time_taken
                 })
@@ -1430,7 +1430,7 @@ def handle_congratulate_command(msg: types.Message):
                 f" ► Score: *{winner['score']}/{total_questions}* ({percentage:.2f}%)\n"
                 f" ► Time: *{safe_time_str}*\n\n"
             )
-        
+
         congrats_message += "*━━━ Performance Insights ━━━*\n"
         fastest_winner_name = escape_markdown(min(top_winners, key=lambda x: x['time_in_seconds'])['name'])
         # CORRECTED: '!' replaced with '.'
@@ -1996,7 +1996,7 @@ def handle_answer(msg: types.Message):
         if not fetch_response.data:
             bot.send_message(msg.chat.id, f"❌ Doubt with ID #{doubt_id} not found.")
             return
-        
+
         doubt_data = fetch_response.data[0]
         original_message_id = doubt_data['message_id']
         all_answers = doubt_data.get('all_answer_message_ids', [])
@@ -2012,7 +2012,7 @@ def handle_answer(msg: types.Message):
             reply_to_message_id=original_message_id,
             parse_mode="Markdown"
         )
-        
+
         all_answers.append(sent_answer_msg.message_id)
         supabase.table('doubts').update({'all_answer_message_ids': all_answers}).eq('id', doubt_id).execute()
 
@@ -2037,7 +2037,7 @@ def handle_best_answer(msg: types.Message):
         if not msg.reply_to_message:
             bot.reply_to(msg, "Please reply to the answer message you want to mark as 'best'.")
             return
-            
+
         doubt_id = int(parts[1])
         best_answer_msg = msg.reply_to_message
         
@@ -2045,7 +2045,7 @@ def handle_best_answer(msg: types.Message):
         if not fetch_response.data:
             bot.reply_to(msg, f"❌ Doubt with ID #{doubt_id} not found.")
             return
-            
+
         doubt_data = fetch_response.data[0]
         
         if not (msg.from_user.id == doubt_data['student_id'] or is_admin(msg.from_user.id)):
@@ -2080,7 +2080,7 @@ def handle_best_answer(msg: types.Message):
         for answer_id in all_answer_ids:
             try:
                 bot.delete_message(msg.chat.id, answer_id)
-            except Exception:
+            except Exception: # Fix: Indentation error
                 pass 
         
         bot.delete_message(msg.chat.id, msg.message_id)
@@ -2122,7 +2122,7 @@ def process_marathon_duration_and_start(msg: types.Message):
             raise ValueError("Duration must be between 10 and 60 seconds.")
 
         bot.send_message(msg.chat.id, f"✅ Okay, each question will last for {duration} seconds. Starting the marathon in the group...")
-        
+
         marathon_thread = threading.Thread(target=run_quiz_marathon, args=(msg.chat.id, duration))
         marathon_thread.start()
 
@@ -2147,7 +2147,7 @@ def handle_stop_marathon_command(msg: types.Message):
 def run_quiz_marathon(admin_chat_id, duration_per_question):
     """The main logic for the quiz marathon. It can now be stopped mid-way."""
     global MARATHON_STATE
-    
+
     try:
         # 1. Set marathon state
         MARATHON_STATE = {
@@ -2160,8 +2160,8 @@ def run_quiz_marathon(admin_chat_id, duration_per_question):
         # 2. Fetch questions
         sheet = get_gsheet()
         if not sheet: raise Exception("Could not connect to Google Sheets.")
-        questions_list = sheet.get_all_records()
-        if not questions_list: raise Exception("The Google Sheet is empty.")
+        questions_list = sheet.get_all_records() # Fix: Indentation error
+        if not questions_list: raise Exception("The Google Sheet is empty.") # Fix: Indentation error
         
         total_questions = len(questions_list)
         # CORRECTED: Removed "!" from the announcement
@@ -2180,7 +2180,7 @@ def run_quiz_marathon(admin_chat_id, duration_per_question):
             correct_letter = str(quiz_data.get('Correct', '')).upper()
             correct_index = ['A', 'B', 'C', 'D'].index(correct_letter)
             explanation = quiz_data.get('Explanation', '')
-            
+
             bot.send_message(GROUP_ID, f"➡️ Question {i+1} of {total_questions}...")
             
             poll = bot.send_poll(
@@ -2200,10 +2200,10 @@ def run_quiz_marathon(admin_chat_id, duration_per_question):
         
         # 4. Announce results
         # CORRECTED: Removed "!" from the announcement
-        bot.send_message(GROUP_ID, "🎉 **Marathon Finished** 🎉\n\nCalculating the results, please wait...", parse_mode="Markdown")
+        bot.send_message(GROUP_ID, "🎉 **Marathon Finished** 🎉\n\nCalculating the results, please wait...", parse_mode="Markdown") # Fix: Indentation error
         time.sleep(2)
         announce_marathon_results(admin_chat_id)
-
+ # Fix: Indentation error
     except Exception as e:
         error_message = f"Quiz Marathon failed: {traceback.format_exc()}"
         print(error_message)
@@ -2226,7 +2226,7 @@ def announce_marathon_results(admin_chat_id):
         rank = medals[i] if i < 3 else f" {i+1}."
         result_text += f"\n{rank} {data['name']} – *{data['score']} correct*"
     
-    bot.send_message(GROUP_ID, result_text, parse_mode="Markdown")
+    bot.send_message(GROUP_ID, result_text, parse_mode="Markdown") # Fix: Indentation error
     bot.send_message(admin_chat_id, "✅ Marathon results have been announced.")
 @bot.message_handler(content_types=['new_chat_members'])
 def handle_new_member(msg: types.Message):
