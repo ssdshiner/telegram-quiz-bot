@@ -165,33 +165,33 @@ def escape_markdown(text: str) -> str:
     return ''.join(f'\\{char}' if char in escape_chars else char for char in text)
 # NEW: Live Countdown Helper
 def live_countdown(chat_id, message_id, duration_seconds):
-"""
+    """
 Edits a message every second to create a live countdown timer.
 Runs in a separate thread to not block the bot.
-"""
-try:
-# Loop from the total duration down to zero
-for i in range(duration_seconds, -1, -1):
-mins, secs = divmod(i, 60)
-countdown_str = f"{mins:02d}:{secs:02d}"
-        # Change the message text based on time remaining
-        if i > 0:
-            text = f"⏳ *Quiz starts in: {countdown_str}* ⏳\n\nGet ready with your pens and paper!"
-        else:
-            text = "⏰ **Time's up! The quiz is starting now!** 🔥"
+    """
+    try:
+    # Loop from the total duration down to zero
+    for i in range(duration_seconds, -1, -1):
+    mins, secs = divmod(i, 60)
+    countdown_str = f"{mins:02d}:{secs:02d}"
+            # Change the message text based on time remaining
+            if i > 0:
+                text = f"⏳ *Quiz starts in: {countdown_str}* ⏳\n\nGet ready with your pens and paper!"
+            else:
+                text = "⏰ **Time's up! The quiz is starting now!** 🔥"
 
-        # Use a try-except block inside the loop in case the message is deleted
-        try:
-            bot.edit_message_text(text, chat_id, message_id, parse_mode="Markdown")
-        except Exception as edit_error:
-            # If editing fails, just stop the countdown thread
-            print(f"Could not edit message for countdown, it might be deleted. Error: {edit_error}")
-            break
-        
-        time.sleep(1) # Wait for one second
-except Exception as e:
-    print(f"Error in countdown thread: {e}")
-    # We don't report this to admin to avoid spam for minor issues like deleted messages</code></pre>
+            # Use a try-except block inside the loop in case the message is deleted
+            try:
+                bot.edit_message_text(text, chat_id, message_id, parse_mode="Markdown")
+            except Exception as edit_error:
+                # If editing fails, just stop the countdown thread
+                print(f"Could not edit message for countdown, it might be deleted. Error: {edit_error}")
+                break
+            
+            time.sleep(1) # Wait for one second
+    except Exception as e:
+        print(f"Error in countdown thread: {e}")
+        # We don't report this to admin to avoid spam for minor issues like deleted messages
 def post_daily_quiz():
     """Fetches a random, unused question from Supabase and posts it as a quiz."""
     if not supabase: return
