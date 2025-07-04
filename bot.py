@@ -166,14 +166,13 @@ def escape_markdown(text: str) -> str:
 # NEW: Live Countdown Helper
 def live_countdown(chat_id, message_id, duration_seconds):
     """
-Edits a message every second to create a live countdown timer.
-Runs in a separate thread to not block the bot.
+    Edits a message every second to create a live countdown timer.
+    Runs in a separate thread to not block the bot.
     """
     try:
-    # Loop from the total duration down to zero
-    for i in range(duration_seconds, -1, -1):
-    mins, secs = divmod(i, 60)
-    countdown_str = f"{mins:02d}:{secs:02d}"
+        for i in range(duration_seconds, -1, -1):
+            mins, secs = divmod(i, 60)
+            countdown_str = f"{mins:02d}:{secs:02d}"
             # Change the message text based on time remaining
             if i > 0:
                 text = f"⏳ *Quiz starts in: {countdown_str}* ⏳\n\nGet ready with your pens and paper!"
@@ -187,7 +186,7 @@ Runs in a separate thread to not block the bot.
                 # If editing fails, just stop the countdown thread
                 print(f"Could not edit message for countdown, it might be deleted. Error: {edit_error}")
                 break
-            
+
             time.sleep(1) # Wait for one second
     except Exception as e:
         print(f"Error in countdown thread: {e}")
@@ -908,6 +907,7 @@ except Exception as e:
     print(error_message)
     report_error_to_admin(traceback.format_exc())
     bot.send_message(msg.chat.id, f"❌ Oops! Something went wrong: {e}")</code></pre>
+# ...existing code...
 @bot.message_handler(commands=['quickquiz'])
 @admin_required
 def handle_quick_quiz_command(msg: types.Message):
