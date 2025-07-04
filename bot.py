@@ -209,7 +209,7 @@ def live_countdown(chat_id, message_id, duration_seconds):
             countdown_str = f"{mins:02d}:{secs:02d}"
             # Change the message text based on time remaining
             if i > 0:
-                text = f"⏳ *Quiz starts in: {countdown_str}* ⏳\n\nGet ready with your pens and paper!"
+                text = f"⏳ *Quiz starts in: {countdown_str}* ⏳\n\nGet ready with your Concepts cleared and alarm ring on time."
             else:
                 text = "⏰ **Time's up! The quiz is starting now!** 🔥"
 
