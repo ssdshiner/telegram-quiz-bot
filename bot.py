@@ -145,6 +145,35 @@ def initialize_gsheet():
 # =============================================================================
 # 4. UTILITY & HELPER FUNCTIONS
 # =============================================================================
+# NEW: Live Countdown Helper
+def live_countdown(chat_id, message_id, duration_seconds):
+"""
+Edits a message every second to create a live countdown timer.
+Runs in a separate thread to not block the bot.
+"""
+try:
+# Loop from the total duration down to zero
+for i in range(duration_seconds, -1, -1):
+mins, secs = divmod(i, 60)
+countdown_str = f"{mins:02d}:{secs:02d}"
+        # Change the message text based on time remaining
+        if i > 0:
+            text = f"⏳ *Quiz starts in: {countdown_str}* ⏳\n\nGet ready with your pens and paper!"
+        else:
+            text = "⏰ **Time's up! The quiz is starting now!** 🔥"
+
+        # Use a try-except block inside the loop in case the message is deleted
+        try:
+            bot.edit_message_text(text, chat_id, message_id, parse_mode="Markdown")
+        except Exception as edit_error:
+            # If editing fails, just stop the countdown thread
+            print(f"Could not edit message for countdown, it might be deleted. Error: {edit_error}")
+            break
+        
+        time.sleep(1) # Wait for one second
+except Exception as e:
+    print(f"Error in countdown thread: {e}")
+    # We don't report this to admin to avoid spam for minor issues like deleted messages
 def report_error_to_admin(error_message: str):
     """Sends a formatted error message to the admin."""
     try:
@@ -493,6 +522,8 @@ Here are all the commands available to you\. Click on any command to use it\.
 💪 `/motivate` \- Send a random motivational quote\.
 📚 `/studytip` \- Send a useful study tip\.
 📣 `/announce` \- Broadcast a message to the group\.
+💬 /message - Send a direct message in one go.
+🔔 /notify - Alert members about a quiz (e.g., /notify 15).
 
 *━━━ Quiz & Marathon Management ━━━*
 🗓️ `/setquiz` \- Set today's quiz topics conversationally\.
@@ -813,6 +844,71 @@ def handle_mysheet(msg: types.Message):
 # =============================================================================
 # 8.6. GENERAL ADMIN COMMANDS (CLEANED UP)
 # =============================================================================
+# NEW: Direct Message Command
+@bot.message_handler(commands=['message'])
+@admin_required
+def handle_message_command(msg: types.Message):
+"""Sends a direct message to the group in one go."""
+try:
+# Extract the message text after the command
+message_text = msg.text.replace('/message', '').strip()
+if not message_text:
+bot.send_message(msg.chat.id, "❌ Please type a message after the command.\nExample: /message Hello everyone!", parse_mode="Markdown")
+return
+    # Send the message to the main group
+    bot.send_message(GROUP_ID, message_text, parse_mode="Markdown")
+    
+    # Send a confirmation back to the admin
+    bot.send_message(msg.chat.id, "✅ Your message has been sent to the group!")
+
+except Exception as e:
+    error_message = f"Failed to send direct message: {e}"
+    print(error_message)
+    report_error_to_admin(traceback.format_exc())
+    bot.send_message(msg.chat.id, f"❌ Oops! Something went wrong: {e}")</code></pre>
+# NEW: Smart Notification Command
+@bot.message_handler(commands=['notify'])
+@admin_required
+def handle_notify_command(msg: types.Message):
+"""Sends a quiz notification. Starts a live countdown if time is <= 10 mins."""
+try:
+parts = msg.text.split(' ')
+if len(parts) < 2:
+bot.send_message(msg.chat.id, "❌ Please specify the minutes.\nExample: /notify 15", parse_mode="Markdown")
+return
+    minutes = int(parts[1])
+    if minutes <= 0:
+        bot.send_message(msg.chat.id, "❌ Please enter a positive number for minutes.")
+        return
+
+    # If time is 10 mins or less, start the LIVE countdown
+    if minutes <= 10:
+        duration_seconds = minutes * 60
+        initial_text = f"⏳ *Quiz starts in: {minutes:02d}:00* ⏳\n\nGet ready with your pens and paper!"
+        
+        # Send the first message to the group
+        sent_msg = bot.send_message(GROUP_ID, initial_text, parse_mode="Markdown")
+        
+        # Start the countdown in a new thread
+        countdown_thread = threading.Thread(target=live_countdown, args=(GROUP_ID, sent_msg.message_id, duration_seconds))
+        countdown_thread.daemon = True # Allows the main program to exit even if threads are running
+        countdown_thread.start()
+        
+        bot.send_message(msg.chat.id, f"✅ Live countdown for {minutes} minute(s) started in the group!")
+
+    # If time is more than 10 mins, send a simple static message
+    else:
+        message_text = f"🔔 **Reminder:**\n\nThe quiz is scheduled to start in approximately *{minutes} minutes*. Get ready!"
+        bot.send_message(GROUP_ID, message_text, parse_mode="Markdown")
+        bot.send_message(msg.chat.id, f"✅ Notification for {minutes} minutes sent to the group!")
+
+except (ValueError, IndexError):
+    bot.send_message(msg.chat.id, "❌ Invalid format. Please use a number for minutes. Example: `/notify 10`")
+except Exception as e:
+    error_message = f"Failed to send notification: {e}"
+    print(error_message)
+    report_error_to_admin(traceback.format_exc())
+    bot.send_message(msg.chat.id, f"❌ Oops! Something went wrong: {e}")</code></pre>
 @bot.message_handler(commands=['quickquiz'])
 @admin_required
 def handle_quick_quiz_command(msg: types.Message):
