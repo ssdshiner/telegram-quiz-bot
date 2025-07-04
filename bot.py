@@ -191,9 +191,9 @@ def post_daily_quiz():
             type='quiz',
             correct_option_id=correct_index,
             is_anonymous=False,
-            open_period=3600  # 1-hour quiz
+            open_period=600  # 10-minutes quiz
         )
-        bot.send_message(GROUP_ID, "👆 You have 1 hour to answer the daily quiz Good luck", reply_to_message_id=poll.message_id)
+        bot.send_message(GROUP_ID, "👆 You have 10 minutes to answer the daily quiz Good luck", reply_to_message_id=poll.message_id)
         supabase.table('questions').update({'used': 'true'}).eq('id', question_id).execute()
         print(f"✅ Daily quiz posted using question ID: {question_id}")
     except Exception as e:
