@@ -11,6 +11,7 @@ import traceback
 import threading
 import time
 import random
+import requests
 from flask import Flask, request
 from telebot import TeleBot, types
 from oauth2client.service_account import ServiceAccountCredentials
@@ -45,6 +46,38 @@ except (ValueError, TypeError):
 # --- Bot and Flask App Initialization ---
 bot = TeleBot(BOT_TOKEN, threaded=False)
 app = Flask(__name__)
+# =============================================================================
+# 2.5. NETWORK STABILITY PATCH (MONKEY-PATCHING)
+# =============================================================================
+# This code makes the bot more resilient to temporary network errors.
+
+from telebot import apihelper
+
+old_make_request = apihelper._make_request # Save the original function
+
+def new_make_request(token, method_name, method='get', params=None, files=None):
+    """
+    A patched version of _make_request that automatically retries on connection errors.
+    """
+    retry_count = 3  # How many times to retry
+    retry_delay = 2  # Seconds to wait between retries
+
+    for i in range(retry_count):
+        try:
+            # Call the original function to do the actual work
+            return old_make_request(token, method_name, method, params, files)
+        except (requests.exceptions.ConnectionError, requests.exceptions.ReadTimeout) as e:
+            print(f"⚠️ Network error ({type(e).__name__}), attempt {i + 1} of {retry_count}. Retrying in {retry_delay}s...")
+            if i + 1 == retry_count:
+                print(f"❌ Network error: All {retry_count} retries failed. Giving up.")
+                raise  # If all retries fail, raise the last exception
+            time.sleep(retry_delay)
+
+# Replace the library's function with our new, improved version
+apihelper._make_request = new_make_request
+print("✅ Applied network stability patch.")
+
+# =============================================================================
 # --- Supabase Client Initialization ---
 supabase: Client = None
 try:
