@@ -106,6 +106,7 @@ except Exception as e:
 
 # --- Global In-Memory Storage ---
 active_polls = []
+scheduled_tasks = []
 QUIZ_SESSIONS = {}
 QUIZ_PARTICIPANTS = {}
 TODAY_QUIZ_DETAILS = {"details_text": "Not Set", "is_set": False}
@@ -555,7 +556,23 @@ def background_worker():
                                 f"⚠️ Could not stop poll {poll['message_id']}: {e}"
                             )
                         active_polls.remove(poll)
-
+            # --- NEW: Process Scheduled Tasks (Our To-Do List) ---
+            # We use [:] to make a copy, so we can safely remove items while looping
+            for task in scheduled_tasks[:]:
+                # Check if the scheduled time for the task has arrived
+                if datetime.datetime.now() >= task['run_at']:
+                    try:
+                        # Send the message that was scheduled
+                        bot.send_message(task['chat_id'],
+                                         task['text'],
+                                         parse_mode="Markdown")
+                        print(f"✅ Executed scheduled task: {task['text']}")
+                    except Exception as task_error:
+                        print(
+                            f"❌ Failed to execute scheduled task. Error: {task_error}"
+                        )
+                    # Remove the task from the list after trying to run it
+                    scheduled_tasks.remove(task)
             # --- Periodically Save Data ---
             save_data()
 
@@ -1102,55 +1119,52 @@ def handle_message_command(msg: types.Message):
         bot.send_message(msg.chat.id, f"❌ Oops! Something went wrong: {e}")
 
 
-# NEW: Smart Notification Command
+# NEW: Smart Notification Command (Using the new "To-Do List" system)
 @bot.message_handler(commands=['notify'])
 @admin_required
 def handle_notify_command(msg: types.Message):
-    """Sends a quiz notification. Starts a live countdown if time is <= 10 mins."""
+    """
+    Sends a quiz notification. If time is <= 10 mins, it schedules a follow-up message.
+    """
     try:
         parts = msg.text.split(' ')
         if len(parts) < 2:
             bot.send_message(
                 msg.chat.id,
-                "❌ Please specify the minutes.\nExample: /notify 15",
+                "❌ Please specify the minutes.\nExample: `/notify 15`",
                 parse_mode="Markdown")
             return
+
         minutes = int(parts[1])
         if minutes <= 0:
             bot.send_message(msg.chat.id,
                              "❌ Please enter a positive number for minutes.")
             return
 
-        # If time is 10 mins or less, start the LIVE countdown
+        # Send the first message immediately
+        initial_text = f"⏳ Quiz starts in: {minutes} minute(s) ⏳\n\nGet ready with your pens and paper!"
+        bot.send_message(GROUP_ID, initial_text, parse_mode="Markdown")
+
+        # If time is 10 mins or less, schedule the "Time's up" message.
         if minutes <= 10:
-            duration_seconds = minutes * 60
-            initial_text = f"⏳ *Quiz starts in: {minutes:02d}:00* ⏳\n\nGet ready with your pens and paper!"
+            # Calculate when the follow-up message should be sent
+            run_time = datetime.datetime.now() + datetime.timedelta(
+                minutes=minutes)
 
-            # Send the first message to the group
-            sent_msg = bot.send_message(GROUP_ID,
-                                        initial_text,
-                                        parse_mode="Markdown")
+            # Create the task dictionary (our "To-Do" note)
+            task = {
+                'run_at': run_time,
+                'chat_id': GROUP_ID,
+                'text': "⏰ **Time's up! The quiz is starting now!** 🔥"
+            }
 
-            # Start the countdown in a new thread
-            countdown_thread = threading.Thread(target=live_countdown,
-                                                args=(GROUP_ID,
-                                                      sent_msg.message_id,
-                                                      duration_seconds))
-            countdown_thread.daemon = True  # Allows the main program to exit even if threads are running
-            countdown_thread.start()
+            # Add the task to our global list
+            scheduled_tasks.append(task)
+            print(f"ℹ️ Scheduled a new task: {task}")
 
-            bot.send_message(
-                msg.chat.id,
-                f"✅ Live countdown for {minutes} minute(s) started in the group!"
-            )
-
-        # If time is more than 10 mins, send a simple static message
-        else:
-            message_text = f"🔔 **Reminder:**\n\nThe quiz is scheduled to start in approximately *{minutes} minutes*. Get ready!"
-            bot.send_message(GROUP_ID, message_text, parse_mode="Markdown")
-            bot.send_message(
-                msg.chat.id,
-                f"✅ Notification for {minutes} minutes sent to the group!")
+        bot.send_message(
+            msg.chat.id,
+            f"✅ Notification for {minutes} minute(s) sent to the group!")
 
     except (ValueError, IndexError):
         bot.send_message(
@@ -2638,6 +2652,7 @@ def run_quiz_marathon(admin_chat_id, duration_per_question):
             parse_mode="Markdown")  # Fix: Indentation error
         time.sleep(2)
         announce_marathon_results(admin_chat_id)
+
 
 # Fix: Indentation error
     except Exception as e:
