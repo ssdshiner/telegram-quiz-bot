@@ -145,6 +145,24 @@ def initialize_gsheet():
 # =============================================================================
 # 4. UTILITY & HELPER FUNCTIONS
 # =============================================================================
+def report_error_to_admin(error_message: str):
+    """Sends a formatted error message to the admin."""
+    try:
+        error_text = f"🚨 **BOT ERROR** 🚨\n\nAn error occurred:\n\n<pre>{escape(str(error_message)[:3500])}</pre>"
+        bot.send_message(ADMIN_USER_ID, error_text, parse_mode="HTML")
+    except Exception as e:
+        print(f"CRITICAL: Failed to report error to admin: {e}")
+
+def is_admin(user_id):
+    """Checks if a user is the bot admin."""
+    return user_id == ADMIN_USER_ID
+
+def escape_markdown(text: str) -> str:
+    """Helper function to escape characters for Telegram's MarkdownV2."""
+    if not isinstance(text, str):
+        text = str(text)
+    escape_chars = r'_*[]()~`>#+-=|{}.!'
+    return ''.join(f'\\{char}' if char in escape_chars else char for char in text)
 # NEW: Live Countdown Helper
 def live_countdown(chat_id, message_id, duration_seconds):
 """
@@ -173,26 +191,7 @@ countdown_str = f"{mins:02d}:{secs:02d}"
         time.sleep(1) # Wait for one second
 except Exception as e:
     print(f"Error in countdown thread: {e}")
-    # We don't report this to admin to avoid spam for minor issues like deleted messages
-def report_error_to_admin(error_message: str):
-    """Sends a formatted error message to the admin."""
-    try:
-        error_text = f"🚨 **BOT ERROR** 🚨\n\nAn error occurred:\n\n<pre>{escape(str(error_message)[:3500])}</pre>"
-        bot.send_message(ADMIN_USER_ID, error_text, parse_mode="HTML")
-    except Exception as e:
-        print(f"CRITICAL: Failed to report error to admin: {e}")
-
-def is_admin(user_id):
-    """Checks if a user is the bot admin."""
-    return user_id == ADMIN_USER_ID
-
-def escape_markdown(text: str) -> str:
-    """Helper function to escape characters for Telegram's MarkdownV2."""
-    if not isinstance(text, str):
-        text = str(text)
-    escape_chars = r'_*[]()~`>#+-=|{}.!'
-    return ''.join(f'\\{char}' if char in escape_chars else char for char in text)
-
+    # We don't report this to admin to avoid spam for minor issues like deleted messages</code></pre>
 def post_daily_quiz():
     """Fetches a random, unused question from Supabase and posts it as a quiz."""
     if not supabase: return
