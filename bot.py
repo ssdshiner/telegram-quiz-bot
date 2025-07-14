@@ -111,7 +111,6 @@ scheduled_tasks = []
 QUIZ_SESSIONS = {}
 # Stores detailed participant stats for marathons: score, time, questions answered, etc.
 QUIZ_PARTICIPANTS = {}
-MARATHON_STATE = {}
 user_states = {}
 last_quiz_posted_hour = -1
 last_doubt_reminder_hour = -1
@@ -182,12 +181,16 @@ def initialize_gsheet():
 @bot.message_handler(func=lambda msg: is_group_message(msg))
 def track_users(msg: types.Message):
     """
-    A background handler that captures user info from any message sent in the
-    group and upserts it into the 'group_members' table.
+    A background handler that captures HUMAN user info from any message sent
+    in the group and upserts it into the 'group_members' table.
     """
     try:
         user = msg.from_user
-        # We call the Supabase function we created in SQL
+        # --- NEW: Check if the user is a bot. If so, do nothing. ---
+        if user.is_bot:
+            return
+
+        # If it's a human user, proceed with adding/updating them.
         supabase.rpc('upsert_group_member', {
             'p_user_id': user.id,
             'p_username': user.username,
@@ -195,8 +198,6 @@ def track_users(msg: types.Message):
             'p_last_name': user.last_name
         }).execute()
     except Exception as e:
-        # This is a background task, so we don't want to bother users with errors.
-        # We'll just print it for debugging.
         print(f"[User Tracking Error]: Could not update user {msg.from_user.id}. Reason: {e}")
 def format_duration(seconds: float) -> str:
     """Formats a duration in seconds into a 'X min Y sec' or 'Y.Y sec' string."""
@@ -219,15 +220,6 @@ def report_error_to_admin(error_message: str):
 def is_admin(user_id):
     """Checks if a user is the bot admin."""
     return user_id == ADMIN_USER_ID
-
-
-def escape_markdown(text: str) -> str:
-    """Helper function to escape characters for Telegram's MarkdownV2."""
-    if not isinstance(text, str):
-        text = str(text)
-    escape_chars = r'_*[]()~`>#+-=|{}.!'
-    return ''.join(f'\\{char}' if char in escape_chars else char
-                   for char in text)
 
 
 # NEW: Live Countdown Helper
@@ -418,112 +410,6 @@ def bot_is_target(message: types.Message):
     if is_group_message(message) and is_bot_mentioned(message):
         return True
     return False
-
-
-# =============================================================================
-# 5. DATA PERSISTENCE WITH SUPABASE *** THIS SECTION IS REPLACED ***
-# =============================================================================
-def load_data():
-    """Loads bot state from Supabase, correctly parsing JSON data."""
-    if not supabase:
-        print("WARNING: Supabase client not available. Skipping data load.")
-        return
-
-    global TODAY_QUIZ_DETAILS, QUIZ_SESSIONS, QUIZ_PARTICIPANTS, active_polls
-    print("Loading data from Supabase...")
-    try:
-        response = supabase.table('bot_state').select("*").execute()
-
-        if hasattr(response, 'data') and response.data:
-            db_data = response.data
-            state = {
-                item['key']: item['value']
-                for item in db_data
-            }  # Fix: Indentation error
-
-            def deserialize_datetimes(items, key):
-                deserialized_list = []
-                loaded_str = state.get(items, '[]')
-                try:
-                    loaded_list = json.loads(loaded_str)
-                    for item in loaded_list:
-                        if key in item and isinstance(item[key], str):
-                            item[key] = datetime.datetime.strptime(
-                                item[key], '%Y-%m-%d %H:%M:%S')
-                        deserialized_list.append(item)
-                except (json.JSONDecodeError, TypeError, ValueError) as e:
-                    print(
-                        f"Warning: Could not deserialize {items}. Starting fresh. Error: {e}"
-                    )
-                return deserialized_list  # Fix: Indentation error
-
-            active_polls = deserialize_datetimes(
-                'active_polls', 'close_time')  # Fix: Indentation error
-
-            QUIZ_SESSIONS = json.loads(
-                state.get('quiz_sessions',
-                          '{}')) or QUIZ_SESSIONS  # Fix: Indentation error
-            QUIZ_PARTICIPANTS = json.loads(
-                state.get('quiz_participants',
-                          '{}')) or QUIZ_PARTICIPANTS  # Fix: Indentation error
-
-            print("✅ Data successfully loaded and parsed from Supabase.")
-        else:
-            print(
-                "ℹ️ No data found in Supabase table 'bot_state'. Starting with fresh data."
-            )
-
-    except Exception as e:
-        print(f"❌ Error loading data from Supabase: {e}")
-        report_error_to_admin(
-            f"Error loading data from Supabase:\n{traceback.format_exc()}"
-        )  # Fix: Indentation error
-
-
-def save_data():
-    """Saves bot state to Supabase, including active_polls."""
-    if not supabase:
-        print("WARNING: Supabase client not available. Skipping data save.")
-        return
-
-    try:
-
-        def serialize_datetimes(items, key):
-            serializable_list = []
-            for item in items:
-                item_copy = item.copy()
-                if key in item_copy and isinstance(item_copy[key],
-                                                   datetime.datetime):
-                    item_copy[key] = item_copy[key].strftime(
-                        '%Y-%m-%d %H:%M:%S')
-                serializable_list.append(item_copy)
-            return json.dumps(serializable_list)
-
-        data_to_upsert = [  # Fix: Indentation error
-            {
-                'key': 'active_polls',
-                'value': serialize_datetimes(active_polls, 'close_time')
-            },  # Fix: Indentation error
-            {
-                'key': 'today_quiz_details',
-                'value': json.dumps(TODAY_QUIZ_DETAILS)
-            },
-            {
-                'key': 'quiz_sessions',
-                'value': json.dumps(QUIZ_SESSIONS)
-            },
-            {
-                'key': 'quiz_participants',
-                'value': json.dumps(QUIZ_PARTICIPANTS)
-            },
-        ]
-
-        supabase.table('bot_state').upsert(data_to_upsert).execute()
-    except Exception as e:
-        print(
-            f"❌ Error saving data to Supabase: {e}")  # Fix: Indentation error
-        report_error_to_admin(
-            f"Error saving data to Supabase:\n{traceback.format_exc()}")
 
 
 # =============================================================================
@@ -722,6 +608,7 @@ def handle_help_command(msg: types.Message):
 
 *💬  Direct Messaging*
 `/dm` • Message a user or all users
+`/prunedms` • Clean the DM list of unreachable users
 
 - - - - - - - - - - - - - - - - - - - - -
 
@@ -759,9 +646,9 @@ def handle_help_command(msg: types.Message):
 def handle_leaderboard(msg: types.Message):
     """Displays the top 10 random quiz scorers, safely handling usernames."""
     try:
-        # Fetch the top 10 users from the leaderboard table
+        # --- FIX: Select 'user_name' column instead of 'first_name' ---
         response = supabase.table('leaderboard').select(
-            'first_name, score').order(
+            'user_name, score').order(
                 'score', desc=True).limit(10).execute()
 
         if not response.data:
@@ -775,14 +662,11 @@ def handle_leaderboard(msg: types.Message):
 
         for i, item in enumerate(response.data):
             rank_emoji = rank_emojis[i] if i < len(rank_emojis) else f"*{i+1}*."
-
-            # --- KEY CHANGE: Safely handle the user's name ---
-            # 1. Use .get() for safety in case 'first_name' is missing.
-            # 2. Use our new escape_markdown function to prevent formatting errors.
-            user_name = item.get('first_name', 'Unknown User')
+            
+            # Use the corrected column name here as well
+            user_name = item.get('user_name', 'Unknown User')
             safe_name = escape_markdown(user_name)
 
-            # Now, build the line with the safe name.
             leaderboard_text += f"{rank_emoji} *{safe_name}* - {item.get('score', 0)} points\n"
 
         bot.send_message(msg.chat.id, leaderboard_text, parse_mode="Markdown")
@@ -1393,7 +1277,51 @@ def forward_user_reply_to_admin(msg: types.Message):
         print(f"Error forwarding user DM to admin: {e}")
         # Optionally, inform the user that their message couldn't be delivered.
         bot.send_message(msg.chat.id, "I'm sorry, but I was unable to deliver your message to the admin at this time. Please try again later.")
+@bot.message_handler(commands=['prunedms'])
+@admin_required
+def handle_prune_dms(msg: types.Message):
+    """
+    Checks all users in the database and removes those who have blocked the bot.
+    """
+    if msg.chat.id != msg.from_user.id:
+        bot.reply_to(msg, "🤫 Please use this command in a private chat with me.")
+        return
 
+    bot.send_message(msg.chat.id, "🔍 Starting to check for unreachable users... This may take a few minutes. I will send a report when finished.")
+    
+    try:
+        response = supabase.table('group_members').select('user_id').execute()
+        all_users = response.data
+        unreachable_ids = []
+
+        for i, user in enumerate(all_users):
+            user_id = user['user_id']
+            try:
+                # The 'sendChatAction' method is a lightweight way to check if a user is reachable.
+                # If it fails with a 403 error, the user has blocked the bot.
+                bot.send_chat_action(user_id, 'typing')
+            except Exception as e:
+                if 'Forbidden' in str(e):
+                    unreachable_ids.append(user_id)
+            
+            # Print progress for the admin's console
+            if (i + 1) % 20 == 0:
+                print(f"Prune check progress: {i+1}/{len(all_users)}")
+            time.sleep(0.2) # Be respectful of Telegram's API limits
+
+        if not unreachable_ids:
+            bot.send_message(msg.chat.id, "✅ All users in the database are reachable. No one was removed.")
+            return
+
+        # Remove the unreachable users from the database
+        supabase.table('group_members').delete().in_('user_id', unreachable_ids).execute()
+        
+        bot.send_message(msg.chat.id, f"✅ Pruning complete!\n\nRemoved *{len(unreachable_ids)}* unreachable users from the DM list.", parse_mode="Markdown")
+
+    except Exception as e:
+        print(f"Error during DM prune: {traceback.format_exc()}")
+        report_error_to_admin(f"Error in /prunedms command: {traceback.format_exc()}")
+        bot.send_message(msg.chat.id, "❌ An error occurred while pruning the user list.")
 # =============================================================================
 # 8.6. GENERAL ADMIN COMMANDS (CLEANED UP)
 # =============================================================================
@@ -1551,48 +1479,39 @@ def handle_random_quiz(msg: types.Message):
     timed, anonymous poll in the group.
     """
     try:
-        # Fetch one random question using a Postgres function 'get_random_quiz'
-        response = supabase.rpc('get_random_quiz').execute()
+        # --- FIX: Pass an empty dictionary for the 'params' argument ---
+        response = supabase.rpc('get_random_quiz', {}).execute()
+        
         if not response.data:
             bot.send_message(GROUP_ID, "😕 No quizzes found in the database.")
             return
 
         quiz_data = response.data[0]
-
-        # Prepare the options and find the correct one
         options = [
-            quiz_data['option_a'],
-            quiz_data['option_b'],
-            quiz_data['option_c'],
-            quiz_data['option_d']
+            quiz_data.get('option_a', ''),
+            quiz_data.get('option_b', ''),
+            quiz_data.get('option_c', ''),
+            quiz_data.get('option_d', '')
         ]
-        correct_option_index = ['A', 'B', 'C', 'D'].index(
-            quiz_data['correct_answer'].upper())
-
-        # --- NEW: Get the explanation text from the database ---
-        # Using .get() is safe; it returns None if 'explanation' column doesn't exist
+        correct_option_index = ['A', 'B', 'C', 'D'].index(quiz_data.get('correct_answer', 'A').upper())
         explanation_text = quiz_data.get('explanation')
 
-        # Send the poll with the new 'explanation' parameter
         bot.send_poll(
             chat_id=GROUP_ID,
-            question=f"🧠 Random Quiz:\n\n{quiz_data['question']}",
+            question=f"🧠 Random Quiz:\n\n{quiz_data.get('question', 'No question text.')}",
             options=options,
             type='quiz',
             correct_option_id=correct_option_index,
             is_anonymous=True,
-            open_period=60,  # Quiz is open for 60 seconds
-            # --- THIS IS THE MAGIC LINE ---
+            open_period=60,
             explanation=explanation_text,
-            explanation_parse_mode="Markdown"  # Allows bold, italics etc. in your explanation
+            explanation_parse_mode="Markdown"
         )
 
     except Exception as e:
         print(f"Error in /randomquiz: {traceback.format_exc()}")
         report_error_to_admin(f"Failed to post random quiz. Error: {e}")
-        bot.send_message(
-            msg.chat.id,
-            "❌ Oops! Something went wrong while fetching a random quiz.")
+        bot.send_message(msg.chat.id, "❌ Oops! Something went wrong while fetching a random quiz.")
 # =============================================================================
 # 8.9. CONVERSATIONAL /setquiz FEATURE
 # =============================================================================
@@ -2872,7 +2791,7 @@ def handle_stop_marathon_command(msg: types.Message):
     except Exception as e:
         print(f"Could not delete /roko command message: {e}")
 # =============================================================================
-# 8.Y. UNIFIED POLL ANSWER HANDLER (MASTER ROUTER) - CORRECTED INDENTATION
+# 8.Y. UNIFIED POLL ANSWER HANDLER (FINAL, CORRECTED VERSION)
 # =============================================================================
 
 @bot.poll_answer_handler()
@@ -2886,9 +2805,8 @@ def handle_all_poll_answers(poll_answer: types.PollAnswer):
     marathon_session = QUIZ_SESSIONS.get(session_id)
 
     try:
-        # --- ROUTE 1: Check if this answer is for the active Marathon Quiz ---
+        # --- ROUTE 1: Is this for the active Marathon? ---
         if marathon_session and marathon_session.get('is_active') and poll_id_str == marathon_session.get('current_poll_id'):
-            # This is the detailed logic specifically for the marathon
             user_id = poll_answer.user.id
             user_name = poll_answer.user.first_name
             time_taken = (datetime.datetime.now() - marathon_session['question_start_time']).total_seconds()
@@ -2911,44 +2829,41 @@ def handle_all_poll_answers(poll_answer: types.PollAnswer):
             q_stats['total_time'] += time_taken
             q_stats['answer_count'] += 1
 
-            # Check if the answer is correct
             if poll_answer.option_ids and poll_answer.option_ids[0] == correct_option_index:
                 participant['score'] += 1
                 participant['correct_answer_times'].append(time_taken)
                 q_stats['correct_times'][user_id] = time_taken
-            
-            # This is now correctly indented and will not cause an error.
-            return # Stop processing, as we've handled the marathon answer
+            return
 
-        # --- ROUTE 2: Check if this is for an older QuickQuiz or other types ---
-        elif poll_id_str in QUIZ_SESSIONS: # This might be for a quickquiz
+        # --- ROUTE 2: Is this for a QuickQuiz? ---
+        elif poll_id_str in QUIZ_SESSIONS:
             if poll_answer.option_ids:
                 selected_option = poll_answer.option_ids[0]
-                is_correct = (selected_option == QUIZ_SESSIONS[poll_id_str]['correct_option'])
-                if poll_id_str not in QUIZ_PARTICIPANTS:
-                    QUIZ_PARTICIPANTS[poll_id_str] = {}
-                QUIZ_PARTICIPANTS[poll_id_str][poll_answer.user.id] = {
-                    'user_name': poll_answer.user.first_name,
-                    'is_correct': is_correct,
-                    'answered_at': datetime.datetime.now()
-                }
-            
-            # This is also correctly indented.
-            return # Stop processing
+                if poll_id_str in QUIZ_SESSIONS and 'correct_option' in QUIZ_SESSIONS[poll_id_str]:
+                    is_correct = (selected_option == QUIZ_SESSIONS[poll_id_str]['correct_option'])
+                    if poll_id_str not in QUIZ_PARTICIPANTS:
+                        QUIZ_PARTICIPANTS[poll_id_str] = {}
+                    QUIZ_PARTICIPANTS[poll_id_str][poll_answer.user.id] = {
+                        'user_name': poll_answer.user.first_name,
+                        'is_correct': is_correct,
+                        'answered_at': datetime.datetime.now()
+                    }
+            return
 
-        # --- ROUTE 3: Fallback for any other polls (e.g., Daily Quiz) ---
+        # --- ROUTE 3: Fallback for any other polls (like Daily Quiz) ---
         else:
             if poll_answer.option_ids:
-                print(f"Received answer for a general/daily poll from {poll_answer.user.first_name}. Incrementing score.")
+                print(f"Received answer for a general/daily poll from {poll_answer.user.first_name}.")
                 supabase.rpc('increment_score', {
                     'user_id_in': poll_answer.user.id,
                     'user_name_in': poll_answer.user.first_name
                 }).execute()
-
+            return
+                
     except Exception as e:
         print(f"Error in the master poll answer handler: {traceback.format_exc()}")
         report_error_to_admin(f"Error in handle_all_poll_answers:\n{traceback.format_exc()}")
-    bot.send_message(GROUP_ID, insights_text, parse_mode="Markdown")
+
 @bot.message_handler(content_types=['new_chat_members'])
 def handle_new_member(msg: types.Message):
     """
