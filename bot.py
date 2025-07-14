@@ -1435,7 +1435,7 @@ def handle_notify_command(msg: types.Message):
             return
 
         # Send the first message immediately
-        initial_text = f"⏳ Quiz starts in: {minutes} minute(s) ⏳\n\nGet ready with your pens and paper!"
+        initial_text = f"⏳ Quiz starts in: {minutes} minute(s) ⏳\n\nGet ready with all concepts revised in mind!"
         bot.send_message(GROUP_ID, initial_text, parse_mode="Markdown")
 
         # If time is 10 mins or less, schedule the "Time's up" message.
