@@ -1740,68 +1740,6 @@ def handle_feedback_command(msg: types.Message):
 # =============================================================================
 # MASTER POLL ANSWER HANDLER (CORRECTED)
 # =============================================================================
-@bot.poll_answer_handler()
-def handle_poll_answers(poll_answer: types.PollAnswer):
-    """Handles all poll answers and routes them to the correct logic."""
-    global QUIZ_PARTICIPANTS, MARATHON_STATE
-    poll_id = poll_answer.poll_id
-    user = poll_answer.user
-
-    try:
-        # Logic 1: Marathon Quiz
-        if MARATHON_STATE.get('is_running') and poll_id == MARATHON_STATE.get(
-                'current_poll_id'):
-            if poll_answer.option_ids:
-                selected_option = poll_answer.option_ids[0]
-                if selected_option == MARATHON_STATE.get(
-                        'current_correct_index'):
-                    if user.id not in MARATHON_STATE['scores']:
-                        MARATHON_STATE['scores'][user.id] = {
-                            'name': user.first_name,
-                            'score': 0
-                        }
-                    MARATHON_STATE['scores'][user.id]['score'] += 1
-            return
-
-        # Logic 2: Quick Quiz
-        elif poll_id in QUIZ_SESSIONS:
-            if poll_answer.option_ids:
-                selected_option = poll_answer.option_ids[0]
-                is_correct = (selected_option == QUIZ_SESSIONS[poll_id]
-                              ['correct_option'])
-                if poll_id not in QUIZ_PARTICIPANTS:
-                    QUIZ_PARTICIPANTS[poll_id] = {}
-                QUIZ_PARTICIPANTS[poll_id][user.id] = {
-                    'user_name': user.first_name,
-                    'is_correct': is_correct,
-                    'answered_at': datetime.datetime.now()
-                }
-            elif user.id in QUIZ_PARTICIPANTS.get(
-                    poll_id, {}):  # Fix: Indentation error
-                del QUIZ_PARTICIPANTS[poll_id][user.id]
-            return
-
-        # Logic 3: Daily Automated Quiz
-        else:
-            if poll_answer.option_ids:  # User gave an answer, we only care if it's correct
-                # The poll object itself tells us the correct option_id
-                # This is a bit advanced, but we can assume the library checks it for us
-                # and only a correct answer is processed further inside this block for a quiz type poll.
-                # However, poll_answer does not contain correctness info. We must trust the quiz setup.
-                # For our specific case, any answer to a quiz poll is a correct attempt to score.
-                print(
-                    f"Daily quiz answer from {user.first_name} ({user.id}). Awarding point."
-                )
-                supabase.rpc('increment_score', {
-                    'user_id_in': user.id,
-                    'user_name_in': user.first_name
-                }).execute()
-
-    except Exception as e:
-        print(f"Error in poll answer handler: {traceback.format_exc()}")
-        report_error_to_admin(
-            f"Error in poll_answer_handler:\n{traceback.format_exc()}")
-
 
 # =============================================================================
 # QUIZ RESULT COMMAND (For Bot's Internal Quizzes)
@@ -2793,47 +2731,6 @@ def send_marathon_question(session_id):
 # called from a master handler, this is the core logic.
 # For simplicity, we'll keep the direct handler and assume it's the main one for polls.
 
-@bot.poll_answer_handler()
-def handle_marathon_answer(poll_answer: types.PollAnswer):
-    """Handles a user's answer to a marathon poll, tracking score and time."""
-    session_id = str(GROUP_ID) # FIX: Use GROUP_ID
-    session = QUIZ_SESSIONS.get(session_id)
-    
-    # Check if this answer belongs to the currently active marathon
-    if session and session.get('is_active') and poll_answer.poll_id == session.get('current_poll_id'):
-        user_id = poll_answer.user.id
-        user_name = poll_answer.user.first_name
-        time_taken = (datetime.datetime.now() - session['question_start_time']).total_seconds()
-
-        if user_id not in QUIZ_PARTICIPANTS.get(session_id, {}):
-            QUIZ_PARTICIPANTS.setdefault(session_id, {})[user_id] = {
-                'name': user_name, 'score': 0, 'total_time': 0,
-                'questions_answered': 0, 'correct_answer_times': []
-            }
-        
-        participant = QUIZ_PARTICIPANTS[session_id][user_id]
-        participant['total_time'] += time_taken
-        participant['questions_answered'] += 1
-
-        question_idx = session['current_question_index'] - 1
-        question_data = session['questions'][question_idx]
-        correct_option_index = ['A', 'B', 'C', 'D'].index(str(question_data.get('Correct Answer', 'A')).upper())
-
-        q_stats = session['stats']['question_times'][question_idx]
-        q_stats['total_time'] += time_taken
-        q_stats['answer_count'] += 1
-
-        if poll_answer.option_ids and poll_answer.option_ids[0] == correct_option_index:
-            participant['score'] += 1
-            participant['correct_answer_times'].append(time_taken)
-            q_stats['correct_times'][user_id] = time_taken
-    else:
-        # If the poll answer is not for the marathon, you can pass it to other handlers
-        # This part assumes you might have other quiz types running.
-        # For now, we will just print a log.
-        print(f"Received poll answer for a non-marathon poll: {poll_answer.poll_id}")
-        # Here you could call `handle_poll_answers(poll_answer)` if that's your old handler
-        pass
 
 
 def send_marathon_results(session_id):
@@ -2951,7 +2848,81 @@ def handle_stop_marathon_command(msg: types.Message):
         bot.delete_message(msg.chat.id, msg.message_id)
     except Exception as e:
         print(f"Could not delete /roko command message: {e}")
+# =============================================================================
+# 8.Y. UNIFIED POLL ANSWER HANDLER (MASTER ROUTER)
+# =============================================================================
 
+@bot.poll_answer_handler()
+def handle_all_poll_answers(poll_answer: types.PollAnswer):
+    """
+    This is the single master handler for all poll answers. It routes the
+    answer to the correct logic (marathon, quickquiz, etc.) based on the poll ID.
+    """
+    poll_id_str = poll_answer.poll_id
+    session_id = str(GROUP_ID)
+    marathon_session = QUIZ_SESSIONS.get(session_id)
+
+    try:
+        # --- ROUTE 1: Check if this answer is for the active Marathon Quiz ---
+        if marathon_session and marathon_session.get('is_active') and poll_id_str == marathon_session.get('current_poll_id'):
+            # This is the detailed logic specifically for the marathon
+            user_id = poll_answer.user.id
+            user_name = poll_answer.user.first_name
+            time_taken = (datetime.datetime.now() - marathon_session['question_start_time']).total_seconds()
+
+            if user_id not in QUIZ_PARTICIPANTS.get(session_id, {}):
+                QUIZ_PARTICIPANTS.setdefault(session_id, {})[user_id] = {
+                    'name': user_name, 'score': 0, 'total_time': 0,
+                    'questions_answered': 0, 'correct_answer_times': []
+                }
+
+            participant = QUIZ_PARTICIPANTS[session_id][user_id]
+            participant['total_time'] += time_taken
+            participant['questions_answered'] += 1
+
+            question_idx = marathon_session['current_question_index'] - 1
+            question_data = marathon_session['questions'][question_idx]
+            correct_option_index = ['A', 'B', 'C', 'D'].index(str(question_data.get('Correct Answer', 'A')).upper())
+
+            q_stats = marathon_session['stats']['question_times'][question_idx]
+            q_stats['total_time'] += time_taken
+            q_stats['answer_count'] += 1
+
+            # Check if the answer is correct
+            if poll_answer.option_ids and poll_answer.option_ids[0] == correct_option_index:
+                participant['score'] += 1
+                participant['correct_answer_times'].append(time_taken)
+                q_stats['correct_times'][user_id] = time_taken
+            return # Stop processing, as we've handled the marathon answer
+
+        # --- ROUTE 2: Check if this is for an older QuickQuiz or other types ---
+        # This section should contain the logic from your old `handle_poll_answers`
+        elif poll_id_str in QUIZ_SESSIONS: # This might be for a quickquiz
+             if poll_answer.option_ids:
+                selected_option = poll_answer.option_ids[0]
+                is_correct = (selected_option == QUIZ_SESSIONS[poll_id_str]['correct_option'])
+                if poll_id_str not in QUIZ_PARTICIPANTS:
+                    QUIZ_PARTICIPANTS[poll_id_str] = {}
+                QUIZ_PARTICIPANTS[poll_id_str][poll_answer.user.id] = {
+                    'user_name': poll_answer.user.first_name,
+                    'is_correct': is_correct,
+                    'answered_at': datetime.datetime.now()
+                }
+             return # Stop processing
+
+        # --- ROUTE 3: Fallback for any other polls (e.g., Daily Quiz) ---
+        else:
+            # This is where logic for your daily automated quiz score incrementing would go
+            if poll_answer.option_ids:
+                print(f"Received answer for a general/daily poll from {poll_answer.user.first_name}. Incrementing score.")
+                supabase.rpc('increment_score', {
+                    'user_id_in': poll_answer.user.id,
+                    'user_name_in': poll_answer.user.first_name
+                }).execute()
+
+    except Exception as e:
+        print(f"Error in the master poll answer handler: {traceback.format_exc()}")
+        report_error_to_admin(f"Error in handle_all_poll_answers:\n{traceback.format_exc()}")
     bot.send_message(GROUP_CHAT_ID, insights_text, parse_mode="Markdown")
 @bot.message_handler(content_types=['new_chat_members'])
 def handle_new_member(msg: types.Message):
