@@ -1541,7 +1541,7 @@ def handle_random_quiz(msg: types.Message):
         # Fetch one random question using a Postgres function 'get_random_quiz'
         response = supabase.rpc('get_random_quiz').execute()
         if not response.data:
-            bot.send_message(GROUP_CHAT_ID, "😕 No quizzes found in the database.")
+            bot.send_message(GROUP_ID, "😕 No quizzes found in the database.")
             return
 
         quiz_data = response.data[0]
@@ -1562,7 +1562,7 @@ def handle_random_quiz(msg: types.Message):
 
         # Send the poll with the new 'explanation' parameter
         bot.send_poll(
-            chat_id=GROUP_CHAT_ID,
+            chat_id=GROUP_ID,
             question=f"🧠 Random Quiz:\n\n{quiz_data['question']}",
             options=options,
             type='quiz',
@@ -1649,7 +1649,7 @@ def handle_announce_command(msg: types.Message):
         # Step 1: Send the announcement message to the main group chat.
         # We capture the returned message object to get its ID.
         sent_message = bot.send_message(
-            GROUP_CHAT_ID,
+            GROUP_ID,
             final_message,
             parse_mode="Markdown"
         )
@@ -1657,7 +1657,7 @@ def handle_announce_command(msg: types.Message):
         # Step 2: Pin the message we just sent.
         # `disable_notification=False` ensures all members are notified of the pin.
         bot.pin_chat_message(
-            chat_id=GROUP_CHAT_ID,
+            chat_id=GROUP_ID,
             message_id=sent_message.message_id,
             disable_notification=False
         )
@@ -2889,7 +2889,7 @@ def handle_stop_marathon_command(msg: types.Message):
     except Exception as e:
         print(f"Could not delete /roko command message: {e}")
 # =============================================================================
-# 8.Y. UNIFIED POLL ANSWER HANDLER (MASTER ROUTER)
+# 8.Y. UNIFIED POLL ANSWER HANDLER (MASTER ROUTER) - CORRECTED INDENTATION
 # =============================================================================
 
 @bot.poll_answer_handler()
@@ -2933,12 +2933,13 @@ def handle_all_poll_answers(poll_answer: types.PollAnswer):
                 participant['score'] += 1
                 participant['correct_answer_times'].append(time_taken)
                 q_stats['correct_times'][user_id] = time_taken
+            
+            # This is now correctly indented and will not cause an error.
             return # Stop processing, as we've handled the marathon answer
 
         # --- ROUTE 2: Check if this is for an older QuickQuiz or other types ---
-        # This section should contain the logic from your old `handle_poll_answers`
         elif poll_id_str in QUIZ_SESSIONS: # This might be for a quickquiz
-             if poll_answer.option_ids:
+            if poll_answer.option_ids:
                 selected_option = poll_answer.option_ids[0]
                 is_correct = (selected_option == QUIZ_SESSIONS[poll_id_str]['correct_option'])
                 if poll_id_str not in QUIZ_PARTICIPANTS:
@@ -2948,11 +2949,12 @@ def handle_all_poll_answers(poll_answer: types.PollAnswer):
                     'is_correct': is_correct,
                     'answered_at': datetime.datetime.now()
                 }
-             return # Stop processing
+            
+            # This is also correctly indented.
+            return # Stop processing
 
         # --- ROUTE 3: Fallback for any other polls (e.g., Daily Quiz) ---
         else:
-            # This is where logic for your daily automated quiz score incrementing would go
             if poll_answer.option_ids:
                 print(f"Received answer for a general/daily poll from {poll_answer.user.first_name}. Incrementing score.")
                 supabase.rpc('increment_score', {
@@ -2963,7 +2965,7 @@ def handle_all_poll_answers(poll_answer: types.PollAnswer):
     except Exception as e:
         print(f"Error in the master poll answer handler: {traceback.format_exc()}")
         report_error_to_admin(f"Error in handle_all_poll_answers:\n{traceback.format_exc()}")
-    bot.send_message(GROUP_CHAT_ID, insights_text, parse_mode="Markdown")
+    bot.send_message(GROUP_ID, insights_text, parse_mode="Markdown")
 @bot.message_handler(content_types=['new_chat_members'])
 def handle_new_member(msg: types.Message):
     """
