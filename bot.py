@@ -109,7 +109,6 @@ active_polls = []
 scheduled_tasks = []
 QUIZ_SESSIONS = {}
 QUIZ_PARTICIPANTS = {}
-TODAY_QUIZ_DETAILS = {"details_text": "Not Set", "is_set": False}
 MARATHON_STATE = {}
 user_states = {}
 last_quiz_posted_hour = -1
@@ -416,11 +415,6 @@ def load_data():
             active_polls = deserialize_datetimes(
                 'active_polls', 'close_time')  # Fix: Indentation error
 
-            TODAY_QUIZ_DETAILS = json.loads(
-                state.get(
-                    'today_quiz_details',
-                    '{}')) or TODAY_QUIZ_DETAILS  # Fix: Indentation error
-
             QUIZ_SESSIONS = json.loads(
                 state.get('quiz_sessions',
                           '{}')) or QUIZ_SESSIONS  # Fix: Indentation error
@@ -664,39 +658,40 @@ def handle_quiz_start_button(msg: types.Message):
 @admin_required
 def handle_help_command(msg: types.Message):
     """Sends a well-formatted and categorized list of admin commands."""
+    # This text uses simple Markdown. Telegram clients automatically make /commands clickable.
+    # We wrap commands in backticks (`) to make them stand out as code, which is clean and easy to read.
     help_text = """
-🤖 *Rising Empire Bot \- Admin Panel* 🤖
+🤖 *Rising Empire Bot - Admin Panel* 🤖
 
-Here are all the commands available to you\. Click on any command to use it\.
+Here are all the available commands. Just click on any command to use it.
 
 *━━━ Engagement & Content ━━━*
-💪 `/motivate` \- Send a random motivational quote\.
-📚 `/studytip` \- Send a useful study tip\.
-📣 `/announce` \- Broadcast a message to the group\.
-💬 /message - Send a direct message in one go.
-🔔 /notify - Alert members about a quiz (e.g., /notify 15).
+`/motivate` - Send a random motivational quote.
+`/studytip` - Send a useful study tip.
+`/announce` - Broadcast a message to the group.
+`/message` - Send a direct message in one go.
+`/notify` - Alert members about a quiz (e.g., /notify 15).
 
 *━━━ Quiz & Marathon Management ━━━*
-🗓️ `/setquiz` \- Set today's quiz topics conversationally\.
-⚡ `/quickquiz` \- Create a quick, timed poll\-based quiz\.
-📝 `/createquiztext` \- Create a simple text\-based quiz\.
-🧠 `/randomquiz` \- Post a random quiz from the Supabase DB\.
-🏃‍♂️ `/quizmarathon` \- Start a multi\-question quiz from Google Sheets\.
-🛑 `/roko` \- Forcefully stop a running quiz marathon\.
-🏆 `/quizresult` \- Announce winners of bot's internal quiz\.
-🎉 `/bdhai` \- Congratulate winners by replying to a leaderboard\.
-🏆 `/leaderboard` \- Show the all\-time random quiz leaderboard\.
+`/quickquiz` - Create a quick, timed poll-based quiz.
+`/createquiztext` - Create a simple text-based quiz.
+`/randomquiz` - Post a random quiz from the Supabase DB.
+`/quizmarathon` - Start a multi-question quiz from Google Sheets.
+`/roko` - Forcefully stop a running quiz marathon.
+`/quizresult` - Announce winners of the bot's internal quiz.
+`/bdhai` - Congratulate winners by replying to a leaderboard.
+`/leaderboard` - Show the all-time random quiz leaderboard.
 
 *━━━ Doubt Hub ━━━*
-❓ `/askdoubt` \- Ask a question \(e\.g\., `/askdoubt \[High] question text`\)\.
-✍️ `/answer` \- Answer a specific doubt \(e\.g\., `/answer 123 your answer`\)\.
+`/askdoubt` - Ask a question (e.g., /askdoubt [High] your question).
+`/answer` - Answer a specific doubt (e.g., /answer 123 your answer).
+`/bestanswer` - Mark the best answer (reply to the message).
 
 *━━━ Utilities ━━━*
-📖 `/section` \- Get a summary of a law section \(e\.g\., `/section 141`\)\.
-📄 `/mysheet` \- Get the link to the connected Google Sheet\.
+`/section` - Get a summary of a law section (e.g., /section 141).
+`/mysheet` - Get the link to the connected Google Sheet.
 """
     bot.send_message(msg.chat.id, help_text, parse_mode="Markdown")
-
 
 # === ADD THIS ENTIRE NEW FUNCTION ===
 
@@ -746,7 +741,7 @@ def load_data():
         return
 
     # Add active_polls to the list of global variables we are loading
-    global TODAY_QUIZ_DETAILS, QUIZ_SESSIONS, QUIZ_PARTICIPANTS, active_polls
+    global QUIZ_SESSIONS, QUIZ_PARTICIPANTS, active_polls
     print("Loading data from Supabase...")
     try:
         response = supabase.table('bot_state').select("*").execute()
@@ -814,10 +809,6 @@ def save_data():
         # --- Prepare all data for upserting ---
         data_to_upsert = [
             {
-                'key': 'today_quiz_details',
-                'value': json.dumps(TODAY_QUIZ_DETAILS)
-            },  # Fix: Indentation error
-            {
                 'key': 'quiz_sessions',
                 'value': json.dumps(QUIZ_SESSIONS)
             },
@@ -844,25 +835,82 @@ def save_data():
 @bot.message_handler(commands=['todayquiz'])
 @membership_required
 def handle_today_quiz(msg: types.Message):
-    """Shows the quiz details for the day. ONLY WORKS IN GROUP."""
-    # NEW: Check if this is a group message
+    """
+    Shows the quiz schedule for the day from the Supabase 'quiz_schedule' table using robust HTML parsing.
+    """
     if not is_group_message(msg):
         bot.send_message(
             msg.chat.id,
-            "ℹ️ The `/todayquiz` command only works in the main group chat.")
-        return
-
-    if not TODAY_QUIZ_DETAILS.get("is_set"):
-        bot.send_message(
-            msg.chat.id,
-            "😕 Today's quiz details have not been set yet. The admin can set it using /setquiz."
+            "ℹ️ The `/todayquiz` command only works in the main group chat."
         )
         return
-    details_text = TODAY_QUIZ_DETAILS.get(
-        "details_text", "Error: Quiz details are set but text is missing.")
-    bot.send_message(msg.chat.id, details_text, parse_mode="Markdown")
 
+    try:
+        ist_tz = timezone(timedelta(hours=5, minutes=30))
+        today_date = datetime.datetime.now(ist_tz)
+        today_date_str = today_date.strftime('%Y-%m-%d')
 
+        response = supabase.table('quiz_schedule').select('*').eq(
+            'quiz_date', today_date_str).order('quiz_no', desc=False).execute()
+
+        if response.data:
+            user_name = msg.from_user.first_name
+            greetings = [
+                f"Hey {user_name}! Here is the quiz schedule for today: 🗓️",
+                f"Ready for a challenge, {user_name}? Here's today's agenda: 🔥",
+                f"Good day, {user_name}! Here is your quiz lineup: 📚",
+            ]
+            message_text = random.choice(greetings) + "\n\n"
+
+            for quiz_item in response.data:
+                try:
+                    time_obj = datetime.datetime.strptime(quiz_item['quiz_time'], '%H:%M:%S')
+                    formatted_time = time_obj.strftime('%I:%M %p')
+                except (ValueError, TypeError):
+                    formatted_time = quiz_item.get('quiz_time', 'N/A')
+
+                part_info = "N/A"
+                quiz_type_str = quiz_item.get('quiz_type', '')
+                if 'Mega' in quiz_type_str:
+                    part_info = quiz_type_str
+                else:
+                    part_match = re.search(r'\d+', quiz_type_str)
+                    if part_match:
+                        part_info = f"Part {part_match.group(0)}"
+                    else:
+                        part_info = "Full Chapter"
+
+                # We use html.escape to make sure the text from the database is safe to use in HTML
+                safe_subject = escape(str(quiz_item.get('subject', 'N/A')))
+                safe_chapter = escape(str(quiz_item.get('chapter_name', 'N/A')))
+                safe_part = escape(part_info)
+                safe_topics = escape(str(quiz_item.get('topics_covered', 'N/A')))
+
+                quiz_details = (
+                    f"<b>Quiz no. {quiz_item.get('quiz_no', 'N/A')}:</b>\n"
+                    f"⏰ Time: <b>{formatted_time}</b>\n"
+                    f"📝 Subject: <b>{safe_subject}</b>\n"
+                    f"📖 Chapter: <b>{safe_chapter}</b>\n"
+                    f"✏️ Part: <b>{safe_part}</b>\n"
+                    f"🧩 Topics: <i>{safe_topics}</i>\n\n"
+                )
+                message_text += quiz_details
+
+            bot.send_message(msg.chat.id, message_text, parse_mode="HTML")
+
+        else:
+            bot.send_message(
+                msg.chat.id,
+                f"Hey {msg.from_user.first_name}, the schedule for today hasn't been updated yet. Please wait for the admin's announcement. Happy studying! 👍"
+            )
+
+    except Exception as e:
+        print(f"Error in /todayquiz command: {traceback.format_exc()}")
+        report_error_to_admin(f"Failed to fetch today's quiz schedule:\n{traceback.format_exc()}")
+        bot.send_message(
+            msg.chat.id,
+            "❌ Oops! Something went wrong while fetching the schedule. The admin has been notified."
+        )
 # THIS IS THE COMPLETE AND CORRECT CODE FOR THE /createpoll FEATURE
 # =============================================================================
 # 8.5. INTERACTIVE COMMANDS (POLLS, QUIZZES, ETC.) - CORRECTED BLOCK
@@ -1263,198 +1311,6 @@ def handle_random_quiz_command(msg: types.Message):
 # =============================================================================
 # 8.9. CONVERSATIONAL /setquiz FEATURE
 # =============================================================================
-
-
-def cleanup_user_state(user_id):
-    """Safely removes a user from the state dictionary."""
-    if user_id in user_states:
-        del user_states[user_id]
-
-
-@bot.message_handler(commands=['setquiz'])
-@admin_required
-def handle_set_quiz_command(msg: types.Message):
-    """Starts the conversational flow to set quiz details for a specific date."""
-    user_id = msg.from_user.id
-    # Initialize the state for this user
-    user_states[user_id] = {
-        'step': 'awaiting_quiz_date',
-        'quiz_data': {
-            'date': None,
-            'quizzes': []
-        }
-    }
-    prompt = bot.send_message(
-        user_id, "🗓️ **Step 1: Set Quiz Date**\n\n"
-        "Please enter the date for the quizzes (e.g., '03 July 2025').\n\n"
-        "Or type /cancel to abort.",
-        parse_mode="Markdown")
-    bot.register_next_step_handler(prompt, process_quiz_date)
-
-
-def process_quiz_date(msg: types.Message):
-    """Processes the date and asks for the first quiz's details."""
-    user_id = msg.from_user.id
-    if msg.text and msg.text.lower() == '/cancel':
-        cleanup_user_state(user_id)
-        bot.send_message(user_id, "❌ Operation cancelled.")
-        return
-
-    # Save the date
-    user_states[user_id]['quiz_data']['date'] = msg.text.strip()
-
-    # Move to the next step
-    user_states[user_id]['step'] = 'awaiting_quiz_number'
-    prompt = bot.send_message(
-        user_id, f"✅ Date set to: *{msg.text.strip()}*\n\n"
-        "📝 **Step 2: Add Quiz 1 Details**\n\n"
-        "What is the **Quiz Number**? (e.g., '1' or '1A')",
-        parse_mode="Markdown")
-    bot.register_next_step_handler(prompt, process_quiz_number)
-
-
-def process_quiz_number(msg: types.Message):
-    """Processes the quiz number and asks for the time."""
-    user_id = msg.from_user.id
-    if msg.text and msg.text.lower() == '/cancel':
-        cleanup_user_state(user_id)
-        bot.send_message(user_id, "❌ Operation cancelled.")
-        return
-
-    # Start a new dictionary for the current quiz
-    user_states[user_id]['current_quiz'] = {'number': msg.text.strip()}
-
-    user_states[user_id]['step'] = 'awaiting_quiz_time'
-    prompt = bot.send_message(
-        user_id, "⏰ What is the **Time** for this quiz? (e.g., '8:00 PM')")
-    bot.register_next_step_handler(prompt, process_quiz_time)
-
-
-def process_quiz_time(msg: types.Message):
-    """Processes the quiz time and asks for the subject."""
-    user_id = msg.from_user.id
-    if msg.text and msg.text.lower() == '/cancel':
-        cleanup_user_state(user_id)
-        bot.send_message(user_id, "❌ Operation cancelled.")
-        return
-
-    user_states[user_id]['current_quiz']['time'] = msg.text.strip()
-
-    user_states[user_id]['step'] = 'awaiting_quiz_subject'
-    prompt = bot.send_message(user_id, "📝 What is the **Subject**?")
-    bot.register_next_step_handler(prompt, process_quiz_subject)
-
-
-def process_quiz_subject(msg: types.Message):
-    """Processes the subject and asks for the chapter."""
-    user_id = msg.from_user.id
-    if msg.text and msg.text.lower() == '/cancel':
-        cleanup_user_state(user_id)
-        bot.send_message(user_id, "❌ Operation cancelled.")
-        return
-
-    user_states[user_id]['current_quiz']['subject'] = msg.text.strip()
-
-    user_states[user_id]['step'] = 'awaiting_quiz_chapter'
-    prompt = bot.send_message(user_id, "📖 What is the **Chapter**?")
-    bot.register_next_step_handler(prompt, process_quiz_chapter)
-
-
-def process_quiz_chapter(msg: types.Message):
-    """Processes the chapter and asks for the topic."""
-    user_id = msg.from_user.id
-    if msg.text and msg.text.lower() == '/cancel':
-        cleanup_user_state(user_id)
-        bot.send_message(user_id, "❌ Operation cancelled.")
-        return
-
-    user_states[user_id]['current_quiz']['chapter'] = msg.text.strip()
-
-    user_states[user_id]['step'] = 'awaiting_quiz_topic'
-    prompt = bot.send_message(user_id, "🧩 What is the **Topic**?")
-    bot.register_next_step_handler(prompt, process_quiz_topic)
-
-
-def process_quiz_topic(msg: types.Message):
-    """Processes the topic and asks the user if they want to add another quiz."""
-    user_id = msg.from_user.id
-    if msg.text and msg.text.lower() == '/cancel':
-        cleanup_user_state(user_id)
-        bot.send_message(user_id, "❌ Operation cancelled.")
-        return
-
-    user_states[user_id]['current_quiz']['topic'] = msg.text.strip()
-
-    # Add the completed quiz to the list for the day
-    user_states[user_id]['quiz_data']['quizzes'].append(
-        user_states[user_id]['current_quiz'])
-    del user_states[user_id]['current_quiz']  # Clean up temporary storage
-
-    # Ask to add another quiz
-    markup = types.InlineKeyboardMarkup()
-    markup.add(
-        types.InlineKeyboardButton("Yes, Add Another Quiz",
-                                   callback_data="add_another_quiz"),
-        types.InlineKeyboardButton("No, Finish & Post",
-                                   callback_data="finish_set_quiz"))
-    bot.send_message(
-        user_id,
-        "✅ Quiz details saved Do you want to add another quiz for the same date?",
-        reply_markup=markup)
-
-
-# This handler will catch the button presses for "Yes" or "No"
-@bot.callback_query_handler(
-    func=lambda call: call.data in ['add_another_quiz', 'finish_set_quiz'])
-def handle_set_quiz_decision(call: types.CallbackQuery):
-    """Handles the admin's decision to add another quiz or finish."""
-    user_id = call.from_user.id
-
-    if call.data == 'add_another_quiz':
-        bot.edit_message_text("Okay, let's add the next quiz.",
-                              call.message.chat.id, call.message.message_id)
-        user_states[user_id]['step'] = 'awaiting_quiz_number'
-        prompt = bot.send_message(
-            user_id, "📝 **Add Next Quiz Details**\n\n"
-            "What is the **Quiz Number** for this new quiz? (e.g., '2')",
-            parse_mode="Markdown")
-        bot.register_next_step_handler(prompt, process_quiz_number)
-
-    elif call.data == 'finish_set_quiz':
-        bot.edit_message_text(
-            "✅ All quizzes for the date have been set. Generating the final announcement...",
-            call.message.chat.id, call.message.message_id)
-
-        # --- Format the final message ---
-        quiz_data = user_states[user_id]['quiz_data']
-        final_text = f"🚨 Quiz – {quiz_data['date']} \\| Rising Empire Group \\|"
-
-        for quiz in quiz_data['quizzes']:
-            final_text += (f"\n\n*Quiz {quiz['number']}* :-\n"
-                           f"⏰ {quiz.get('time', 'N/A')}\n"
-                           f"📝 Subject: {quiz.get('subject', 'N/A')}\n"
-                           f"📖 Chapter: {quiz.get('chapter', 'N/A')}\n"
-                           f"🧩 Topic: {quiz.get('topic', 'N/A')}")
-
-        final_text += "\n\n\nBe tuned to 👉 https://t.me/ca_internotes"
-
-        # Save this final text to TODAY_QUIZ_DETAILS to be used by /todayquiz
-        global TODAY_QUIZ_DETAILS
-        TODAY_QUIZ_DETAILS = {"details_text": final_text, "is_set": True}
-
-        # Send a preview to the admin
-        bot.send_message(user_id,
-                         "*Preview of the announcement:*",
-                         parse_mode="Markdown")
-        bot.send_message(user_id, final_text)
-        bot.send_message(
-            user_id,
-            "This announcement is now set. Users can see it with the /todayquiz command."
-        )
-
-        # Clean up the state
-        cleanup_user_state(user_id)
-
 
 @bot.message_handler(commands=['createquiztext'])
 @admin_required
