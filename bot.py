@@ -2731,21 +2731,61 @@ def send_marathon_question(session_id):
 # called from a master handler, this is the core logic.
 # For simplicity, we'll keep the direct handler and assume it's the main one for polls.
 
-
-
 def send_marathon_results(session_id):
     """
-    Generates results, sends them, and then marks the used questions as TRUE in the database.
+    Marks used questions, generates results, sends them, and cleans up the session.
     """
     session = QUIZ_SESSIONS.get(session_id)
     participants = QUIZ_PARTICIPANTS.get(session_id)
 
-    if not session: return # Avoids errors if session was already cleared
-    
+    # --- Step 1: Immediately mark questions as used ---
+    # This is the most critical step and should happen first.
+    if session and session.get('questions'):
+        try:
+            used_question_ids = [q['id'] for q in session['questions']]
+            if used_question_ids:
+                supabase.table('quiz_questions').update({'used': True}).in_('id', used_question_ids).execute()
+                print(f"✅ Marked {len(used_question_ids)} marathon questions as used: {used_question_ids}")
+        except Exception as e:
+            # Report the error but continue, so users still get their results.
+            print(f"❌ CRITICAL ERROR: Could not mark marathon questions as used. Error: {e}")
+            report_error_to_admin(f"Failed to mark marathon questions as used.\n\nError: {traceback.format_exc()}")
+
+    # --- Step 2: Check for participation ---
     if not participants:
         bot.send_message(GROUP_ID, "🏁 The quiz has finished, but no one participated!")
+        # Clean up even if no one played
         if session_id in QUIZ_SESSIONS: del QUIZ_SESSIONS[session_id]
         if session_id in QUIZ_PARTICIPANTS: del QUIZ_PARTICIPANTS[session_id]
+        return
+
+    # --- Step 3: Generate and send the leaderboard ---
+    sorted_participants = sorted(participants.values(), key=lambda p: (p['score'], -p['total_time']), reverse=True)
+    total_questions = len(session['questions'])
+    
+    results_text = (
+        f"🏁 The quiz *'{escape_markdown(session['title'])}'* has finished!\n\n"
+        f"*{len(participants)}* participants answered at least one question.\n\n"
+    )
+    rank_emojis = ["🥇", "🥈", "🥉"]
+    for i, p in enumerate(sorted_participants):
+        rank = rank_emojis[i] if i < 3 else f"  *{i + 1}.*"
+        name = escape_markdown(p['name'])
+        score = p['score']
+        percentage = (score / total_questions) * 100 if total_questions > 0 else 0
+        formatted_time = format_duration(p['total_time'])
+        results_text += f"{rank} *{name}* – {score} correct ({percentage:.0f}%) in {formatted_time}\n"
+
+    results_text += "\n🏆 Congratulations to the winners!"
+    bot.send_message(GROUP_ID, results_text, parse_mode="Markdown")
+
+    # --- Step 4: Generate and send the insights ---
+    time.sleep(2)
+    generate_quiz_insights(session_id)
+    
+    # --- Step 5: Clean up the session from memory (LAST STEP) ---
+    if session_id in QUIZ_SESSIONS: del QUIZ_SESSIONS[session_id]
+    if session_id in QUIZ_PARTICIPANTS: del QUIZ_PARTICIPANTS[session_id]
         return
 
     sorted_participants = sorted(participants.values(), key=lambda p: (p['score'], -p['total_time']), reverse=True)
