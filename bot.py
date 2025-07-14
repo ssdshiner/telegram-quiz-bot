@@ -789,85 +789,106 @@ def save_data():
 @membership_required
 def handle_today_quiz(msg: types.Message):
     """
-    Shows the quiz schedule for the day from the Supabase 'quiz_schedule' table,
-    with a button to open the weekly schedule URL.
+    Shows today's quiz schedule with a full list of creative English and Hinglish
+    greetings and a clear, mobile-friendly format.
     """
-    if not is_group_message(msg):
-        bot.send_message(
-            msg.chat.id,
-            "ℹ️ The `/todayquiz` command only works in the main group chat."
-        )
-        return
-
     try:
+        # --- Dynamic Time-Based Greeting ---
         ist_tz = timezone(timedelta(hours=5, minutes=30))
-        today_date = datetime.datetime.now(ist_tz)
-        today_date_str = today_date.strftime('%Y-%m-%d')
+        current_hour = datetime.datetime.now(ist_tz).hour
+        if 5 <= current_hour < 12:
+            time_of_day_greeting = "🌅 Good Morning"
+        elif 12 <= current_hour < 17:
+            time_of_day_greeting = "☀️ Good Afternoon"
+        else:
+            time_of_day_greeting = "🌆 Good Evening"
 
-        response = supabase.table('quiz_schedule').select('*').eq(
-            'quiz_date', today_date_str).order('quiz_no', desc=False).execute()
+        # --- FINAL: The Full List of Poetic Greetings ---
+        user_name = f"*{escape_markdown(msg.from_user.first_name)}*" # User's name in bold
+        
+        all_greetings = [
+            # English Poetic Lines
+            f"New day dawning, spirits high and free,\n{user_name}, today's quiz schedule is the key! 🗝️",
+            f"Practice time calling, skills to refine,\n{user_name}, today's quiz schedule looks divine! ⭐",
+            f"Challenge accepted, ready to play,\n{user_name}, here's your quiz lineup for today! 🎮",
+            f"Knowledge building, brick by brick we build,\n{user_name}, today's quiz schedule keeps you skilled! 🧱",
+            f"Morning energy, focus crystal clear,\n{user_name}, your daily quiz schedule is here! 🌅",
+            f"Step by step rising, never looking back,\n{user_name}, today's quiz schedule keeps you on track! 🛤️",
+            f"Dreams in motion, goals within reach,\n{user_name}, today's quiz schedule has lessons to teach! 📚",
+            f"Confidence building, knowledge to test,\n{user_name}, today's quiz schedule brings out your best!",
+            f"Learning journey, step by step we go,\n{user_name}, today's quiz schedule is ready to show! 📖",
+            f"Fresh start today, mind sharp and clear,\n{user_name}, your quiz lineup for today is here! 🎯",
+            # Hinglish Poetic Lines
+            f"Audit ki kasam, Law ki dua,\n{user_name}, dekho aaj schedule mein kya-kya hua! ✨",
+            f"Padhai ka junoon, aur rank ka hai khwaab,\nCheck kariye aaj ka quiz, *{msg.from_user.first_name}* janab!"
+        ]
+        
+        # --- Database Query ---
+        today_date_str = datetime.datetime.now(ist_tz).strftime('%Y-%m-%d')
+        response = supabase.table('quiz_schedule').select('*').eq('quiz_date', today_date_str).order('quiz_no').execute()
 
         if response.data:
-            user_name = msg.from_user.first_name
-            greetings = [
-                f"Hey {user_name}! Here is the quiz schedule for today: 🗓️",
-                f"Ready for a challenge, {user_name}? Here's today's agenda: 🔥",
-                f"Good day, {user_name}! Here is your quiz lineup: 📚",
-            ]
-            message_text = random.choice(greetings) + "\n\n"
+            # --- Build the Message ---
+            header = f"_{time_of_day_greeting}!_\n\n{random.choice(all_greetings)}\n"
+            message_text = header + "\n" + "─" * 20 + "\n"
 
             for quiz_item in response.data:
+                # Defensive coding for all fields
+                subject = escape_markdown(str(quiz_item.get('subject', 'N/A')))
+                chapter = escape_markdown(str(quiz_item.get('chapter_name', 'N/A')))
+                topics = escape_markdown(str(quiz_item.get('topics_covered', 'N/A')))
+                quiz_no = quiz_item.get('quiz_no', 'N/A')
+                quiz_type = escape_markdown(str(quiz_item.get('quiz_type', 'N/A')))
+                time_str = quiz_item.get('quiz_time')
+
                 try:
-                    time_obj = datetime.datetime.strptime(quiz_item['quiz_time'], '%H:%M:%S')
+                    time_obj = datetime.datetime.strptime(time_str, '%H:%M:%S')
                     formatted_time = time_obj.strftime('%I:%M %p')
                 except (ValueError, TypeError):
-                    formatted_time = quiz_item.get('quiz_time', 'N/A')
-
-                part_info = "N/A"
-                quiz_type_str = quiz_item.get('quiz_type', '')
-                if 'Mega' in quiz_type_str:
-                    part_info = quiz_type_str
-                else:
-                    part_match = re.search(r'\d+', quiz_type_str)
-                    if part_match:
-                        part_info = f"Part {part_match.group(0)}"
-                    else:
-                        part_info = "Full Chapter"
-
+                    formatted_time = "N/A"
+                
+                # Clear, Line-by-Line Format
                 quiz_details = (
-                    f"*Quiz no. {quiz_item.get('quiz_no', 'N/A')}:*\n"
-                    f"⏰ Time: *{formatted_time}*\n"
-                    f"📝 Subject: *{escape_markdown(str(quiz_item.get('subject', 'N/A')))}*\n"
-                    f"📖 Chapter: *{escape_markdown(str(quiz_item.get('chapter_name', 'N/A')))}*\n"
-                    f"✏️ Part: *{escape_markdown(part_info)}*\n"
-                    f"🧩 Topics: *{escape_markdown(str(quiz_item.get('topics_covered', 'N/A')))}*\n\n"
+                    f"\n*Quiz no. {quiz_no}:*\n"
+                    f"⏰ Time: `{formatted_time}`\n"
+                    f"📝 Subject: {subject}\n"
+                    f"📖 Chapter: {chapter}\n"
+                    f"✏️ Part: {quiz_type}\n"
+                    f"🧩 Topics: {topics}\n"
                 )
                 message_text += quiz_details
-
-            # --- FIX: Changed from Web App button to a standard URL button ---
+            
+            message_text += "\n" + "─" * 20
+            
+            # Professional Button Text
             markup = types.InlineKeyboardMarkup()
             schedule_url = "https://studyprosync.web.app/"
             button = types.InlineKeyboardButton(
-                text="📅 Click here for the full weekly schedule",
-                url=schedule_url  # Changed from 'web_app' to 'url'
+                text="📅 View Full Weekly Schedule",
+                url=schedule_url
             )
             markup.add(button)
-
-            bot.send_message(msg.chat.id, message_text, parse_mode="Markdown", reply_markup=markup)
+            
+            bot.send_message(msg.chat.id, message_text, parse_mode="Markdown", reply_markup=markup, disable_web_page_preview=True)
 
         else:
-            bot.send_message(
-                msg.chat.id,
-                f"Hey {msg.from_user.first_name}, the schedule for today hasn't been updated yet. Please wait for the admin's announcement. Happy studying! 👍"
+            no_schedule_text = (
+                f"Hey {msg.from_user.first_name}! 👋\n\n"
+                "It seems the schedule for today has not been posted yet. It might be a rest day! 🧘\n\n"
+                "You can check the weekly schedule via the button in a previous message, or wait for an admin announcement."
             )
+            bot.send_message(msg.chat.id, no_schedule_text)
 
     except Exception as e:
-        print(f"Error in /todayquiz command: {traceback.format_exc()}")
-        report_error_to_admin(f"Failed to fetch today's quiz schedule:\n{traceback.format_exc()}")
-        bot.send_message(
-            msg.chat.id,
-            "❌ Oops! Something went wrong while fetching the schedule. The admin has been notified."
+        tb_string = traceback.format_exc()
+        print(f"CRITICAL Error in /todayquiz command: {tb_string}")
+        report_error_to_admin(f"Failed to fetch today's quiz schedule:\n{tb_string}")
+        
+        user_error_message = (
+            "😥 Oops! Something went wrong while fetching the schedule.\n\n"
+            "Our admin team has been notified and will fix it shortly. Please try again in a little while."
         )
+        bot.send_message(msg.chat.id, user_error_message)
 # THIS IS THE COMPLETE AND CORRECT CODE FOR THE /createpoll FEATURE
 # =============================================================================
 # 8.5. INTERACTIVE COMMANDS (POLLS, QUIZZES, ETC.) - CORRECTED BLOCK
