@@ -702,42 +702,55 @@ def handle_quiz_start_button(msg: types.Message):
 @bot.message_handler(commands=['adminhelp'])
 @admin_required
 def handle_help_command(msg: types.Message):
-    """Sends a well-formatted and categorized list of admin commands."""
-    # This text uses simple Markdown. Telegram clients automatically make /commands clickable.
-    # We wrap commands in backticks (`) to make them stand out as code, which is clean and easy to read.
+    """Sends a beautifully formatted and categorized list of admin commands."""
     help_text = """
-🤖 *Rising Empire Bot - Admin Panel* 🤖
+╭─•••─•••──•••──•••─•••╮
+   🤖   *Admin Dashboard*   🤖
+╰─•••─•••──•••──•••─•••╯
 
-Here are all the available commands. Just click on any command to use it.
+*Hello, Admin! Here are your available tools. Click any command to get started.*
 
-*━━━ Engagement & Content ━━━*
-`/motivate` - Send a random motivational quote.
-`/studytip` - Send a useful study tip.
-`/announce` - Broadcast a message to the group.
-`/message` - Send a direct message in one go.
-`/notify` - Alert members about a quiz (e.g., /notify 15).
+- - - - - - - - - - - - - - - - - - - - -
 
-*━━━ Quiz & Marathon Management ━━━*
-`/quickquiz` - Create a quick, timed poll-based quiz.
-`/createquiztext` - Create a simple text-based quiz.
-`/randomquiz` - Post a random quiz from the Supabase DB.
-`/quizmarathon` - Start a multi-question quiz from Google Sheets.
-`/roko` - Forcefully stop a running quiz marathon.
-`/quizresult` - Announce winners of the bot's internal quiz.
-`/bdhai` - Congratulate winners by replying to a leaderboard.
-`/leaderboard` - Show the all-time random quiz leaderboard.
+*📣  Content & Engagement*
+`/motivate` • Send a motivational quote
+`/studytip` • Send a useful study tip
+`/announce` • Broadcast & pin a message
+`/message` • Send a simple group message
 
-*━━━ Doubt Hub ━━━*
-`/askdoubt` - Ask a question (e.g., /askdoubt [High] your question).
-`/answer` - Answer a specific doubt (e.g., /answer 123 your answer).
-`/bestanswer` - Mark the best answer (reply to the message).
+- - - - - - - - - - - - - - - - - - - - -
 
-*━━━ Utilities ━━━*
-`/section` - Get a summary of a law section (e.g., /section 141).
-`/mysheet` - Get the link to the connected Google Sheet.
+*💬  Direct Messaging*
+`/dm` • Message a user or all users
+
+- - - - - - - - - - - - - - - - - - - - -
+
+*🧠  Quiz & Marathon Management*
+`/quizmarathon` • Start a full quiz marathon
+`/createquiz` • Create a standard quiz
+`/quickquiz` • Create a fast, timed quiz
+`/randomquiz` • Post a random question
+`/createpoll` • Create a simple group poll
+`/roko` • Stop the current marathon
+`/leaderboard` • Show the all-time leaderboard
+`/quizresult` • Announce winners of a quick quiz
+`/bdhai` • Congratulate marathon winners
+
+- - - - - - - - - - - - - - - - - - - - -
+
+*❓  Doubt Resolution Hub*
+`/askdoubt` • Ask a question for the group
+`/answer` • Provide an answer to a doubt
+`/bestanswer` • Mark the best answer
+
+- - - - - - - - - - - - - - - - - - - - -
+
+*🛠️  Utilities & Info*
+`/section` • Get details for a law section
+`/mysheet` • Get the Google Sheet link
+
 """
     bot.send_message(msg.chat.id, help_text, parse_mode="Markdown")
-
 # === ADD THIS ENTIRE NEW FUNCTION ===
 
 
@@ -1303,7 +1316,7 @@ def handle_dm_conversation_steps(msg: types.Message):
         def send_message_to_user(target_id, name):
             try:
                 # Add a personalized header
-                header = f"👋 Hello {name},\n\nYou have a new message from the admin team:\n\n---\n"
+                header = f"👋 Hello {name},\n\nYou have a new message from the Rising Empire Quiz group:\n\n---\n"
                 bot.send_message(target_id, header)
                 
                 # Forward the admin's message (text, photo, etc.)
