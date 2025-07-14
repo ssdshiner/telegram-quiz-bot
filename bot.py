@@ -2653,11 +2653,10 @@ def handle_best_answer(msg: types.Message):
 
 
 # =============================================================================
-# 8.X. ADVANCED QUIZ MARATHON FEATURE
+# 8.X. ADVANCED QUIZ MARATHON FEATURE (SERIAL & STATEFUL)
 # =============================================================================
 
-# This dictionary will hold the admin's inputs during the setup process.
-user_states = {}
+# Note: The 'user_states' dictionary is used for the conversational setup.
 
 @bot.message_handler(commands=['quizmarathon'])
 @admin_required
@@ -2685,7 +2684,7 @@ def process_marathon_description(msg: types.Message):
     bot.register_next_step_handler(prompt, process_marathon_question_count)
 
 def process_marathon_question_count(msg: types.Message):
-    """Finalizes setup and starts the marathon."""
+    """Finalizes setup and starts the marathon using serial questions from Supabase."""
     user_id = msg.from_user.id
     try:
         num_questions = int(msg.text.strip())
@@ -2693,106 +2692,68 @@ def process_marathon_question_count(msg: types.Message):
             bot.send_message(user_id, "❌ Please enter a positive number of questions.")
             return
 
-        bot.send_message(user_id, "✅ Setup complete! Fetching questions and starting the marathon in the main group...")
+        bot.send_message(user_id, "✅ Setup complete! Fetching the next available questions from the database...")
 
-        # --- Fetch questions from Google Sheet ---
-        # FIX: Changed from get_google_sheet() to your existing get_gsheet()
-        sheet = get_gsheet()
-        if not sheet:
-            # Your get_gsheet() function already prints detailed errors,
-            # so we just need a simple message here.
-            bot.send_message(user_id, "❌ Could not connect to Google Sheets. Please check the logs.")
+        # --- FIX: Fetch the next N unused questions serially from Supabase ---
+        response = supabase.table('quiz_questions').select('*') \
+            .eq('used', False) \
+            .order('id', desc=False) \
+            .limit(num_questions) \
+            .execute()
+        
+        if not response.data:
+            bot.send_message(user_id, "❌ Could not find any unused questions. You may need to add more or reset them.")
             return
-        
-        all_questions = sheet.get_all_records()
-        if len(all_questions) < num_questions:
-            bot.send_message(user_id, f"⚠️ Warning: You requested {num_questions} questions, but only {len(all_questions)} are available. The marathon will run with all available questions.")
-            num_questions = len(all_questions)
 
-        random.shuffle(all_questions)
-        questions_for_marathon = all_questions[:num_questions]
+        questions_for_marathon = response.data
+        if len(questions_for_marathon) < num_questions:
+            bot.send_message(user_id, f"⚠️ Warning: You requested {num_questions}, but only {len(questions_for_marathon)} unused questions are available. The marathon will run with these questions.")
         
-        # --- Initialize session and participants data ---
-        session_id = str(GROUP_CHAT_ID)
+        # --- FIX: Use GROUP_ID variable ---
+        session_id = str(GROUP_ID)
         QUIZ_SESSIONS[session_id] = {
             'title': user_states[user_id]['title'],
             'description': user_states[user_id]['description'],
             'questions': questions_for_marathon,
             'current_question_index': 0,
             'is_active': True,
-            'stats': {'question_times': {}} # For analysis
+            'stats': {'question_times': {}}
         }
         QUIZ_PARTICIPANTS[session_id] = {}
 
-        # --- Send the start message to the group ---
         start_message = (
             f"🏁 *Quiz Marathon Begins* 🏁\n\n"
             f"*{escape_markdown(QUIZ_SESSIONS[session_id]['title'])}*\n"
             f"_{escape_markdown(QUIZ_SESSIONS[session_id]['description'])}_\n\n"
             f"Get ready for *{len(questions_for_marathon)}* questions. Let's go!"
         )
-        bot.send_message(GROUP_CHAT_ID, start_message, parse_mode="Markdown")
+        bot.send_message(GROUP_ID, start_message, parse_mode="Markdown")
 
-        # Start the first question after a short delay
         time.sleep(5)
         send_marathon_question(session_id)
-        del user_states[user_id] # Clean up state
+        if user_id in user_states:
+            del user_states[user_id]
 
     except ValueError:
         bot.send_message(user_id, "❌ That's not a valid number. Please enter a number like 10 or 25.")
     except Exception as e:
         print(f"Error starting marathon: {traceback.format_exc()}")
         bot.send_message(user_id, "❌ An error occurred while starting the marathon.")
-@bot.message_handler(commands=['roko'])
-@admin_required
-def handle_stop_marathon_command(msg: types.Message):
-    """
-    Forcefully stops a running Quiz Marathon by interacting with the new
-    QUIZ_SESSIONS state.
-    """
-    session_id = str(GROUP_CHAT_ID)
-    session = QUIZ_SESSIONS.get(session_id)
 
-    # Check if a session for this group exists and is currently active
-    if not session or not session.get('is_active'):
-        bot.reply_to(msg, "🤷 There is no quiz marathon currently running.")
-        return
-
-    # By setting this flag to False, the next scheduled question timer,
-    # when it fires, will see the session is inactive and will trigger
-    # the send_marathon_results() function instead of sending a new question.
-    session['is_active'] = False
-
-    # Announce the stoppage to the entire group
-    bot.send_message(
-        GROUP_CHAT_ID,
-        "🛑 *Marathon Stopped!* 🛑\n\nAn admin has stopped the quiz. The final results will be displayed shortly after this question ends."
-        , parse_mode="Markdown"
-    )
-
-    # Optionally, delete the admin's original /roko command
-    try:
-        bot.delete_message(msg.chat.id, msg.message_id)
-    except Exception as e:
-        # This might fail if the command was used in DMs, which is fine.
-        print(f"Could not delete /roko command message: {e}")
 def send_marathon_question(session_id):
     """Sends the next question in the marathon with its specific timer."""
     session = QUIZ_SESSIONS.get(session_id)
-    if not session or not session['is_active']:
+    if not session or not session.get('is_active'):
         return
 
     idx = session['current_question_index']
     if idx >= len(session['questions']):
-        # All questions have been sent
         session['is_active'] = False
         send_marathon_results(session_id)
         return
 
     question_data = session['questions'][idx]
     
-    # --- DYNAMIC TIMER ---
-    # Default to 60 seconds if 'time_allotted' is missing or invalid
     try:
         timer_seconds = int(question_data.get('time_allotted', 60))
         if timer_seconds <= 0: timer_seconds = 60
@@ -2806,16 +2767,15 @@ def send_marathon_question(session_id):
         str(question_data.get('Option D', ''))
     ]
     correct_option_index = ['A', 'B', 'C', 'D'].index(str(question_data.get('Correct Answer', 'A')).upper())
-    
     question_text = f"Question {idx + 1}/{len(session['questions'])}\n\n{question_data.get('Question', '')}"
     
     poll_message = bot.send_poll(
-        chat_id=GROUP_CHAT_ID,
+        chat_id=GROUP_ID, # FIX: Use GROUP_ID
         question=question_text,
         options=options,
         type='quiz',
         correct_option_id=correct_option_index,
-        is_anonymous=False, # Must be False to track users
+        is_anonymous=False,
         open_period=timer_seconds,
         explanation=str(question_data.get('Explanation', '')),
         explanation_parse_mode="Markdown"
@@ -2826,74 +2786,78 @@ def send_marathon_question(session_id):
     session['stats']['question_times'][idx] = {'total_time': 0, 'answer_count': 0, 'correct_times': {}}
     session['current_question_index'] += 1
 
-    # Schedule the next question
     threading.Timer(timer_seconds + 3, send_marathon_question, args=[session_id]).start()
+
+# NOTE: The @bot.poll_answer_handler() should be defined only ONCE in your file.
+# This logic should be integrated into your existing handler. Assuming it will be
+# called from a master handler, this is the core logic.
+# For simplicity, we'll keep the direct handler and assume it's the main one for polls.
 
 @bot.poll_answer_handler()
 def handle_marathon_answer(poll_answer: types.PollAnswer):
     """Handles a user's answer to a marathon poll, tracking score and time."""
-    session_id = str(GROUP_CHAT_ID)
+    session_id = str(GROUP_ID) # FIX: Use GROUP_ID
     session = QUIZ_SESSIONS.get(session_id)
     
-    # Check if the answer belongs to the current active marathon
-    if not session or not session.get('is_active') or poll_answer.poll_id != session.get('current_poll_id'):
-        return
+    # Check if this answer belongs to the currently active marathon
+    if session and session.get('is_active') and poll_answer.poll_id == session.get('current_poll_id'):
+        user_id = poll_answer.user.id
+        user_name = poll_answer.user.first_name
+        time_taken = (datetime.datetime.now() - session['question_start_time']).total_seconds()
 
-    user_id = poll_answer.user.id
-    user_name = poll_answer.user.first_name
-    
-    # --- TIME TRACKING ---
-    time_taken = (datetime.datetime.now() - session['question_start_time']).total_seconds()
+        if user_id not in QUIZ_PARTICIPANTS.get(session_id, {}):
+            QUIZ_PARTICIPANTS.setdefault(session_id, {})[user_id] = {
+                'name': user_name, 'score': 0, 'total_time': 0,
+                'questions_answered': 0, 'correct_answer_times': []
+            }
+        
+        participant = QUIZ_PARTICIPANTS[session_id][user_id]
+        participant['total_time'] += time_taken
+        participant['questions_answered'] += 1
 
-    # Initialize participant if they are new
-    if user_id not in QUIZ_PARTICIPANTS[session_id]:
-        QUIZ_PARTICIPANTS[session_id][user_id] = {
-            'name': user_name,
-            'score': 0,
-            'total_time': 0,
-            'questions_answered': 0,
-            'correct_answer_times': []
-        }
-    
-    participant = QUIZ_PARTICIPANTS[session_id][user_id]
-    participant['total_time'] += time_taken
-    participant['questions_answered'] += 1
+        question_idx = session['current_question_index'] - 1
+        question_data = session['questions'][question_idx]
+        correct_option_index = ['A', 'B', 'C', 'D'].index(str(question_data.get('Correct Answer', 'A')).upper())
 
-    # Check if the answer is correct
-    question_idx = session['current_question_index'] - 1
-    question_data = session['questions'][question_idx]
-    correct_option_index = ['A', 'B', 'C', 'D'].index(str(question_data.get('Correct Answer', 'A')).upper())
+        q_stats = session['stats']['question_times'][question_idx]
+        q_stats['total_time'] += time_taken
+        q_stats['answer_count'] += 1
 
-    # Update stats for analysis
-    q_stats = session['stats']['question_times'][question_idx]
-    q_stats['total_time'] += time_taken
-    q_stats['answer_count'] += 1
+        if poll_answer.option_ids and poll_answer.option_ids[0] == correct_option_index:
+            participant['score'] += 1
+            participant['correct_answer_times'].append(time_taken)
+            q_stats['correct_times'][user_id] = time_taken
+    else:
+        # If the poll answer is not for the marathon, you can pass it to other handlers
+        # This part assumes you might have other quiz types running.
+        # For now, we will just print a log.
+        print(f"Received poll answer for a non-marathon poll: {poll_answer.poll_id}")
+        # Here you could call `handle_poll_answers(poll_answer)` if that's your old handler
+        pass
 
-    if poll_answer.option_ids[0] == correct_option_index:
-        participant['score'] += 1
-        participant['correct_answer_times'].append(time_taken)
-        q_stats['correct_times'][user_id] = time_taken
 
 def send_marathon_results(session_id):
-    """Generates and sends the final, detailed leaderboard and analysis."""
+    """
+    Generates results, sends them, and then marks the used questions as TRUE in the database.
+    """
     session = QUIZ_SESSIONS.get(session_id)
     participants = QUIZ_PARTICIPANTS.get(session_id)
 
+    if not session: return # Avoids errors if session was already cleared
+    
     if not participants:
-        bot.send_message(GROUP_CHAT_ID, "🏁 The quiz has finished, but no one participated!")
+        bot.send_message(GROUP_ID, "🏁 The quiz has finished, but no one participated!")
+        if session_id in QUIZ_SESSIONS: del QUIZ_SESSIONS[session_id]
+        if session_id in QUIZ_PARTICIPANTS: del QUIZ_PARTICIPANTS[session_id]
         return
 
-    # Sort participants by score (desc) and then by total time (asc)
     sorted_participants = sorted(participants.values(), key=lambda p: (p['score'], -p['total_time']), reverse=True)
-
     total_questions = len(session['questions'])
     
-    # --- BUILD NEW LEADERBOARD ---
     results_text = (
         f"🏁 The quiz *'{escape_markdown(session['title'])}'* has finished!\n\n"
         f"*{len(participants)}* participants answered at least one question.\n\n"
     )
-
     rank_emojis = ["🥇", "🥈", "🥉"]
     for i, p in enumerate(sorted_participants):
         rank = rank_emojis[i] if i < 3 else f"  *{i + 1}.*"
@@ -2901,30 +2865,35 @@ def send_marathon_results(session_id):
         score = p['score']
         percentage = (score / total_questions) * 100 if total_questions > 0 else 0
         formatted_time = format_duration(p['total_time'])
-        
         results_text += f"{rank} *{name}* – {score} correct ({percentage:.0f}%) in {formatted_time}\n"
 
     results_text += "\n🏆 Congratulations to the winners!"
-    bot.send_message(GROUP_CHAT_ID, results_text, parse_mode="Markdown")
+    bot.send_message(GROUP_ID, results_text, parse_mode="Markdown")
 
-    # --- GENERATE AND SEND ANALYSIS ---
-    time.sleep(2) # Short delay before sending insights
+    time.sleep(2)
     generate_quiz_insights(session_id)
     
-    # Clean up the session
-    del QUIZ_SESSIONS[session_id]
-    del QUIZ_PARTICIPANTS[session_id]
+    # --- Mark used questions as TRUE in the database ---
+    try:
+        used_question_ids = [q['id'] for q in session['questions']]
+        if used_question_ids:
+            supabase.table('quiz_questions').update({'used': True}).in_('id', used_question_ids).execute()
+            print(f"✅ Marked {len(used_question_ids)} questions as used: {used_question_ids}")
+    except Exception as e:
+        print(f"❌ Error marking questions as used: {e}")
+        report_error_to_admin(f"Failed to mark marathon questions as used.\n\nError: {traceback.format_exc()}")
+    
+    # Clean up the session from memory
+    if session_id in QUIZ_SESSIONS: del QUIZ_SESSIONS[session_id]
+    if session_id in QUIZ_PARTICIPANTS: del QUIZ_PARTICIPANTS[session_id]
 
 def generate_quiz_insights(session_id):
     """Calculates and displays interesting insights about the marathon."""
     session = QUIZ_SESSIONS.get(session_id)
     participants = QUIZ_PARTICIPANTS.get(session_id)
-    if not session or not participants:
-        return
+    if not session or not participants: return
         
     insights_text = "📊 *Quiz Insights*\n\n"
-    
-    # 1. Toughest & Easiest Question (by average time taken)
     question_avg_times = []
     for q_idx, data in session['stats']['question_times'].items():
         if data['answer_count'] > 0:
@@ -2937,7 +2906,6 @@ def generate_quiz_insights(session_id):
         insights_text += f"🧠 *Toughest Question (longest thinking time):* Question {slowest_q['idx'] + 1} ({slowest_q['time']:.1f}s avg)\n"
         insights_text += f"⚡ *Easiest Question (quickest answers):* Question {fastest_q['idx'] + 1} ({fastest_q['time']:.1f}s avg)\n\n"
 
-    # 2. Fastest Finger (quickest average correct answer time)
     fastest_finger = None
     min_avg_correct_time = float('inf')
     for p_id, p_data in participants.items():
@@ -2946,11 +2914,9 @@ def generate_quiz_insights(session_id):
             if avg_time < min_avg_correct_time:
                 min_avg_correct_time = avg_time
                 fastest_finger = p_data['name']
-    
     if fastest_finger:
         insights_text += f"💨 *Fastest Finger Award:* {escape_markdown(fastest_finger)} (avg {min_avg_correct_time:.1f}s on correct answers)\n"
 
-    # 3. Accuracy Award (highest percentage of correct answers vs answered)
     most_accurate = None
     max_accuracy = -1.0
     for p_id, p_data in participants.items():
@@ -2959,9 +2925,32 @@ def generate_quiz_insights(session_id):
             if accuracy > max_accuracy:
                 max_accuracy = accuracy
                 most_accurate = p_data['name']
-
     if most_accurate:
         insights_text += f"🎯 *Top Accuracy Award:* {escape_markdown(most_accurate)} ({max_accuracy:.0f}% correct of questions answered)\n"
+
+    bot.send_message(GROUP_ID, insights_text, parse_mode="Markdown")
+
+@bot.message_handler(commands=['roko'])
+@admin_required
+def handle_stop_marathon_command(msg: types.Message):
+    """Forcefully stops a running Quiz Marathon."""
+    session_id = str(GROUP_ID) # FIX: Use GROUP_ID
+    session = QUIZ_SESSIONS.get(session_id)
+
+    if not session or not session.get('is_active'):
+        bot.reply_to(msg, "🤷 There is no quiz marathon currently running.")
+        return
+
+    session['is_active'] = False
+    bot.send_message(
+        GROUP_ID, # FIX: Use GROUP_ID
+        "🛑 *Marathon Stopped!* 🛑\n\nAn admin has stopped the quiz. The final results will be displayed shortly after this question ends.",
+        parse_mode="Markdown"
+    )
+    try:
+        bot.delete_message(msg.chat.id, msg.message_id)
+    except Exception as e:
+        print(f"Could not delete /roko command message: {e}")
 
     bot.send_message(GROUP_CHAT_ID, insights_text, parse_mode="Markdown")
 @bot.message_handler(content_types=['new_chat_members'])
