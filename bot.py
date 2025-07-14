@@ -2972,7 +2972,7 @@ def handle_new_member(msg: types.Message):
     for member in msg.new_chat_members:
         if not member.is_bot:
             # We now use a direct string, not a variable.
-            welcome_text = f"Hey {member.first_name} 👋 Welcome to the group. Be ready for the quiz at 8 PM 🚀"
+            welcome_text = f"Hey {member.first_name} 👋 Welcome to the group. Check quiz schedule of today by sending /todayquiz 🚀"
             # IMPORTANT: We remove parse_mode="Markdown" to avoid errors with user names.
             bot.send_message(msg.chat.id, welcome_text)
 
