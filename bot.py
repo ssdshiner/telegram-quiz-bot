@@ -121,35 +121,40 @@ last_doubt_reminder_hour = -1
 # 3. GOOGLE SHEETS INTEGRATION
 # =============================================================================
 def get_gsheet():
-    """Connects to Google Sheets using credentials from a file path."""
+    """
+    Connects to Google Sheets using service account credentials stored directly
+    in environment variables. This is the recommended method for Render.
+    """
     try:
         scope = [
             "https://spreadsheets.google.com/feeds",
             "https://www.googleapis.com/auth/drive"
         ]
-        credentials_path = os.getenv('GOOGLE_SHEETS_CREDENTIALS_PATH')
-        if not credentials_path:
-            print(
-                "ERROR: GOOGLE_SHEETS_CREDENTIALS_PATH environment variable not set."
-            )
+        # Get the entire JSON credential content from an environment variable
+        creds_json_str = os.getenv('GOOGLE_CREDS_JSON')
+        if not creds_json_str:
+            print("ERROR: GOOGLE_CREDS_JSON environment variable not set.")
+            report_error_to_admin("CRITICAL: GOOGLE_CREDS_JSON env var is missing!")
             return None
-        creds = ServiceAccountCredentials.from_json_keyfile_name(
-            credentials_path, scope)
+            
+        creds_json = json.loads(creds_json_str)
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_json, scope)
         client = gspread.authorize(creds)
-        sheet_key = os.getenv('GOOGLE_SHEET_KEY')
-        if not sheet_key:
-            print("ERROR: GOOGLE_SHEET_KEY environment variable not set.")
-            return None
-        return client.open_by_key(sheet_key).sheet1
-    except FileNotFoundError:
-        print(
-            f"ERROR: Credentials file not found at path: {credentials_path}. Make sure the Secret File is configured correctly on Render."
-        )
-        return None
-    except Exception as e:
-        print(f"❌ Google Sheets connection failed: {e}")
-        return None
 
+        # Get the sheet name from an environment variable
+        sheet_name = os.getenv('GOOGLE_SHEET_NAME')
+        if not sheet_name:
+            print("ERROR: GOOGLE_SHEET_NAME environment variable not set.")
+            report_error_to_admin("CRITICAL: GOOGLE_SHEET_NAME env var is missing!")
+            return None
+            
+        print(f"✅ Successfully connected to Google Sheet: {sheet_name}")
+        return client.open(sheet_name).sheet1
+
+    except Exception as e:
+        print(f"❌ Google Sheets connection failed: {traceback.format_exc()}")
+        report_error_to_admin(f"CRITICAL: Failed to connect to Google Sheets!\n\nError: {e}")
+        return None
 
 def initialize_gsheet():
     """Initializes the Google Sheet with a header row if it's empty."""
@@ -175,6 +180,29 @@ def initialize_gsheet():
 # =============================================================================
 # 4. UTILITY & HELPER FUNCTIONS
 # =============================================================================
+# =============================================================================
+# 4.1. BACKGROUND USER TRACKING
+# =============================================================================
+
+@bot.message_handler(func=lambda msg: is_group_message(msg))
+def track_users(msg: types.Message):
+    """
+    A background handler that captures user info from any message sent in the
+    group and upserts it into the 'group_members' table.
+    """
+    try:
+        user = msg.from_user
+        # We call the Supabase function we created in SQL
+        supabase.rpc('upsert_group_member', {
+            'p_user_id': user.id,
+            'p_username': user.username,
+            'p_first_name': user.first_name,
+            'p_last_name': user.last_name
+        }).execute()
+    except Exception as e:
+        # This is a background task, so we don't want to bother users with errors.
+        # We'll just print it for debugging.
+        print(f"[User Tracking Error]: Could not update user {msg.from_user.id}. Reason: {e}")
 def format_duration(seconds: float) -> str:
     """Formats a duration in seconds into a 'X min Y sec' or 'Y.Y sec' string."""
     if seconds < 0:
@@ -1167,8 +1195,228 @@ def handle_mysheet(msg: types.Message):
     sheet_url = f"https://docs.google.com/spreadsheets/d/{GOOGLE_SHEET_KEY}"
     bot.send_message(msg.chat.id,
                      f"📄 Here is the link to the Google Sheet:\n{sheet_url}")
+# =============================================================================
+# 8.X. DIRECT MESSAGING SYSTEM (/dm)
+# =============================================================================
+
+# This dictionary holds the state for the /dm command conversation.
+# We will reuse the 'user_states' dictionary we have for other commands.
+
+@bot.message_handler(commands=['dm'])
+@admin_required
+def handle_dm_command(msg: types.Message):
+    """
+    Starts the conversational flow for an admin to send a direct message
+    to a user or all users. This command MUST be used in a private chat with the bot.
+    """
+    if msg.chat.id != msg.from_user.id:
+        bot.reply_to(msg, "🤫 For privacy, please use the `/dm` command in a private chat with me.")
+        return
+        
+    user_id = msg.from_user.id
+    
+    # Reset any previous state for this admin
+    user_states[user_id] = {'step': 'awaiting_recipient_choice'}
+    
+    markup = types.InlineKeyboardMarkup()
+    markup.add(
+        types.InlineKeyboardButton("A Specific User", callback_data="dm_specific_user"),
+        types.InlineKeyboardButton("All Group Members", callback_data="dm_all_users"),
+        types.InlineKeyboardButton("Cancel", callback_data="dm_cancel")
+    )
+    
+    bot.send_message(user_id, "💬 *Direct Message System*\n\nWho would you like to send a message to?", reply_markup=markup, parse_mode="Markdown")
 
 
+@bot.callback_query_handler(func=lambda call: call.data.startswith('dm_'))
+def handle_dm_callbacks(call: types.CallbackQuery):
+    """Handles the button presses during the /dm setup."""
+    user_id = call.from_user.id
+    message_id = call.message.message_id
+    
+    if call.data == 'dm_specific_user':
+        user_states[user_id]['step'] = 'awaiting_username'
+        user_states[user_id]['target'] = 'specific'
+        bot.edit_message_text(
+            "👤 Please provide the Telegram @username of the user you want to message (e.g., `@example_user`).",
+            chat_id=user_id,
+            message_id=message_id
+        )
+        # We don't use register_next_step_handler here, we'll catch the next text message.
+
+    elif call.data == 'dm_all_users':
+        user_states[user_id]['step'] = 'awaiting_message_content'
+        user_states[user_id]['target'] = 'all'
+        bot.edit_message_text(
+            "📣 *To All Users*\n\nOkay, what message would you like to send? You can send text, an image, a video, a document, or an audio file. Just send it to me now.",
+            chat_id=user_id,
+            message_id=message_id,
+            parse_mode="Markdown"
+        )
+        # The next step will be handled by the content handler.
+
+    elif call.data == 'dm_cancel':
+        if user_id in user_states:
+            del user_states[user_id]
+        bot.edit_message_text("❌ Operation cancelled.", chat_id=user_id, message_id=message_id)
+
+
+# This new handler catches ALL messages from an admin who is in the middle of a /dm conversation.
+# The `content_types` parameter is the key to handling any kind of message.
+@bot.message_handler(
+    func=lambda msg: user_states.get(msg.from_user.id, {}).get('step') in ['awaiting_username', 'awaiting_message_content'],
+    content_types=['text', 'photo', 'video', 'document', 'audio']
+)
+def handle_dm_conversation_steps(msg: types.Message):
+    """
+    Continues the /dm conversation, processing either the username or the message content.
+    """
+    admin_id = msg.from_user.id
+    current_step = user_states[admin_id]['step']
+
+    # --- Step 1: Admin provides the username ---
+    if current_step == 'awaiting_username':
+        username_to_find = msg.text.strip()
+        if not username_to_find.startswith('@'):
+            bot.send_message(admin_id, "⚠️ Please make sure the username starts with an `@` symbol.")
+            return
+
+        try:
+            # Find the user_id from our database
+            response = supabase.table('group_members').select('user_id, first_name').eq('username', username_to_find.lstrip('@')).limit(1).single().execute()
+            target_user = response.data
+            
+            if not target_user:
+                bot.send_message(admin_id, f"❌ I couldn't find a user with the username `{username_to_find}` in my records. Please make sure they have talked in the group recently.")
+                return
+
+            user_states[admin_id]['target_user_id'] = target_user['user_id']
+            user_states[admin_id]['target_user_name'] = target_user['first_name']
+            user_states[admin_id]['step'] = 'awaiting_message_content'
+            
+            bot.send_message(admin_id, f"✅ Found user: *{target_user['first_name']}*.\n\nNow, what message would you like to send to them? You can send text, an image, a document, etc.", parse_mode="Markdown")
+
+        except Exception as e:
+            bot.send_message(admin_id, f"❌ An error occurred while searching for the user. They may not be in the database.")
+            print(f"Error finding user for DM: {e}")
+
+    # --- Step 2: Admin provides the content to send ---
+    elif current_step == 'awaiting_message_content':
+        target_type = user_states[admin_id]['target']
+        
+        # This is a generic function that can forward any type of message.
+        def send_message_to_user(target_id, name):
+            try:
+                # Add a personalized header
+                header = f"👋 Hello {name},\n\nYou have a new message from the admin team:\n\n---\n"
+                bot.send_message(target_id, header)
+                
+                # Forward the admin's message (text, photo, etc.)
+                bot.copy_message(chat_id=target_id, from_chat_id=admin_id, message_id=msg.message_id)
+                return True
+            except Exception as e:
+                # This usually happens if the user has blocked the bot.
+                print(f"Failed to send DM to {target_id}. Reason: {e}")
+                return False
+
+        if target_type == 'specific':
+            target_id = user_states[admin_id]['target_user_id']
+            target_name = user_states[admin_id]['target_user_name']
+            if send_message_to_user(target_id, target_name):
+                bot.send_message(admin_id, f"✅ Message successfully sent to *{target_name}*!", parse_mode="Markdown")
+            else:
+                bot.send_message(admin_id, f"❌ Failed to send message to *{target_name}*. They may have blocked the bot.", parse_mode="Markdown")
+            del user_states[admin_id] # End conversation
+
+        elif target_type == 'all':
+            bot.send_message(admin_id, "🚀 Starting to broadcast the message to all users. This may take a while...")
+            
+            try:
+                response = supabase.table('group_members').select('user_id, first_name').execute()
+                all_users = response.data
+                
+                success_count = 0
+                fail_count = 0
+                
+                for user in all_users:
+                    if send_message_to_user(user['user_id'], user['first_name']):
+                        success_count += 1
+                    else:
+                        fail_count += 1
+                    time.sleep(0.1) # Small delay to avoid flooding Telegram's API
+
+                bot.send_message(admin_id, f"✅ *Broadcast Complete!*\n\nSent to: *{success_count}* users.\nFailed for: *{fail_count}* users (likely blocked the bot).", parse_mode="Markdown")
+                
+            except Exception as e:
+                bot.send_message(admin_id, "❌ An error occurred during the broadcast.")
+                print(f"Error during DM broadcast: {e}")
+            
+            del user_states[admin_id] # End conversation
+# This handler will catch any message sent to the bot in a private chat that is NOT a command.
+@bot.message_handler(
+    func=lambda msg: msg.chat.id == msg.from_user.id and not msg.text.startswith('/'),
+    content_types=['text', 'photo', 'video', 'document', 'audio', 'sticker']
+)
+def forward_user_reply_to_admin(msg: types.Message):
+    """
+    Forwards a user's direct message to the admin, formatted for an easy reply.
+    """
+    user_info = msg.from_user
+    
+    # We create a special "header" to send to the admin.
+    # This header contains all the information the admin needs to reply.
+    # The user's ID is included in a hidden, clickable format.
+    admin_header = (
+        f"📩 *New reply from* [{escape_markdown(user_info.first_name)}](tg://user?id={user_info.id})\n"
+        f"👤 *Username:* @{user_info.username}\n"
+        f"🆔 *User ID:* `{user_info.id}`\n\n"
+        f"👇 *To reply to this user, use the /dm command or simply forward their message below to me and type your reply.*"
+    )
+
+    try:
+        # Step 1: Send the informative header to the admin.
+        bot.send_message(ADMIN_USER_ID, admin_header, parse_mode="Markdown")
+        
+        # Step 2: Forward the user's original message to the admin.
+        # This preserves the message perfectly (stickers, photos, etc.).
+        bot.forward_message(chat_id=ADMIN_USER_ID, from_chat_id=msg.chat.id, message_id=msg.message_id)
+
+    except Exception as e:
+        print(f"Error forwarding user DM to admin: {e}")
+        # Optionally, inform the user that their message couldn't be delivered.
+        bot.send_message(msg.chat.id, "I'm sorry, but I was unable to deliver your message to the admin at this time. Please try again later.")
+# This handler triggers ONLY when the ADMIN replies to a forwarded message.
+@bot.message_handler(
+    func=lambda msg: msg.from_user.id == ADMIN_USER_ID and msg.reply_to_message and msg.reply_to_message.forward_from,
+    content_types=['text', 'photo', 'video', 'document', 'audio', 'sticker']
+)
+def handle_admin_reply_to_forwarded_message(msg: types.Message):
+    """
+    Allows the admin to reply to a user by simply replying to the message
+    the bot forwarded from that user.
+    """
+    # Get the original user's ID from the message we're replying to.
+    original_user_id = msg.reply_to_message.forward_from.id
+    original_user_name = msg.reply_to_message.forward_from.first_name
+
+    try:
+        # Send a polite header to the user.
+        header = "💬 You have a new reply from the admin team:"
+        bot.send_message(original_user_id, header)
+        
+        # Copy the admin's reply message (text, photo, etc.) to the user.
+        bot.copy_message(
+            chat_id=original_user_id,
+            from_chat_id=msg.chat.id,
+            message_id=msg.message_id
+        )
+        
+        # Confirm to the admin that the reply was sent.
+        bot.reply_to(msg, f"✅ Your reply has been sent to *{escape_markdown(original_user_name)}*.", parse_mode="Markdown")
+
+    except Exception as e:
+        print(f"Error sending admin reply-to-forward: {e}")
+        bot.reply_to(msg, f"❌ Failed to send reply to *{escape_markdown(original_user_name)}*. They may have blocked the bot.", parse_mode="Markdown")
 # =============================================================================
 # 8.6. GENERAL ADMIN COMMANDS (CLEANED UP)
 # =============================================================================
@@ -2484,9 +2732,12 @@ def process_marathon_question_count(msg: types.Message):
         bot.send_message(user_id, "✅ Setup complete! Fetching questions and starting the marathon in the main group...")
 
         # --- Fetch questions from Google Sheet ---
-        sheet = get_google_sheet()
+        # FIX: Changed from get_google_sheet() to your existing get_gsheet()
+        sheet = get_gsheet()
         if not sheet:
-            bot.send_message(user_id, "❌ Could not connect to Google Sheets.")
+            # Your get_gsheet() function already prints detailed errors,
+            # so we just need a simple message here.
+            bot.send_message(user_id, "❌ Could not connect to Google Sheets. Please check the logs.")
             return
         
         all_questions = sheet.get_all_records()
