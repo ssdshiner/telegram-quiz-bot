@@ -866,7 +866,7 @@ def save_data():
 def handle_today_quiz(msg: types.Message):
     """
     Shows the quiz schedule for the day from the Supabase 'quiz_schedule' table,
-    with a button to open the weekly schedule Web App.
+    with a button to open the weekly schedule URL.
     """
     if not is_group_message(msg):
         bot.send_message(
@@ -884,7 +884,6 @@ def handle_today_quiz(msg: types.Message):
             'quiz_date', today_date_str).order('quiz_no', desc=False).execute()
 
         if response.data:
-            # Personalized greetings using the user's first name
             user_name = msg.from_user.first_name
             greetings = [
                 f"Hey {user_name}! Here is the quiz schedule for today: 🗓️",
@@ -921,17 +920,15 @@ def handle_today_quiz(msg: types.Message):
                 )
                 message_text += quiz_details
 
-            # --- NEW: Create the Web App button ---
+            # --- FIX: Changed from Web App button to a standard URL button ---
             markup = types.InlineKeyboardMarkup()
-            web_app_url = "https://studyprosync.web.app/"
-            web_app_info = types.WebAppInfo(url=web_app_url)
+            schedule_url = "https://studyprosync.web.app/"
             button = types.InlineKeyboardButton(
                 text="📅 Click here for the full weekly schedule",
-                web_app=web_app_info
+                url=schedule_url  # Changed from 'web_app' to 'url'
             )
             markup.add(button)
 
-            # --- UPDATED: Send the message with the schedule AND the button ---
             bot.send_message(msg.chat.id, message_text, parse_mode="Markdown", reply_markup=markup)
 
         else:
