@@ -121,40 +121,35 @@ last_doubt_reminder_hour = -1
 # 3. GOOGLE SHEETS INTEGRATION
 # =============================================================================
 def get_gsheet():
-    """
-    Connects to Google Sheets using service account credentials stored directly
-    in environment variables. This is the recommended method for Render.
-    """
+    """Connects to Google Sheets using credentials from a file path."""
     try:
         scope = [
             "https://spreadsheets.google.com/feeds",
             "https://www.googleapis.com/auth/drive"
         ]
-        # Get the entire JSON credential content from an environment variable
-        creds_json_str = os.getenv('GOOGLE_CREDS_JSON')
-        if not creds_json_str:
-            print("ERROR: GOOGLE_CREDS_JSON environment variable not set.")
-            report_error_to_admin("CRITICAL: GOOGLE_CREDS_JSON env var is missing!")
+        credentials_path = os.getenv('GOOGLE_SHEETS_CREDENTIALS_PATH')
+        if not credentials_path:
+            print(
+                "ERROR: GOOGLE_SHEETS_CREDENTIALS_PATH environment variable not set."
+            )
             return None
-            
-        creds_json = json.loads(creds_json_str)
-        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_json, scope)
+        creds = ServiceAccountCredentials.from_json_keyfile_name(
+            credentials_path, scope)
         client = gspread.authorize(creds)
-
-        # Get the sheet name from an environment variable
-        sheet_name = os.getenv('GOOGLE_SHEET_NAME')
-        if not sheet_name:
-            print("ERROR: GOOGLE_SHEET_NAME environment variable not set.")
-            report_error_to_admin("CRITICAL: GOOGLE_SHEET_NAME env var is missing!")
+        sheet_key = os.getenv('GOOGLE_SHEET_KEY')
+        if not sheet_key:
+            print("ERROR: GOOGLE_SHEET_KEY environment variable not set.")
             return None
-            
-        print(f"✅ Successfully connected to Google Sheet: {sheet_name}")
-        return client.open(sheet_name).sheet1
-
-    except Exception as e:
-        print(f"❌ Google Sheets connection failed: {traceback.format_exc()}")
-        report_error_to_admin(f"CRITICAL: Failed to connect to Google Sheets!\n\nError: {e}")
+        return client.open_by_key(sheet_key).sheet1
+    except FileNotFoundError:
+        print(
+            f"ERROR: Credentials file not found at path: {credentials_path}. Make sure the Secret File is configured correctly on Render."
+        )
         return None
+    except Exception as e:
+        print(f"❌ Google Sheets connection failed: {e}")
+        return None
+
 
 def initialize_gsheet():
     """Initializes the Google Sheet with a header row if it's empty."""
@@ -1385,38 +1380,7 @@ def forward_user_reply_to_admin(msg: types.Message):
         print(f"Error forwarding user DM to admin: {e}")
         # Optionally, inform the user that their message couldn't be delivered.
         bot.send_message(msg.chat.id, "I'm sorry, but I was unable to deliver your message to the admin at this time. Please try again later.")
-# This handler triggers ONLY when the ADMIN replies to a forwarded message.
-@bot.message_handler(
-    func=lambda msg: msg.from_user.id == ADMIN_USER_ID and msg.reply_to_message and msg.reply_to_message.forward_from,
-    content_types=['text', 'photo', 'video', 'document', 'audio', 'sticker']
-)
-def handle_admin_reply_to_forwarded_message(msg: types.Message):
-    """
-    Allows the admin to reply to a user by simply replying to the message
-    the bot forwarded from that user.
-    """
-    # Get the original user's ID from the message we're replying to.
-    original_user_id = msg.reply_to_message.forward_from.id
-    original_user_name = msg.reply_to_message.forward_from.first_name
 
-    try:
-        # Send a polite header to the user.
-        header = "💬 You have a new reply from the admin team:"
-        bot.send_message(original_user_id, header)
-        
-        # Copy the admin's reply message (text, photo, etc.) to the user.
-        bot.copy_message(
-            chat_id=original_user_id,
-            from_chat_id=msg.chat.id,
-            message_id=msg.message_id
-        )
-        
-        # Confirm to the admin that the reply was sent.
-        bot.reply_to(msg, f"✅ Your reply has been sent to *{escape_markdown(original_user_name)}*.", parse_mode="Markdown")
-
-    except Exception as e:
-        print(f"Error sending admin reply-to-forward: {e}")
-        bot.reply_to(msg, f"❌ Failed to send reply to *{escape_markdown(original_user_name)}*. They may have blocked the bot.", parse_mode="Markdown")
 # =============================================================================
 # 8.6. GENERAL ADMIN COMMANDS (CLEANED UP)
 # =============================================================================
