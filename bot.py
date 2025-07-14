@@ -640,20 +640,21 @@ def handle_help_command(msg: types.Message):
     bot.send_message(msg.chat.id, help_text, parse_mode="Markdown")
 # === ADD THIS ENTIRE NEW FUNCTION ===
 
-
 @bot.message_handler(commands=['leaderboard'])
 @membership_required
 def handle_leaderboard(msg: types.Message):
-    """Displays the top 10 random quiz scorers, safely handling usernames."""
+    """
+    Fetches and displays the top 10 random quiz scorers in the main group chat.
+    """
     try:
-        # --- FIX: Select 'user_name' column instead of 'first_name' ---
         response = supabase.table('leaderboard').select(
             'user_name, score').order(
                 'score', desc=True).limit(10).execute()
 
         if not response.data:
+            # Send a message to the group if the leaderboard is empty
             bot.send_message(
-                msg.chat.id, "🏆 The leaderboard is empty right now. Let's play some quizzes to fill it up!"
+                GROUP_ID, "🏆 The leaderboard is empty right now. Let's play some quizzes to fill it up!"
             )
             return
 
@@ -662,20 +663,23 @@ def handle_leaderboard(msg: types.Message):
 
         for i, item in enumerate(response.data):
             rank_emoji = rank_emojis[i] if i < len(rank_emojis) else f"*{i+1}*."
-            
-            # Use the corrected column name here as well
             user_name = item.get('user_name', 'Unknown User')
             safe_name = escape_markdown(user_name)
-
             leaderboard_text += f"{rank_emoji} *{safe_name}* - {item.get('score', 0)} points\n"
 
-        bot.send_message(msg.chat.id, leaderboard_text, parse_mode="Markdown")
+        # --- THIS IS THE FIX ---
+        # It now sends the main message to the GROUP_ID
+        bot.send_message(GROUP_ID, leaderboard_text, parse_mode="Markdown")
+        
+        # And sends a private confirmation to the admin who used the command
+        bot.send_message(msg.chat.id, "✅ Leaderboard sent to the group successfully.")
 
     except Exception as e:
+        error_msg_for_admin = f"Failed to fetch leaderboard. Error: {e}"
         print(f"Error in /leaderboard: {traceback.format_exc()}")
-        report_error_to_admin(f"Failed to fetch leaderboard. Error: {e}")
-        bot.send_message(msg.chat.id, "❌ Could not fetch the leaderboard.")
-
+        report_error_to_admin(traceback.format_exc())
+        # Inform the admin about the error
+        bot.send_message(msg.chat.id, f"❌ Could not fetch the leaderboard. The error has been logged.")
 # =============================================================================
 # 5. DATA PERSISTENCE WITH SUPABASE (UPDATED FUNCTIONS)
 # =============================================================================
@@ -2440,47 +2444,40 @@ def handle_answer(msg: types.Message):
             "❌ Oops Something went wrong while submitting your answer.",
             reply_to_message_id=msg.message_id)
 
-
 @bot.message_handler(commands=['bestanswer'])
 @membership_required
 def handle_best_answer(msg: types.Message):
-    """Handles marking an answer as the best one, and cleans up other answers."""
+    """Handles marking an answer as the best one. MUST be used in the group."""
+    # --- FIX: Ensure this command only works in the main group chat ---
+    if not is_group_message(msg):
+        bot.reply_to(msg, "This command can only be used in the main group chat.")
+        return
+
     try:
         parts = msg.text.split(' ', 1)
-        if len(parts) < 2:
+        if len(parts) < 2 or not msg.reply_to_message:
             bot.reply_to(
                 msg,
-                "Invalid format. Use: `/bestanswer [Doubt_ID]` by *replying* to the best answer.",
+                "Invalid format. Use: `/bestanswer [Doubt_ID]` by *replying* to the best answer message.",
                 parse_mode="Markdown")
-            return
-
-        if not msg.reply_to_message:
-            bot.reply_to(
-                msg,
-                "Please reply to the answer message you want to mark as 'best'."
-            )
             return
 
         doubt_id = int(parts[1])
         best_answer_msg = msg.reply_to_message
 
-        fetch_response = supabase.table('doubts').select('*').eq(
-            'id', doubt_id).limit(1).execute()
+        # ... (rest of the function is the same) ...
+        fetch_response = supabase.table('doubts').select('*').eq('id', doubt_id).limit(1).execute()
         if not fetch_response.data:
             bot.reply_to(msg, f"❌ Doubt with ID #{doubt_id} not found.")
             return
 
         doubt_data = fetch_response.data[0]
 
-        if not (msg.from_user.id == doubt_data['student_id']
-                or is_admin(msg.from_user.id)):
-            bot.reply_to(
-                msg, "❌ You can only mark the best answer for your own doubt.")
+        if not (msg.from_user.id == doubt_data['student_id'] or is_admin(msg.from_user.id)):
+            bot.reply_to(msg, "❌ You can only mark the best answer for your own doubt.")
             return
 
-        # Extract clean text from the answer
         best_answer_text = best_answer_msg.text.split(':', 1)[-1].strip()
-
         updated_message_text = (
             f"<b>#Doubt{doubt_id}: Answered ✅</b>\n\n"
             f"<b>Student:</b> {doubt_data['student_name']}\n"
@@ -2499,28 +2496,23 @@ def handle_best_answer(msg: types.Message):
                 print(f"Could not unpin message for doubt {doubt_id}: {e}")
 
         supabase.table('doubts').update({
-            'status':
-            'answered',
-            'best_answer_by_id':
-            best_answer_msg.from_user.id,
-            'best_answer_text':
-            best_answer_text  # Store the clean text
+            'status': 'answered',
+            'best_answer_by_id': best_answer_msg.from_user.id,
+            'best_answer_text': best_answer_text
         }).eq('id', doubt_id).execute()
 
-        # Cleanup: Delete all other temporary answer messages
         all_answer_ids = doubt_data.get('all_answer_message_ids', [])
         for answer_id in all_answer_ids:
             try:
                 bot.delete_message(msg.chat.id, answer_id)
-            except Exception:  # Fix: Indentation error
+            except Exception:
                 pass
 
         bot.delete_message(msg.chat.id, msg.message_id)
 
     except Exception as e:
         print(f"Error in /bestanswer: {traceback.format_exc()}")
-        bot.reply_to(msg, f"❌ Oops Something went wrong.")
-
+        bot.reply_to(msg, "❌ Oops! Something went wrong.")
 
 # =============================================================================
 # 8.X. ADVANCED QUIZ MARATHON FEATURE (FINAL CORRECTED VERSION)
