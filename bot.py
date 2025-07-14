@@ -369,23 +369,37 @@ def send_join_group_prompt(chat_id):
 
 
 def membership_required(func):
-
+    """
+    Decorator that checks for group membership.
+    This version includes a specific fix for public commands used with a mention.
+    """
     @functools.wraps(func)
     def wrapper(msg: types.Message, *args, **kwargs):
+        # First, and most importantly, check if the user is a member.
+        if not check_membership(msg.from_user.id):
+            send_join_group_prompt(msg.chat.id)
+            return  # Stop immediately if not a member.
+
+        # If we are in a private chat, no more checks needed.
+        if not is_group_message(msg):
+            return func(msg, *args, **kwargs)
+
+        # --- Logic for Group Messages Only ---
         command = ""
         if msg.text and msg.text.startswith('/'):
             command = msg.text.split('@')[0].split(' ')[0].replace('/', '')
 
-        if is_group_message(
-                msg
-        ) and command not in PUBLIC_GROUP_COMMANDS and not is_bot_mentioned(
-                msg):
-            return
-
-        if check_membership(msg.from_user.id):
+        # Case 1: The command is a known PUBLIC command. Let it pass.
+        if command in PUBLIC_GROUP_COMMANDS:
             return func(msg, *args, **kwargs)
+        
+        # Case 2: The command is NOT public, so it MUST mention the bot.
+        elif is_bot_mentioned(msg):
+            return func(msg, *args, **kwargs)
+            
+        # Case 3: Command is not public and doesn't mention the bot. Ignore it.
         else:
-            send_join_group_prompt(msg.chat.id)
+            return
 
     return wrapper
 
