@@ -107,7 +107,9 @@ except Exception as e:
 # --- Global In-Memory Storage ---
 active_polls = []
 scheduled_tasks = []
+# Stores info about active marathons, including title, description, and stats
 QUIZ_SESSIONS = {}
+# Stores detailed participant stats for marathons: score, time, questions answered, etc.
 QUIZ_PARTICIPANTS = {}
 MARATHON_STATE = {}
 user_states = {}
@@ -173,6 +175,15 @@ def initialize_gsheet():
 # =============================================================================
 # 4. UTILITY & HELPER FUNCTIONS
 # =============================================================================
+def format_duration(seconds: float) -> str:
+    """Formats a duration in seconds into a 'X min Y sec' or 'Y.Y sec' string."""
+    if seconds < 0:
+        return "0 sec"
+    if seconds < 60:
+        return f"{seconds:.1f} sec"
+    minutes = int(seconds // 60)
+    remaining_seconds = int(seconds % 60)
+    return f"{minutes} min {remaining_seconds} sec"
 def report_error_to_admin(error_message: str):
     """Sends a formatted error message to the admin."""
     try:
@@ -296,6 +307,17 @@ def admin_required(func):
 def is_group_message(message):
     return message.chat.type in ['group', 'supergroup']
 
+def escape_markdown(text: str) -> str:
+    """
+    Escapes characters for Telegram's original 'Markdown' parse mode.
+    This prevents user-generated text from breaking the bot's formatting.
+    """
+    if not isinstance(text, str):
+        text = str(text)
+    # The characters to escape are: _, *, `, [
+    escape_chars = r'_*`['
+    # This creates a new string, adding a '\' before any character that needs escaping.
+    return ''.join(['\\' + char if char in escape_chars else char for char in text])
 
 def is_bot_mentioned(message):
     if not message.text:
@@ -697,35 +719,42 @@ Here are all the available commands. Just click on any command to use it.
 
 
 @bot.message_handler(commands=['leaderboard'])
-@admin_required
-def handle_leaderboard_command(msg: types.Message):
-    """Fetches and displays the all-time leaderboard."""
+@membership_required
+def handle_leaderboard(msg: types.Message):
+    """Displays the top 10 random quiz scorers, safely handling usernames."""
     try:
+        # Fetch the top 10 users from the leaderboard table
         response = supabase.table('leaderboard').select(
-            'user_name, score').order('score', desc=True).limit(10).execute()
+            'first_name, score').order(
+                'score', desc=True).limit(10).execute()
+
         if not response.data:
             bot.send_message(
-                msg.chat.id,
-                "The leaderboard is empty right now. No one has answered any quizzes yet"
+                msg.chat.id, "🏆 The leaderboard is empty right now. Let's play some quizzes to fill it up!"
             )
             return
 
-        leaderboard_text = "🏆 *All-Time Quiz Leaderboard* 🏆\n\n"
-        medals = ["🥇", "🥈", "🥉"]
-        for i, user in enumerate(response.data):
-            rank_icon = medals[i] if i < 3 else f" {i+1}\\."
-            safe_user_name = escape_markdown(user['user_name'])
-            leaderboard_text += f"{rank_icon} {safe_user_name} \- *{user['score']} points*\n"
+        leaderboard_text = "🏆 *All-Time Random Quiz Leaderboard*\n\n"
+        rank_emojis = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
 
-        leaderboard_text += "\nKeep answering the daily quizzes to climb the ranks\ 🔥"
-        bot.send_message(GROUP_ID, leaderboard_text, parse_mode="Markdown")
-        bot.send_message(msg.chat.id,
-                         "✅ Leaderboard has been posted in the group.")
+        for i, item in enumerate(response.data):
+            rank_emoji = rank_emojis[i] if i < len(rank_emojis) else f"*{i+1}*."
+
+            # --- KEY CHANGE: Safely handle the user's name ---
+            # 1. Use .get() for safety in case 'first_name' is missing.
+            # 2. Use our new escape_markdown function to prevent formatting errors.
+            user_name = item.get('first_name', 'Unknown User')
+            safe_name = escape_markdown(user_name)
+
+            # Now, build the line with the safe name.
+            leaderboard_text += f"{rank_emoji} *{safe_name}* - {item.get('score', 0)} points\n"
+
+        bot.send_message(msg.chat.id, leaderboard_text, parse_mode="Markdown")
+
     except Exception as e:
-        print(f"Error in /leaderboard command: {traceback.format_exc()}")
-        report_error_to_admin(
-            f"Failed to generate leaderboard:\n{traceback.format_exc()}")
-
+        print(f"Error in /leaderboard: {traceback.format_exc()}")
+        report_error_to_admin(f"Failed to fetch leaderboard. Error: {e}")
+        bot.send_message(msg.chat.id, "❌ Could not fetch the leaderboard.")
 
 # =============================================================================
 # 5. DATA PERSISTENCE WITH SUPABASE (UPDATED FUNCTIONS)
@@ -836,7 +865,8 @@ def save_data():
 @membership_required
 def handle_today_quiz(msg: types.Message):
     """
-    Shows the quiz schedule for the day from the Supabase 'quiz_schedule' table using robust HTML parsing.
+    Shows the quiz schedule for the day from the Supabase 'quiz_schedule' table,
+    with a button to open the weekly schedule Web App.
     """
     if not is_group_message(msg):
         bot.send_message(
@@ -854,6 +884,7 @@ def handle_today_quiz(msg: types.Message):
             'quiz_date', today_date_str).order('quiz_no', desc=False).execute()
 
         if response.data:
+            # Personalized greetings using the user's first name
             user_name = msg.from_user.first_name
             greetings = [
                 f"Hey {user_name}! Here is the quiz schedule for today: 🗓️",
@@ -880,23 +911,28 @@ def handle_today_quiz(msg: types.Message):
                     else:
                         part_info = "Full Chapter"
 
-                # We use html.escape to make sure the text from the database is safe to use in HTML
-                safe_subject = escape(str(quiz_item.get('subject', 'N/A')))
-                safe_chapter = escape(str(quiz_item.get('chapter_name', 'N/A')))
-                safe_part = escape(part_info)
-                safe_topics = escape(str(quiz_item.get('topics_covered', 'N/A')))
-
                 quiz_details = (
-                    f"<b>Quiz no. {quiz_item.get('quiz_no', 'N/A')}:</b>\n"
-                    f"⏰ Time: <b>{formatted_time}</b>\n"
-                    f"📝 Subject: <b>{safe_subject}</b>\n"
-                    f"📖 Chapter: <b>{safe_chapter}</b>\n"
-                    f"✏️ Part: <b>{safe_part}</b>\n"
-                    f"🧩 Topics: <i>{safe_topics}</i>\n\n"
+                    f"*Quiz no. {quiz_item.get('quiz_no', 'N/A')}:*\n"
+                    f"⏰ Time: *{formatted_time}*\n"
+                    f"📝 Subject: *{escape_markdown(str(quiz_item.get('subject', 'N/A')))}*\n"
+                    f"📖 Chapter: *{escape_markdown(str(quiz_item.get('chapter_name', 'N/A')))}*\n"
+                    f"✏️ Part: *{escape_markdown(part_info)}*\n"
+                    f"🧩 Topics: *{escape_markdown(str(quiz_item.get('topics_covered', 'N/A')))}*\n\n"
                 )
                 message_text += quiz_details
 
-            bot.send_message(msg.chat.id, message_text, parse_mode="HTML")
+            # --- NEW: Create the Web App button ---
+            markup = types.InlineKeyboardMarkup()
+            web_app_url = "https://studyprosync.web.app/"
+            web_app_info = types.WebAppInfo(url=web_app_url)
+            button = types.InlineKeyboardButton(
+                text="📅 Click here for the full weekly schedule",
+                web_app=web_app_info
+            )
+            markup.add(button)
+
+            # --- UPDATED: Send the message with the schedule AND the button ---
+            bot.send_message(msg.chat.id, message_text, parse_mode="Markdown", reply_markup=markup)
 
         else:
             bot.send_message(
@@ -1285,29 +1321,56 @@ def process_quick_quiz(msg: types.Message):
             f"❌ Error creating quick quiz: {e}. Please check the format and try again."
         )
 
-
 @bot.message_handler(commands=['randomquiz'])
 @admin_required
-def handle_random_quiz_command(msg: types.Message):
+def handle_random_quiz(msg: types.Message):
     """
-    Allows the admin to manually trigger the posting of a random quiz from the database.
-    This uses the same logic as the automated bi-hourly quiz.
+    Fetches a random quiz, including its explanation, and posts it as a
+    timed, anonymous poll in the group.
     """
     try:
+        # Fetch one random question using a Postgres function 'get_random_quiz'
+        response = supabase.rpc('get_random_quiz').execute()
+        if not response.data:
+            bot.send_message(GROUP_CHAT_ID, "😕 No quizzes found in the database.")
+            return
+
+        quiz_data = response.data[0]
+
+        # Prepare the options and find the correct one
+        options = [
+            quiz_data['option_a'],
+            quiz_data['option_b'],
+            quiz_data['option_c'],
+            quiz_data['option_d']
+        ]
+        correct_option_index = ['A', 'B', 'C', 'D'].index(
+            quiz_data['correct_answer'].upper())
+
+        # --- NEW: Get the explanation text from the database ---
+        # Using .get() is safe; it returns None if 'explanation' column doesn't exist
+        explanation_text = quiz_data.get('explanation')
+
+        # Send the poll with the new 'explanation' parameter
+        bot.send_poll(
+            chat_id=GROUP_CHAT_ID,
+            question=f"🧠 Random Quiz:\n\n{quiz_data['question']}",
+            options=options,
+            type='quiz',
+            correct_option_id=correct_option_index,
+            is_anonymous=True,
+            open_period=60,  # Quiz is open for 60 seconds
+            # --- THIS IS THE MAGIC LINE ---
+            explanation=explanation_text,
+            explanation_parse_mode="Markdown"  # Allows bold, italics etc. in your explanation
+        )
+
+    except Exception as e:
+        print(f"Error in /randomquiz: {traceback.format_exc()}")
+        report_error_to_admin(f"Failed to post random quiz. Error: {e}")
         bot.send_message(
             msg.chat.id,
-            "🔍 Fetching a random quiz from the database, please wait...")
-        post_daily_quiz(
-        )  # Hum automated quiz wala function hi yahan use kar rahe hain
-        bot.send_message(msg.chat.id,
-                         "✅ Random quiz has been posted to the group")
-    except Exception as e:
-        error_message = f"❌ Oops Failed to post a random quiz. Error: {e}"
-        print(error_message)
-        report_error_to_admin(traceback.format_exc())
-        bot.send_message(msg.chat.id, error_message)
-
-
+            "❌ Oops! Something went wrong while fetching a random quiz.")
 # =============================================================================
 # 8.9. CONVERSATIONAL /setquiz FEATURE
 # =============================================================================
@@ -1353,37 +1416,57 @@ def process_text_quiz(msg: types.Message):
             msg.chat.id,
             f"❌ Error creating quiz: {e}. Please check the format and try again."
         )
-
-
 @bot.message_handler(commands=['announce'])
 @admin_required
 def handle_announce_command(msg: types.Message):
-    """Starts the announcement process."""
-    prompt = bot.send_message(msg.chat.id,
-                              "📣 Type the announcement message, or /cancel.")
-    bot.register_next_step_handler(prompt, process_announcement_message)
+    """
+    Broadcasts a message to the group and automatically pins it with a notification.
+    """
+    # Extract the announcement text after the command
+    announcement_text = msg.text.replace('/announce', '', 1).strip()
 
-
-def process_announcement_message(msg: types.Message):
-    """Processes the admin's text and sends it as an announcement."""
-    if msg.text and msg.text.lower() == '/cancel':
-        bot.send_message(msg.chat.id, "❌ Announcement cancelled.")
+    if not announcement_text:
+        # Send usage instructions to the admin who used the command
+        bot.reply_to(
+            msg,
+            "⚠️ Please provide a message to announce.\nUsage: `/announce Your message here`"
+        )
         return
-    try:
-        announcement_text = f"📢 **ANNOUNCEMENT**\n\n{msg.text}"
-        bot.send_message(GROUP_ID, announcement_text, parse_mode="Markdown")
-        bot.send_message(msg.chat.id, "✅ Announcement sent")
-    except Exception as e:
-        # Give a helpful error if the admin messes up markdown formatting
-        if "can't parse entities" in str(e):
-            bot.send_message(
-                msg.chat.id,
-                "❌ Formatting error in your message. Please fix bold/italics and try again."
-            )
-        else:
-            bot.send_message(msg.chat.id,
-                             f"❌ Failed to send announcement: {e}")
 
+    # Format the announcement
+    final_message = f"📣 *Announcement*\n\n{announcement_text}"
+
+    try:
+        # Step 1: Send the announcement message to the main group chat.
+        # We capture the returned message object to get its ID.
+        sent_message = bot.send_message(
+            GROUP_CHAT_ID,
+            final_message,
+            parse_mode="Markdown"
+        )
+
+        # Step 2: Pin the message we just sent.
+        # `disable_notification=False` ensures all members are notified of the pin.
+        bot.pin_chat_message(
+            chat_id=GROUP_CHAT_ID,
+            message_id=sent_message.message_id,
+            disable_notification=False
+        )
+
+        # Step 3 (Optional but good): Confirm success to the admin who sent the command.
+        # This message will be sent to the admin's private chat if used there, or as a reply.
+        bot.reply_to(msg, "✅ Announcement sent and pinned successfully!")
+
+    except Exception as e:
+        # Step 4: Handle errors gracefully, especially permission errors.
+        print(f"Error in /announce command: {traceback.format_exc()}")
+        report_error_to_admin(f"Failed to announce and pin message. Error: {e}")
+        # Inform the admin who sent the command about the likely cause.
+        bot.reply_to(
+            msg,
+            "❌ **Error: Could not pin the message.**\n\n"
+            "Please ensure the bot is an **admin** in the group and has the **'Pin Messages'** permission."
+        )
 
 @bot.message_handler(commands=['cancel'])
 @admin_required
@@ -2361,187 +2444,314 @@ def handle_best_answer(msg: types.Message):
 
 
 # =============================================================================
-# 8.8. QUIZ MARATHON FEATURE (from Google Sheets) - WITH SCORING, EXPLANATIONS & STOP
+# 8.X. ADVANCED QUIZ MARATHON FEATURE
 # =============================================================================
 
+# This dictionary will hold the admin's inputs during the setup process.
+user_states = {}
 
 @bot.message_handler(commands=['quizmarathon'])
 @admin_required
-def handle_quiz_marathon_command(msg: types.Message):
-    """Starts the setup for a Quiz Marathon."""
-    if MARATHON_STATE.get('is_running'):
-        bot.send_message(
-            msg.chat.id,
-            "⚠️ A Quiz Marathon is already in progress. Use /roko to stop it first."
-        )
-        return
+def start_marathon_setup(msg: types.Message):
+    """Starts the conversational setup for a new quiz marathon."""
+    user_id = msg.from_user.id
+    user_states[user_id] = {'step': 'awaiting_title'}
+    prompt = bot.send_message(user_id, " marathon setup process.\n\n*Step 1: Quiz Title*\nPlease enter the title for this quiz marathon.", parse_mode="Markdown")
+    bot.register_next_step_handler(prompt, process_marathon_title)
 
-    prompt = bot.send_message(
-        msg.chat.id, "🏃‍♂️ **Quiz Marathon Setup**\n\n"
-        "How many seconds should each question be open for? (e.g., 30)\n\n"
-        "Enter a number between 10 and 60, or type /cancel.",
-        parse_mode="Markdown")
-    bot.register_next_step_handler(prompt, process_marathon_duration_and_start)
+def process_marathon_title(msg: types.Message):
+    """Processes the title and asks for the description."""
+    user_id = msg.from_user.id
+    user_states[user_id]['title'] = msg.text.strip()
+    user_states[user_id]['step'] = 'awaiting_description'
+    prompt = bot.send_message(user_id, f"✅ Title set to: *{msg.text.strip()}*\n\n*Step 2: Quiz Description*\nPlease enter a short description for the quiz.", parse_mode="Markdown")
+    bot.register_next_step_handler(prompt, process_marathon_description)
 
+def process_marathon_description(msg: types.Message):
+    """Processes the description and asks for the number of questions."""
+    user_id = msg.from_user.id
+    user_states[user_id]['description'] = msg.text.strip()
+    user_states[user_id]['step'] = 'awaiting_question_count'
+    prompt = bot.send_message(user_id, f"✅ Description set.\n\n*Step 3: Number of Questions*\nHow many questions should be included in this marathon?", parse_mode="Markdown")
+    bot.register_next_step_handler(prompt, process_marathon_question_count)
 
-def process_marathon_duration_and_start(msg: types.Message):
-    """Gets the duration and starts the marathon in a new thread."""
-    if msg.text and msg.text.lower() == '/cancel':
-        bot.send_message(msg.chat.id, "❌ Marathon setup cancelled.")
-        return
-
+def process_marathon_question_count(msg: types.Message):
+    """Finalizes setup and starts the marathon."""
+    user_id = msg.from_user.id
     try:
-        duration = int(msg.text.strip())
-        if not (10 <= duration <= 60):
-            raise ValueError("Duration must be between 10 and 60 seconds.")
+        num_questions = int(msg.text.strip())
+        if num_questions <= 0:
+            bot.send_message(user_id, "❌ Please enter a positive number of questions.")
+            return
 
-        bot.send_message(
-            msg.chat.id,
-            f"✅ Okay, each question will last for {duration} seconds. Starting the marathon in the group..."
+        bot.send_message(user_id, "✅ Setup complete! Fetching questions and starting the marathon in the main group...")
+
+        # --- Fetch questions from Google Sheet ---
+        sheet = get_google_sheet()
+        if not sheet:
+            bot.send_message(user_id, "❌ Could not connect to Google Sheets.")
+            return
+        
+        all_questions = sheet.get_all_records()
+        if len(all_questions) < num_questions:
+            bot.send_message(user_id, f"⚠️ Warning: You requested {num_questions} questions, but only {len(all_questions)} are available. The marathon will run with all available questions.")
+            num_questions = len(all_questions)
+
+        random.shuffle(all_questions)
+        questions_for_marathon = all_questions[:num_questions]
+        
+        # --- Initialize session and participants data ---
+        session_id = str(GROUP_CHAT_ID)
+        QUIZ_SESSIONS[session_id] = {
+            'title': user_states[user_id]['title'],
+            'description': user_states[user_id]['description'],
+            'questions': questions_for_marathon,
+            'current_question_index': 0,
+            'is_active': True,
+            'stats': {'question_times': {}} # For analysis
+        }
+        QUIZ_PARTICIPANTS[session_id] = {}
+
+        # --- Send the start message to the group ---
+        start_message = (
+            f"🏁 *Quiz Marathon Begins* 🏁\n\n"
+            f"*{escape_markdown(QUIZ_SESSIONS[session_id]['title'])}*\n"
+            f"_{escape_markdown(QUIZ_SESSIONS[session_id]['description'])}_\n\n"
+            f"Get ready for *{len(questions_for_marathon)}* questions. Let's go!"
         )
+        bot.send_message(GROUP_CHAT_ID, start_message, parse_mode="Markdown")
 
-        marathon_thread = threading.Thread(target=run_quiz_marathon,
-                                           args=(msg.chat.id, duration))
-        marathon_thread.start()
+        # Start the first question after a short delay
+        time.sleep(5)
+        send_marathon_question(session_id)
+        del user_states[user_id] # Clean up state
 
-    except (ValueError, IndexError):
-        bot.send_message(
-            msg.chat.id,
-            "❌ Invalid input. Please enter a number between 10 and 60. Try the command again."
-        )
+    except ValueError:
+        bot.send_message(user_id, "❌ That's not a valid number. Please enter a number like 10 or 25.")
     except Exception as e:
-        bot.send_message(msg.chat.id, f"❌ An error occurred: {e}")
-
-
+        print(f"Error starting marathon: {traceback.format_exc()}")
+        bot.send_message(user_id, "❌ An error occurred while starting the marathon.")
 @bot.message_handler(commands=['roko'])
 @admin_required
 def handle_stop_marathon_command(msg: types.Message):
-    """Forcefully stops a running Quiz Marathon."""
-    global MARATHON_STATE
-    if not MARATHON_STATE.get('is_running'):
-        bot.send_message(msg.chat.id,
-                         "🤷 There is no quiz marathon currently running.")
+    """
+    Forcefully stops a running Quiz Marathon by interacting with the new
+    QUIZ_SESSIONS state.
+    """
+    session_id = str(GROUP_CHAT_ID)
+    session = QUIZ_SESSIONS.get(session_id)
+
+    # Check if a session for this group exists and is currently active
+    if not session or not session.get('is_active'):
+        bot.reply_to(msg, "🤷 There is no quiz marathon currently running.")
         return
 
-    # Set the flag to false, the running thread will pick this up
-    MARATHON_STATE['is_running'] = False
+    # By setting this flag to False, the next scheduled question timer,
+    # when it fires, will see the session is inactive and will trigger
+    # the send_marathon_results() function instead of sending a new question.
+    session['is_active'] = False
+
+    # Announce the stoppage to the entire group
     bot.send_message(
-        msg.chat.id,
-        "🛑 Stopping the marathon... It will end after the current question finishes."
+        GROUP_CHAT_ID,
+        "🛑 *Marathon Stopped!* 🛑\n\nAn admin has stopped the quiz. The final results will be displayed shortly after this question ends."
+        , parse_mode="Markdown"
     )
 
-
-def run_quiz_marathon(admin_chat_id, duration_per_question):
-    """The main logic for the quiz marathon. It can now be stopped mid-way."""
-    global MARATHON_STATE
-
+    # Optionally, delete the admin's original /roko command
     try:
-        # 1. Set marathon state
-        MARATHON_STATE = {
-            'is_running': True,
-            'scores': {},
-            'current_poll_id': None,
-            'current_correct_index': None
-        }
-
-        # 2. Fetch questions
-        sheet = get_gsheet()
-        if not sheet: raise Exception("Could not connect to Google Sheets.")
-        questions_list = sheet.get_all_records()  # Fix: Indentation error
-        if not questions_list:
-            raise Exception(
-                "The Google Sheet is empty.")  # Fix: Indentation error
-
-        total_questions = len(questions_list)
-        # CORRECTED: Removed "!" from the announcement
-        bot.send_message(
-            GROUP_ID,
-            f"🏁 **Quiz Marathon Begins** 🏁\n\nGet ready for {total_questions} questions. Each question is for {duration_per_question} seconds. Let's go.",
-            parse_mode="Markdown")
-        time.sleep(3)
-
-        # 3. Loop through questions
-        for i, quiz_data in enumerate(questions_list):
-            if not MARATHON_STATE.get('is_running'):
-                # CORRECTED: Removed "!"
-                bot.send_message(
-                    GROUP_ID, "🏃‍♂️💨 The marathon was stopped by the admin.")
-                break  # Exit the loop if stop command was issued
-
-            question_text = quiz_data.get('Question', 'No Question Text')
-            options = [
-                str(quiz_data.get('A')),
-                str(quiz_data.get('B')),
-                str(quiz_data.get('C')),
-                str(quiz_data.get('D'))
-            ]
-            correct_letter = str(quiz_data.get('Correct', '')).upper()
-            correct_index = ['A', 'B', 'C', 'D'].index(correct_letter)
-            explanation = quiz_data.get('Explanation', '')
-
-            bot.send_message(GROUP_ID,
-                             f"➡️ Question {i+1} of {total_questions}...")
-
-            poll = bot.send_poll(chat_id=GROUP_ID,
-                                 question=question_text,
-                                 options=options,
-                                 type='quiz',
-                                 correct_option_id=correct_index,
-                                 is_anonymous=False,
-                                 open_period=duration_per_question,
-                                 explanation=explanation,
-                                 explanation_parse_mode="Markdown")
-            MARATHON_STATE['current_poll_id'] = poll.poll.id
-            MARATHON_STATE['current_correct_index'] = correct_index
-
-            # Wait for the poll to finish, but check for the stop signal every second
-            for _ in range(duration_per_question + 2):
-                if not MARATHON_STATE.get('is_running'):
-                    break  # Break inner sleep loop
-                time.sleep(1)
-
-        # 4. Announce results
-        # CORRECTED: Removed "!" from the announcement
-        bot.send_message(
-            GROUP_ID,
-            "🎉 **Marathon Finished** 🎉\n\nCalculating the results, please wait...",
-            parse_mode="Markdown")  # Fix: Indentation error
-        time.sleep(2)
-        announce_marathon_results(admin_chat_id)
-
-
-# Fix: Indentation error
+        bot.delete_message(msg.chat.id, msg.message_id)
     except Exception as e:
-        error_message = f"Quiz Marathon failed: {traceback.format_exc()}"
-        print(error_message)
-        bot.send_message(admin_chat_id, f"❌ {error_message}")
-    finally:
-        # 5. Reset state
-        MARATHON_STATE = {}
-
-
-def announce_marathon_results(admin_chat_id):
-    """Calculates and announces the marathon winners with scores."""
-    scores = MARATHON_STATE.get('scores', {})
-    if not scores:
-        bot.send_message(GROUP_ID,
-                         "🤔 It seems no one participated in the marathon.")
+        # This might fail if the command was used in DMs, which is fine.
+        print(f"Could not delete /roko command message: {e}")
+def send_marathon_question(session_id):
+    """Sends the next question in the marathon with its specific timer."""
+    session = QUIZ_SESSIONS.get(session_id)
+    if not session or not session['is_active']:
         return
 
-    sorted_participants = sorted(scores.items(),
-                                 key=lambda item: item[1]['score'],
-                                 reverse=True)
-    result_text = "🏆 **Marathon Leaderboard** 🏆\n"
-    medals = ["🥇", "🥈", "🥉"]
-    for i, (user_id, data) in enumerate(sorted_participants[:10]):
-        rank = medals[i] if i < 3 else f" {i+1}."
-        result_text += f"\n{rank} {data['name']} – *{data['score']} correct*"
+    idx = session['current_question_index']
+    if idx >= len(session['questions']):
+        # All questions have been sent
+        session['is_active'] = False
+        send_marathon_results(session_id)
+        return
 
-    bot.send_message(GROUP_ID, result_text,
-                     parse_mode="Markdown")  # Fix: Indentation error
-    bot.send_message(admin_chat_id, "✅ Marathon results have been announced.")
+    question_data = session['questions'][idx]
+    
+    # --- DYNAMIC TIMER ---
+    # Default to 60 seconds if 'time_allotted' is missing or invalid
+    try:
+        timer_seconds = int(question_data.get('time_allotted', 60))
+        if timer_seconds <= 0: timer_seconds = 60
+    except (ValueError, TypeError):
+        timer_seconds = 60
 
+    options = [
+        str(question_data.get('Option A', '')),
+        str(question_data.get('Option B', '')),
+        str(question_data.get('Option C', '')),
+        str(question_data.get('Option D', ''))
+    ]
+    correct_option_index = ['A', 'B', 'C', 'D'].index(str(question_data.get('Correct Answer', 'A')).upper())
+    
+    question_text = f"Question {idx + 1}/{len(session['questions'])}\n\n{question_data.get('Question', '')}"
+    
+    poll_message = bot.send_poll(
+        chat_id=GROUP_CHAT_ID,
+        question=question_text,
+        options=options,
+        type='quiz',
+        correct_option_id=correct_option_index,
+        is_anonymous=False, # Must be False to track users
+        open_period=timer_seconds,
+        explanation=str(question_data.get('Explanation', '')),
+        explanation_parse_mode="Markdown"
+    )
 
+    session['current_poll_id'] = poll_message.poll.id
+    session['question_start_time'] = datetime.datetime.now()
+    session['stats']['question_times'][idx] = {'total_time': 0, 'answer_count': 0, 'correct_times': {}}
+    session['current_question_index'] += 1
+
+    # Schedule the next question
+    threading.Timer(timer_seconds + 3, send_marathon_question, args=[session_id]).start()
+
+@bot.poll_answer_handler()
+def handle_marathon_answer(poll_answer: types.PollAnswer):
+    """Handles a user's answer to a marathon poll, tracking score and time."""
+    session_id = str(GROUP_CHAT_ID)
+    session = QUIZ_SESSIONS.get(session_id)
+    
+    # Check if the answer belongs to the current active marathon
+    if not session or not session.get('is_active') or poll_answer.poll_id != session.get('current_poll_id'):
+        return
+
+    user_id = poll_answer.user.id
+    user_name = poll_answer.user.first_name
+    
+    # --- TIME TRACKING ---
+    time_taken = (datetime.datetime.now() - session['question_start_time']).total_seconds()
+
+    # Initialize participant if they are new
+    if user_id not in QUIZ_PARTICIPANTS[session_id]:
+        QUIZ_PARTICIPANTS[session_id][user_id] = {
+            'name': user_name,
+            'score': 0,
+            'total_time': 0,
+            'questions_answered': 0,
+            'correct_answer_times': []
+        }
+    
+    participant = QUIZ_PARTICIPANTS[session_id][user_id]
+    participant['total_time'] += time_taken
+    participant['questions_answered'] += 1
+
+    # Check if the answer is correct
+    question_idx = session['current_question_index'] - 1
+    question_data = session['questions'][question_idx]
+    correct_option_index = ['A', 'B', 'C', 'D'].index(str(question_data.get('Correct Answer', 'A')).upper())
+
+    # Update stats for analysis
+    q_stats = session['stats']['question_times'][question_idx]
+    q_stats['total_time'] += time_taken
+    q_stats['answer_count'] += 1
+
+    if poll_answer.option_ids[0] == correct_option_index:
+        participant['score'] += 1
+        participant['correct_answer_times'].append(time_taken)
+        q_stats['correct_times'][user_id] = time_taken
+
+def send_marathon_results(session_id):
+    """Generates and sends the final, detailed leaderboard and analysis."""
+    session = QUIZ_SESSIONS.get(session_id)
+    participants = QUIZ_PARTICIPANTS.get(session_id)
+
+    if not participants:
+        bot.send_message(GROUP_CHAT_ID, "🏁 The quiz has finished, but no one participated!")
+        return
+
+    # Sort participants by score (desc) and then by total time (asc)
+    sorted_participants = sorted(participants.values(), key=lambda p: (p['score'], -p['total_time']), reverse=True)
+
+    total_questions = len(session['questions'])
+    
+    # --- BUILD NEW LEADERBOARD ---
+    results_text = (
+        f"🏁 The quiz *'{escape_markdown(session['title'])}'* has finished!\n\n"
+        f"*{len(participants)}* participants answered at least one question.\n\n"
+    )
+
+    rank_emojis = ["🥇", "🥈", "🥉"]
+    for i, p in enumerate(sorted_participants):
+        rank = rank_emojis[i] if i < 3 else f"  *{i + 1}.*"
+        name = escape_markdown(p['name'])
+        score = p['score']
+        percentage = (score / total_questions) * 100 if total_questions > 0 else 0
+        formatted_time = format_duration(p['total_time'])
+        
+        results_text += f"{rank} *{name}* – {score} correct ({percentage:.0f}%) in {formatted_time}\n"
+
+    results_text += "\n🏆 Congratulations to the winners!"
+    bot.send_message(GROUP_CHAT_ID, results_text, parse_mode="Markdown")
+
+    # --- GENERATE AND SEND ANALYSIS ---
+    time.sleep(2) # Short delay before sending insights
+    generate_quiz_insights(session_id)
+    
+    # Clean up the session
+    del QUIZ_SESSIONS[session_id]
+    del QUIZ_PARTICIPANTS[session_id]
+
+def generate_quiz_insights(session_id):
+    """Calculates and displays interesting insights about the marathon."""
+    session = QUIZ_SESSIONS.get(session_id)
+    participants = QUIZ_PARTICIPANTS.get(session_id)
+    if not session or not participants:
+        return
+        
+    insights_text = "📊 *Quiz Insights*\n\n"
+    
+    # 1. Toughest & Easiest Question (by average time taken)
+    question_avg_times = []
+    for q_idx, data in session['stats']['question_times'].items():
+        if data['answer_count'] > 0:
+            avg_time = data['total_time'] / data['answer_count']
+            question_avg_times.append({'idx': q_idx, 'time': avg_time})
+    
+    if question_avg_times:
+        slowest_q = max(question_avg_times, key=lambda x: x['time'])
+        fastest_q = min(question_avg_times, key=lambda x: x['time'])
+        insights_text += f"🧠 *Toughest Question (longest thinking time):* Question {slowest_q['idx'] + 1} ({slowest_q['time']:.1f}s avg)\n"
+        insights_text += f"⚡ *Easiest Question (quickest answers):* Question {fastest_q['idx'] + 1} ({fastest_q['time']:.1f}s avg)\n\n"
+
+    # 2. Fastest Finger (quickest average correct answer time)
+    fastest_finger = None
+    min_avg_correct_time = float('inf')
+    for p_id, p_data in participants.items():
+        if p_data['correct_answer_times']:
+            avg_time = sum(p_data['correct_answer_times']) / len(p_data['correct_answer_times'])
+            if avg_time < min_avg_correct_time:
+                min_avg_correct_time = avg_time
+                fastest_finger = p_data['name']
+    
+    if fastest_finger:
+        insights_text += f"💨 *Fastest Finger Award:* {escape_markdown(fastest_finger)} (avg {min_avg_correct_time:.1f}s on correct answers)\n"
+
+    # 3. Accuracy Award (highest percentage of correct answers vs answered)
+    most_accurate = None
+    max_accuracy = -1.0
+    for p_id, p_data in participants.items():
+        if p_data['questions_answered'] > 0:
+            accuracy = (p_data['score'] / p_data['questions_answered']) * 100
+            if accuracy > max_accuracy:
+                max_accuracy = accuracy
+                most_accurate = p_data['name']
+
+    if most_accurate:
+        insights_text += f"🎯 *Top Accuracy Award:* {escape_markdown(most_accurate)} ({max_accuracy:.0f}% correct of questions answered)\n"
+
+    bot.send_message(GROUP_CHAT_ID, insights_text, parse_mode="Markdown")
 @bot.message_handler(content_types=['new_chat_members'])
 def handle_new_member(msg: types.Message):
     """
