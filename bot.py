@@ -91,7 +91,7 @@ apihelper._make_request = new_make_request
 print("✅ Applied network stability patch.")
 
 # =============================================================================
-# --- Supabase Client Initialization ---
+# =============3 Supabase Client Initialization================================
 supabase: Client = None
 try:
     if SUPABASE_URL and SUPABASE_KEY:
@@ -117,7 +117,7 @@ last_doubt_reminder_hour = -1
 
 
 # =============================================================================
-# 3. GOOGLE SHEETS INTEGRATION
+# 4. GOOGLE SHEETS INTEGRATION
 # =============================================================================
 def get_gsheet():
     """Connects to Google Sheets using credentials from a file path."""
@@ -171,11 +171,9 @@ def initialize_gsheet():
         print(f"❌ Initial sheet check failed: {e}")
 
 
+
 # =============================================================================
-# 4. UTILITY & HELPER FUNCTIONS
-# =============================================================================
-# =============================================================================
-# 4.1. BACKGROUND USER TRACKING
+# 5. BACKGROUND USER TRACKING
 # =============================================================================
 
 @bot.message_handler(func=lambda msg: is_group_message(msg))
@@ -814,137 +812,80 @@ def load_data():
         print(f"❌ FATAL: Error loading data from Supabase. Bot state may be lost. Error: {e}")
         traceback.print_exc()
 # =============================================================================
-# 8. TELEGRAM BOT HANDLERS (UPDATED /todayquiz) - FINAL VERSION
+# 9. TELEGRAM BOT HANDLERS (UPDATED /todayquiz)
 # =============================================================================
 
-def run_today_quiz_logic(msg: types.Message):
+@bot.message_handler(commands=['todayquiz'])
+@membership_required
+def handle_today_quiz(msg: types.Message):
     """
-    This function contains the actual logic for fetching and sending the quiz schedule.
-    It is NOT a handler itself, but a helper function.
-    It includes all greeting features.
+    Shows the quiz schedule for the day. This command is protected and will only
+    run properly in the group chat.
     """
-    try:
-        # --- Dynamic Time-Based Greeting ---
-        ist_tz = timezone(timedelta(hours=5, minutes=30))
-        current_hour = datetime.datetime.now(ist_tz).hour
-        if 5 <= current_hour < 12:
-            time_of_day_greeting = "🌅 Good Morning"
-        elif 12 <= current_hour < 17:
-            time_of_day_greeting = "☀️ Good Afternoon"
-        else:
-            time_of_day_greeting = "🌆 Good Evening"
+    # This check enforces the "group only" rule. If a member (like the admin)
+    # uses this in a private chat, they will get this helpful message.
+    if not is_group_message(msg):
+        bot.send_message(
+            msg.chat.id,
+            "ℹ️ The `/todayquiz` command is designed to be used in the main group chat."
+        )
+        return
 
-        # --- The Full List of Poetic Greetings ---
-        user_name = f"*{escape_markdown(msg.from_user.first_name)}*" # User's name in bold
+    try:
+        ist_tz = timezone(timedelta(hours=5, minutes=30))
+        today_date_str = datetime.datetime.now(ist_tz).strftime('%Y-%m-%d')
         
+        # Your old working code used 'quiz_schedule'. We will use that.
+        response = supabase.table('quiz_schedule').select('*').eq('quiz_date', today_date_str).order('quiz_no').execute()
+
+        if not response.data:
+            bot.send_message(
+                msg.chat.id,
+                f"✅ Hey {msg.from_user.first_name}, no quizzes are scheduled for today. It might be a rest day! 🧘"
+            )
+            return
+            
+        # Using the creative greetings from your original file.
+        user_name = f"*{escape_markdown(msg.from_user.first_name)}*"
         all_greetings = [
-            # English Poetic Lines
             f"New day dawning, spirits high and free,\n{user_name}, today's quiz schedule is the key! 🗝️",
             f"Practice time calling, skills to refine,\n{user_name}, today's quiz schedule looks divine! ⭐",
             f"Challenge accepted, ready to play,\n{user_name}, here's your quiz lineup for today! 🎮",
-            f"Knowledge building, brick by brick we build,\n{user_name}, today's quiz schedule keeps you skilled! 🧱",
-            # Hinglish Poetic Lines
             f"Audit ki kasam, Law ki dua,\n{user_name}, dekho aaj schedule mein kya-kya hua! ✨",
-            f"Padhai ka junoon, aur rank ka hai khwaab,\nCheck kariye aaj ka quiz, *{msg.from_user.first_name}* janab!"
         ]
+        message_text = random.choice(all_greetings) + "\n" + "─" * 20 + "\n"
         
-        # --- Database Query ---
-        today_date_str = datetime.datetime.now(ist_tz).strftime('%Y-%m-%d')
-        response = supabase.table('quiz_schedule').select('*').eq('quiz_date', today_date_str).order('quiz_no').execute()
+        for quiz in response.data:
+            try:
+                time_obj = datetime.datetime.strptime(quiz['quiz_time'], '%H:%M:%S')
+                formatted_time = time_obj.strftime('%I:%M %p')
+            except (ValueError, TypeError):
+                formatted_time = "N/A"
 
-        if response.data:
-            header = f"_{time_of_day_greeting}!_\n\n{random.choice(all_greetings)}\n"
-            message_text = header + "\n" + "─" * 20 + "\n"
-
-            for quiz_item in response.data:
-                subject = escape_markdown(str(quiz_item.get('subject', 'N/A')))
-                chapter = escape_markdown(str(quiz_item.get('chapter_name', 'N/A')))
-                topics = escape_markdown(str(quiz_item.get('topics_covered', 'N/A')))
-                quiz_no = quiz_item.get('quiz_no', 'N/A')
-                quiz_type = escape_markdown(str(quiz_item.get('quiz_type', 'N/A')))
-                time_str = quiz_item.get('quiz_time')
-                try:
-                    formatted_time = datetime.datetime.strptime(time_str, '%H:%M:%S').strftime('%I:%M %p')
-                except (ValueError, TypeError):
-                    formatted_time = "N/A"
-                
-                quiz_details = (
-                    f"\n*Quiz no. {quiz_no}:*\n"
-                    f"⏰ Time: `{formatted_time}`\n📝 Subject: {subject}\n"
-                    f"📖 Chapter: {chapter}\n✏️ Part: {quiz_type}\n🧩 Topics: {topics}\n"
-                )
-                message_text += quiz_details
-            
-            message_text += "\n" + "─" * 20
-            
-            markup = types.InlineKeyboardMarkup()
-            schedule_url = "https://studyprosync.web.app/"
-            button = types.InlineKeyboardButton(text="📅 View Full Weekly Schedule", url=schedule_url)
-            markup.add(button)
-            
-            bot.send_message(msg.chat.id, message_text, parse_mode="Markdown", reply_markup=markup, disable_web_page_preview=True)
-
-        else:
-            no_schedule_text = (
-                f"Hey {msg.from_user.first_name}! 👋\n\n"
-                "It seems the schedule for today has not been posted yet. It might be a rest day! 🧘\n\n"
-                "You can check the weekly schedule via the button in a previous message."
+            message_text += (
+                f"\n*Quiz no. {quiz.get('quiz_no', 'N/A')}:*\n"
+                f"⏰ Time: `{formatted_time}`\n"
+                f"📝 Subject: {escape_markdown(str(quiz.get('subject', 'N/A')))}\n"
+                f"📖 Chapter: {escape_markdown(str(quiz.get('chapter_name', 'N/A')))}\n"
+                f"🧩 Topics: {escape_markdown(str(quiz.get('topics_covered', 'N/A')))}\n"
             )
-            bot.send_message(msg.chat.id, no_schedule_text)
+        
+        message_text += "\n" + "─" * 20
+        
+        markup = types.InlineKeyboardMarkup()
+        schedule_url = "https://studyprosync.web.app/"
+        button = types.InlineKeyboardButton(text="📅 View Full Weekly Schedule", url=schedule_url)
+        markup.add(button)
+        
+        bot.send_message(msg.chat.id, message_text, parse_mode="Markdown", reply_markup=markup, disable_web_page_preview=True)
 
     except Exception as e:
-        tb_string = traceback.format_exc()
-        print(f"CRITICAL Error in todayquiz logic: {tb_string}")
-        report_error_to_admin(f"Failed to fetch today's quiz schedule:\n{tb_string}")
-        bot.send_message(msg.chat.id, "😥 Oops! Something went wrong while fetching the schedule.")
+        print(f"CRITICAL Error in /todayquiz: {traceback.format_exc()}")
+        report_error_to_admin(f"Failed to fetch today's quiz schedule:\n{traceback.format_exc()}")
+        bot.send_message(msg.chat.id, "😥 Oops! Something went wrong while fetching the schedule. The admin has been notified.")
 
-
-# --- HANDLER 1: For the /todayquiz command ---
-@bot.message_handler(commands=['todayquiz'])
-def handle_today_quiz_command(msg: types.Message):
-    """
-    Handles the /todayquiz command.
-    It will now ONLY run in the group chat.
-    """
-    # This is the crucial check: Is this message from a group? If not, do nothing.
-    if not is_group_message(msg):
-        return
-
-    # Second check: Is the user a member of the group?
-    if not check_membership(msg.from_user.id):
-        send_join_group_prompt(msg.chat.id)
-        return
-        
-    # If both checks pass, run the main logic.
-    run_today_quiz_logic(msg)
-
-
-# --- HANDLER 2: For the "today quiz" text ---
-def is_today_quiz_message(msg: types.Message):
-    """This helper function checks if a text message is asking for the schedule."""
-    # It must be a text message, in a group, and not a command.
-    if not msg.text or not is_group_message(msg) or msg.text.startswith('/'):
-        return False
-    text_lower = msg.text.lower()
-    return 'today quiz' in text_lower or 'todayquiz' in text_lower
-
-@bot.message_handler(func=is_today_quiz_message)
-def handle_today_quiz_from_text(msg: types.Message):
-    """
-    Handles plain text like 'today quiz'.
-    It will also ONLY run in the group chat.
-    """
-    # The check is already done inside 'is_today_quiz_message',
-    # but we add the membership check for extra security.
-    if not check_membership(msg.from_user.id):
-        return # Silently ignore if a non-member triggers this.
-        
-    print(f"User {msg.from_user.first_name} triggered today's quiz schedule with text: '{msg.text}'")
-    run_today_quiz_logic(msg) # Calls the same main logic function.
-
-# THIS IS THE COMPLETE AND CORRECT CODE FOR THE /createpoll FEATURE
 # =============================================================================
-# 8.5. INTERACTIVE COMMANDS (POLLS, QUIZZES, ETC.) - CORRECTED BLOCK
+# 10. INTERACTIVE COMMANDS (POLLS, QUIZZES, ETC.) - CORRECTED BLOCK
 # =============================================================================
 
 # This dictionary will hold the state for users in multi-step commands
@@ -1187,7 +1128,7 @@ def handle_mysheet(msg: types.Message):
     bot.send_message(msg.chat.id,
                      f"📄 Here is the link to the Google Sheet:\n{sheet_url}")
 # =============================================================================
-# 8.X. DIRECT MESSAGING SYSTEM (/dm)
+# 11. DIRECT MESSAGING SYSTEM (/dm)
 # =============================================================================
 
 # This dictionary holds the state for the /dm command conversation.
@@ -1422,7 +1363,7 @@ def handle_prune_dms(msg: types.Message):
         report_error_to_admin(f"Error in /prunedms command: {traceback.format_exc()}")
         bot.send_message(msg.chat.id, "❌ An error occurred while pruning the user list.")
 # =============================================================================
-# 8.6. GENERAL ADMIN COMMANDS (CLEANED UP)
+# 12 GENERAL ADMIN COMMANDS (CLEANED UP)
 # =============================================================================
 # NEW: Direct Message Command
 @bot.message_handler(commands=['message'])
@@ -1627,7 +1568,7 @@ def handle_random_quiz(msg: types.Message):
         report_error_to_admin(f"Failed to post random quiz.\n\nError: {traceback.format_exc()}")
         bot.send_message(msg.chat.id, "❌ Oops! Something went wrong while fetching a random quiz.")
 # =============================================================================
-# 8.9. CONVERSATIONAL /setquiz FEATURE
+# 13 CONVERSATIONAL /setquiz FEATURE
 # =============================================================================
 
 @bot.message_handler(commands=['createquiztext'])
@@ -1783,7 +1724,7 @@ def handle_feedback_command(msg: types.Message):
         print(f"Feedback error: {e}")
 
 # =============================================================================
-# QUIZ RESULT COMMAND (For Bot's Internal Quizzes)
+# 14 QUIZ RESULT COMMAND (For Bot's Internal Quizzes)
 # =============================================================================
 @bot.message_handler(commands=['quizresult'])
 @admin_required
@@ -1844,7 +1785,7 @@ def handle_quiz_result_command(msg: types.Message):
 
 
 # =============================================================================
-# CONGRATULATE WINNERS FEATURE (/bdhai) - SUPER BOT EDITION
+# 15 CONGRATULATE WINNERS FEATURE (/bdhai) - SUPER BOT EDITION
 # =============================================================================
 def parse_time_to_seconds(time_str):
     """Converts time string like '4 min 37 sec' or '56.1 sec' to total seconds."""
@@ -2243,7 +2184,7 @@ def handle_section_command(msg: types.Message):
 
 
 # =============================================================================
-# 8.10. SUPER DOUBT HUB FEATURE (Interactive, AI-like, with Best Answer System)
+# 16 SUPER DOUBT HUB FEATURE (Interactive, AI-like, with Best Answer System)
 # =============================================================================
 
 
@@ -2566,7 +2507,7 @@ def handle_best_answer(msg: types.Message):
         bot.reply_to(msg, "❌ Oops! Something went wrong.")
 
 # =============================================================================
-# 8.X. ADVANCED QUIZ MARATHON FEATURE (FULLY CORRECTED AND ROBUST)
+# 17 ADVANCED QUIZ MARATHON FEATURE (FULLY CORRECTED AND ROBUST)
 # =============================================================================
 
 @bot.message_handler(commands=['quizmarathon'])
@@ -2916,7 +2857,7 @@ def handle_unknown_messages(msg: types.Message):
 
 
 # =============================================================================
-# 9. MAIN EXECUTION BLOCK
+# 18 MAIN EXECUTION BLOCK
 # =============================================================================
 if __name__ == "__main__":
     print("🤖 Initializing bot...")
