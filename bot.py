@@ -442,7 +442,7 @@ def membership_required(func):
 def create_main_menu_keyboard(message: types.Message):
     """
     Creates the main menu keyboard.
-    The 'Start Quiz' button will open the Web App only in private chat.
+    The 'See weekly quiz schedule' button will open the Web App only in private chat.
     """
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     
@@ -451,12 +451,12 @@ def create_main_menu_keyboard(message: types.Message):
     if message.chat.type == 'private' and WEBAPP_URL:
         # In private chat, the button opens the Web App.
         quiz_button = types.KeyboardButton(
-            "🚀 Start Quiz",
+            "🚀 See weekly quiz schedule ",
             web_app=types.WebAppInfo(WEBAPP_URL)
         )
     else:
         # In a group chat, it's just a normal text button.
-        quiz_button = types.KeyboardButton("🚀 Start Quiz")
+        quiz_button = types.KeyboardButton("🚀 See weekly quiz schedule")
         
     markup.add(quiz_button)
     return markup
@@ -623,11 +623,11 @@ def reverify(call: types.CallbackQuery):
             "❌ Verification failed. Please make sure you have joined the group, then try again.",
             show_alert=True)
 
-@bot.message_handler(func=lambda msg: msg.text == "🚀 Start Quiz")
+@bot.message_handler(func=lambda msg: msg.text == "🚀 See weekly quiz schedule
 @membership_required
 def handle_quiz_start_button(msg: types.Message):
     """
-    Handles the 'Start Quiz' button press.
+    Handles the 'See weekly quiz schedule' button press.
     The @membership_required decorator already ensures the user is a member.
     """
     # THE IMPROVEMENT: The redundant 'if not check_membership...' block is removed.
@@ -774,8 +774,8 @@ def load_data():
 @bot.message_handler(commands=['todayquiz'])
 def handle_today_quiz(msg: types.Message):
     """
-    Shows the quiz schedule for the day, styled to match the example image,
-    and uses a Web App (Mini App) button for the schedule.
+    Shows the quiz schedule for the day, styled to match the example image.
+    This version uses a standard URL button to avoid the invalid button type error in groups.
     Works ONLY in the group chat.
     """
     if not is_group_message(msg):
@@ -809,14 +809,14 @@ def handle_today_quiz(msg: types.Message):
             )
             return
         
-        user_name = msg.from_user.first_name # Using the raw name for a more natural look
+        user_name = msg.from_user.first_name
         all_greetings = [
-            f"Knowledge building, brick by brick we build,\n{user_name}, today's quiz schedule keeps you skilled! 🧱",
-            f"New day dawning, spirits high and free,\n{user_name}, today's quiz schedule is the key! 🗝️",
-            f"Practice time calling, skills to refine,\n{user_name}, today's quiz schedule looks divine! ⭐",
-            f"Challenge accepted, ready to play,\n{user_name}, here's your quiz lineup for today! 🎮",
+     f"Step by step rising, never looking back,\n{user_name}, today's quiz schedule keeps you on track! 🛤️",
+     f"Challenge accepted, ready to play,\n{user_name}, here's your quiz lineup for today! 🎮",
+     f"Audit ki kasam, Law ki dua,\n{user_name}, dekho aaj schedule mein kya-kya hua! ✨",
+     f"Confidence building, knowledge to test,\n{user_name}, today's quiz schedule brings out your best! 💪",
+     f"Dreams in motion, goals within reach,\n{user_name}, today's quiz schedule has these lessons to teach! 📚",
         ]
-        # Using HTML parsing for better control over formatting, like bolding and emojis.
         message_text = f"<b>{time_of_day_greeting}</b>\n\n{random.choice(all_greetings)}\n"
         message_text += "———————————————\n\n"
         
@@ -827,7 +827,6 @@ def handle_today_quiz(msg: types.Message):
             except (ValueError, TypeError):
                 formatted_time = "N/A"
 
-            # Replicating the format from the image with HTML and emojis
             message_text += (
                 f"<b>Quiz no. {quiz.get('quiz_no', 'N/A')}:</b>\n"
                 f"⏰ Time: {formatted_time}\n"
@@ -839,12 +838,12 @@ def handle_today_quiz(msg: types.Message):
         
         message_text += "———————————————"
         
-        # --- THE MINI APP BUTTON FIX ---
+        # --- THE FIX: Changed from a Mini App button to a standard URL button ---
+        # This is the only type of button allowed on an inline keyboard in a group chat.
         markup = types.InlineKeyboardMarkup()
-        # Use the WEBAPP_URL from your config for the button
         schedule_button = types.InlineKeyboardButton(
             text="📅 View Full Weekly Schedule",
-            web_app=types.WebAppInfo(WEBAPP_URL)
+            url=WEBAPP_URL # Use the 'url' parameter instead of 'web_app'
         )
         markup.add(schedule_button)
         
