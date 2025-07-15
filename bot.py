@@ -642,73 +642,57 @@ def handle_quiz_start_button(msg: types.Message):
 def handle_help_command(msg: types.Message):
     """Sends a beautifully formatted and categorized list of admin commands."""
     help_text = """
-╭─•••─•••──•••──•••─•••╮
-   🤖   *Admin Dashboard*   🤖
-╰─•••─•••──•••──•••─•••╯
+*🤖 Admin Control Panel*
+Hello Admin! Here are your available tools.
+`Click any command to copy it.`
+━━━━━━━━━━━━━━━━━━
 
-*Hello, Admin! Here are your available tools. Click any command to get started.*
+*📣 Content & Engagement*
+`/motivate` - Send a motivational quote.
+`/studytip` - Share a useful study tip.
+`/announce` - Broadcast & pin a message.
+`/message` - Send a simple group message.
+`/notify` - Send a timed quiz alert.
 
-- - - - - - - - - - - - - - - - - - - - -
+*🧠 Quiz & Marathon*
+`/quizmarathon` - Start a new marathon.
+`/randomquiz` - Post a single quiz.
+`/roko` - Force-stop a running marathon.
 
-*📣  Content & Engagement*
-`/motivate` • Send a motivational quote
-`/studytip` • Send a useful study tip
-`/announce` • Broadcast & pin a message
-`/message` • Send a simple group message
+*💬 Member & Doubt Hub*
+`/dm` - Send a direct message.
+`/prunedms` - Clean the DM list.
+`/askdoubt` - Ask a question for the group.
+`/answer` - Reply to a specific doubt.
+`/bestanswer` - Mark a reply as the best answer.
 
-- - - - - - - - - - - - - - - - - - - - -
-
-*💬  Direct Messaging*
-`/dm` • Message a user or all users
-`/prunedms` • Clean the DM list of unreachable users
-
-- - - - - - - - - - - - - - - - - - - - -
-
-*🧠  Quiz & Marathon Management*
-`/quizmarathon` • Start a full quiz marathon
-`/createquiz` • Create a standard quiz
-`/quickquiz` • Create a fast, timed quiz
-`/randomquiz` • Post a random question
-`/createpoll` • Create a simple group poll
-`/roko` • Stop the current marathon
-`/leaderboard` • Show the all-time leaderboard
-`/quizresult` • Announce winners of a quick quiz
-`/bdhai` • Congratulate marathon winners
-
-- - - - - - - - - - - - - - - - - - - - -
-
-*❓  Doubt Resolution Hub*
-`/askdoubt` • Ask a question for the group
-`/answer` • Provide an answer to a doubt
-`/bestanswer` • Mark the best answer
-
-- - - - - - - - - - - - - - - - - - - - -
-
-*🛠️  Utilities & Info*
-`/section` • Get details for a law section
-`/mysheet` • Get the Google Sheet link
-
+*🛠️ Utilities & Leaderboards*
+`/leaderboard` - Show all-time quiz scores.
+`/section` - Get details for a law section.
+`/bdhai` - Congrats winners (for QuizBot).
 """
     bot.send_message(msg.chat.id, help_text, parse_mode="Markdown")
 # === ADD THIS ENTIRE NEW FUNCTION ===
-
 @bot.message_handler(commands=['leaderboard'])
 @membership_required
 def handle_leaderboard(msg: types.Message):
     """
     Fetches and displays the top 10 random quiz scorers.
-    It now replies in the same chat where the command was issued.
+    This version ALWAYS posts the leaderboard to the main group chat.
     """
     try:
         response = supabase.table('leaderboard').select(
             'user_name, score').order(
                 'score', desc=True).limit(10).execute()
 
-        # THE IMPROVEMENT: The "empty leaderboard" message is also sent to the correct chat.
+        # If the leaderboard is empty, post the message in the main group.
         if not response.data:
             bot.send_message(
-                msg.chat.id, "🏆 The leaderboard is empty right now. Let's play some quizzes to fill it up!"
+                GROUP_ID, "🏆 The leaderboard is empty right now. Let's play some quizzes to fill it up!"
             )
+            # Also inform the user who requested it.
+            if msg.chat.id != GROUP_ID:
+                bot.send_message(msg.chat.id, "The leaderboard is currently empty, but I've posted a message in the group encouraging members to play!")
             return
 
         leaderboard_text = "🏆 *All-Time Random Quiz Leaderboard*\n\n"
@@ -720,12 +704,12 @@ def handle_leaderboard(msg: types.Message):
             safe_name = escape_markdown(user_name)
             leaderboard_text += f"{rank_emoji} *{safe_name}* - {item.get('score', 0)} points\n"
 
-        # --- THE FIX ---
-        # It now sends the main message to msg.chat.id, which is the chat
-        # where the command was used (either the group or a private chat).
-        bot.send_message(msg.chat.id, leaderboard_text, parse_mode="Markdown")
+        # THE FIX: Always send the leaderboard to the main group using GROUP_ID.
+        bot.send_message(GROUP_ID, leaderboard_text, parse_mode="Markdown")
         
-        # The private confirmation message is no longer needed.
+        # THE IMPROVEMENT: If the command was used in a private chat, send a confirmation.
+        if msg.chat.id != GROUP_ID:
+            bot.send_message(msg.chat.id, "✅ Leaderboard has been sent to the group successfully.")
 
     except Exception as e:
         print(f"Error in /leaderboard: {traceback.format_exc()}")
@@ -869,250 +853,6 @@ def handle_today_quiz(msg: types.Message):
         print(f"CRITICAL Error in /todayquiz: {traceback.format_exc()}")
         report_error_to_admin(f"Failed to fetch today's quiz schedule:\n{traceback.format_exc()}")
         bot.send_message(msg.chat.id, "😥 Oops! Something went wrong while fetching the schedule. The admin has been notified.")
-
-# =============================================================================
-# 10. INTERACTIVE COMMANDS (POLLS, QUIZZES, ETC.) - CORRECTED BLOCK
-# =============================================================================
-
-# This dictionary will hold the state for users in multi-step commands
-user_states = {}
-
-
-# --- Create Poll Feature (Conversational) ---
-@bot.message_handler(commands=['createpoll'])
-@admin_required
-def handle_poll_command(msg: types.Message):
-    """Starts the multi-step process for creating a poll."""
-    user_id = msg.from_user.id
-    user_states[user_id] = {'step': 'awaiting_poll_duration', 'data': {}}
-    bot.send_message(msg.chat.id, "📊 **New Poll: Step 1 of 2**\n\n"
-                     "How long should the poll be open for (in minutes)?\n\n"
-                     "Enter a number (e.g., `5`) or type /cancel.",
-                     parse_mode="Markdown")
-
-
-@bot.message_handler(func=lambda msg: user_states.get(msg.from_user.id, {}).
-                     get('step') == 'awaiting_poll_duration')
-def process_poll_duration(msg: types.Message):
-    """Handles the second step: getting the poll duration."""
-    user_id = msg.from_user.id
-    if msg.text.lower() == '/cancel':
-        del user_states[user_id]
-        bot.send_message(msg.chat.id, "❌ Poll creation cancelled.")
-        return
-
-    try:
-        duration = int(msg.text.strip())
-        if duration <= 0: raise ValueError("Duration must be positive.")
-
-        user_states[user_id]['data']['duration'] = duration
-        user_states[user_id]['step'] = 'awaiting_poll_q_and_opts'
-
-        bot.send_message(
-            msg.chat.id, f"✅ Duration set to {duration} minutes.\n\n"
-            "**Step 2 of 2**\n"
-            "Now send the question and options in this format:\n"
-            "`Question | Option1 | Option2...`\n\nOr type /cancel.",
-            parse_mode="Markdown")
-    except (ValueError, IndexError):
-        bot.send_message(
-            msg.chat.id,
-            "❌ Invalid input. Please enter a valid positive number for the minutes."
-        )
-
-
-@bot.message_handler(func=lambda msg: user_states.get(msg.from_user.id, {}).
-                     get('step') == 'awaiting_poll_q_and_opts')
-def process_poll_q_and_opts(msg: types.Message):
-    """Handles the final step: getting question/options and sending the poll."""
-    user_id = msg.from_user.id
-    if msg.text.lower() == '/cancel':
-        del user_states[user_id]
-        bot.send_message(msg.chat.id, "❌ Poll creation cancelled.")
-        return
-
-    try:
-        duration = user_states[user_id]['data']['duration']
-        parts = msg.text.split(' | ')
-        if len(parts) < 3:
-            raise ValueError(
-                "Invalid format. Need a question and at least two options.")
-
-        question, options = parts[0].strip(), [
-            opt.strip() for opt in parts[1:]
-        ]
-        if not (2 <= len(options) <= 10):
-            bot.send_message(
-                msg.chat.id,
-                "❌ A poll must have between 2 and 10 options. Please try again."
-            )
-            return
-
-        full_question = f"📊 *New Poll*\n\n{question}\n\n_This poll will close in {duration} minute{'s' if duration > 1 else ''}._"
-        sent_poll = bot.send_poll(chat_id=GROUP_ID,
-                                  question=full_question,
-                                  options=options,
-                                  is_anonymous=False,
-                                  parse_mode="Markdown") # Added parse_mode for formatting
-
-        # THE BUG FIX: Make the close_time timezone-aware using IST.
-        ist_tz = timezone(timedelta(hours=5, minutes=30))
-        close_time = datetime.datetime.now(ist_tz) + datetime.timedelta(minutes=duration)
-        
-        active_polls.append({
-            'chat_id': sent_poll.chat.id,
-            'message_id': sent_poll.message_id,
-            'close_time': close_time
-        })
-
-        bot.send_message(msg.chat.id, "✅ Poll sent successfully to the group.")
-
-    except Exception as e:
-        bot.send_message(
-            msg.chat.id,
-            f"❌ Error creating poll: {e}. Please start over with /createpoll.")
-    finally:
-        # This ensures the user's state is cleared, even if an error occurs.
-        if user_id in user_states:
-            del user_states[user_id]
-
-
-# --- Create Quiz Feature (Entry Point & Callback) ---
-@bot.message_handler(commands=['createquiz'])
-@admin_required
-def handle_create_quiz_command(msg: types.Message):
-    """Shows buttons to choose between a Text Quiz and a Poll Quiz."""
-    markup = types.InlineKeyboardMarkup()
-    markup.add(
-        types.InlineKeyboardButton("📝 Text Quiz", callback_data="quiz_text"),
-        types.InlineKeyboardButton("📊 Poll Quiz (Quick)",
-                                   callback_data="quiz_poll"))
-    bot.send_message(
-        msg.chat.id,
-        "🧠 *Create Quiz*\n\nSelect the type of quiz you want to create:",
-        reply_markup=markup,
-        parse_mode="Markdown")
-
-
-@bot.callback_query_handler(
-    func=lambda call: call.data in ['quiz_text', 'quiz_poll'])
-def handle_quiz_type_selection(call: types.CallbackQuery):
-    """Handles the button press from the /createquiz command."""
-    user_id = call.from_user.id
-    # Security check: ensure only an admin can use these buttons.
-    if not is_admin(user_id):
-        bot.answer_callback_query(call.id, "❌ You are not authorized to do this.", show_alert=True)
-        return
-
-    bot.answer_callback_query(call.id)  # Acknowledge the button press
-
-    if call.data == 'quiz_text':
-        # Start the conversational flow for a text quiz
-        user_states[user_id] = {
-            'step': 'awaiting_text_quiz_question',
-            'data': {}
-        }
-        # THE IMPROVEMENT: Edit the previous message instead of sending a new one.
-        bot.edit_message_text(
-            "🧠 **New Text Quiz: Step 1 of 2**\n\nFirst, what is the question?\n\nOr send /cancel.",
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id,
-            parse_mode="Markdown")
-
-    elif call.data == 'quiz_poll':
-        # THE IMPROVEMENT: Edit the message to give feedback before redirecting.
-        bot.edit_message_text(
-            "📊 Redirecting to create a Poll-based Quick Quiz...",
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id
-        )
-        # This correctly redirects to the /quickquiz flow
-        handle_quick_quiz_command(call.message)
-
-# --- Text Quiz Creation Flow ---
-@bot.message_handler(func=lambda msg: user_states.get(msg.from_user.id, {}).
-                     get('step') == 'awaiting_text_quiz_question')
-def process_text_quiz_question(msg: types.Message):
-    """Handles the second step of text quiz creation: getting the question."""
-    user_id = msg.from_user.id
-    if msg.text.lower() == '/cancel':
-        del user_states[user_id]
-        bot.send_message(msg.chat.id, "❌ Quiz creation cancelled.")
-        return
-
-    user_states[user_id]['data']['question'] = msg.text
-    user_states[user_id]['step'] = 'awaiting_text_quiz_options'
-    bot.send_message(
-        msg.chat.id, "✅ Question saved.\n\n"
-        "**Step 2 of 2**\n"
-        "Now send the options and answer in this format:\n"
-        "`A) Option1`\n`B) Option2`\n`C) Option3`\n`D) Option4`\n`Answer: A`\n\nOr type /cancel.",
-        parse_mode="Markdown")
-
-
-@bot.message_handler(func=lambda msg: user_states.get(msg.from_user.id, {}).
-                     get('step') == 'awaiting_text_quiz_options')
-def process_text_quiz_options_and_answer(msg: types.Message):
-    """Handles the final step of text quiz creation: getting options and sending."""
-    user_id = msg.from_user.id
-    # THE SECURITY FIX: Add an admin check to the handler.
-    if not is_admin(user_id):
-        return
-
-    if msg.text.lower() == '/cancel':
-        del user_states[user_id]
-        bot.send_message(msg.chat.id, "❌ Quiz creation cancelled.")
-        return
-
-    try:
-        question = user_states[user_id]['data']['question']
-        lines = msg.text.strip().split('\n')
-        if len(lines) < 5:
-            raise ValueError(
-                "Invalid format. Need 4 options and 1 answer line.")
-
-        options = [line.strip() for line in lines[0:4]]
-        answer_line = lines[4].replace('Answer:', '').strip().upper()
-
-        # A more robust check for the answer character
-        valid_answers = {'A': 0, 'B': 1, 'C': 2, 'D': 3}
-        if answer_line not in valid_answers:
-            raise ValueError("Answer must be A, B, C, or D.")
-
-        quiz_text = f"🧠 **Quiz Time**\n\n**Question:** {question}\n\n" + "\n".join(
-            options) + f"\n\n*The correct answer is {answer_line}*. Discuss below!"
-            
-        bot.send_message(GROUP_ID, quiz_text, parse_mode="Markdown")
-        
-        bot.send_message(
-            msg.chat.id,
-            f"✅ Text quiz sent to the group. The correct answer is *{answer_line}*.", parse_mode="Markdown")
-
-    except Exception as e:
-        bot.send_message(
-            msg.chat.id,
-            f"❌ Error creating quiz: {e}. Please check your format and try again, or type /cancel.")
-        return  # Let user try again without losing state
-
-    # Clean up state only on success
-    if user_id in user_states:
-        del user_states[user_id]
-
-
-# --- Google Sheet Link Command ---
-@bot.message_handler(commands=['mysheet'])
-@admin_required
-def handle_mysheet(msg: types.Message):
-    """Provides the admin with a link to the configured Google Sheet."""
-    if not GOOGLE_SHEET_KEY:
-        bot.send_message(
-            msg.chat.id,
-            "❌ The Google Sheet Key has not been configured by the administrator."
-        )
-        return
-    sheet_url = f"https://docs.google.com/spreadsheets/d/{GOOGLE_SHEET_KEY}"
-    bot.send_message(msg.chat.id,
-                     f"📄 Here is the link to the Google Sheet:\n{sheet_url}")
 # =============================================================================
 # 11. DIRECT MESSAGING SYSTEM (/dm)
 # =============================================================================
@@ -1437,79 +1177,18 @@ def handle_notify_command(msg: types.Message):
         report_error_to_admin(traceback.format_exc())
         bot.send_message(msg.chat.id, f"❌ Oops! Something went wrong: {e}")
 
-
-# ...existing code...
-@bot.message_handler(commands=['quickquiz'])
-@admin_required
-def handle_quick_quiz_command(msg: types.Message):
-    """Starts the process for creating a quick, timed poll-based quiz."""
-    prompt = bot.send_message(
-        msg.chat.id, "🧠 **Create a Timed Quick Quiz**\n\n"
-        "Send quiz details in the format:\n"
-        "`Seconds | Question | Opt1 | O2 | O3 | O4 | Correct(1-4)`\n\n"
-        "**Example:** `30 | What is 2+2? | 3 | 4 | 5 | 6 | 2`\n\n"
-        "Or send /cancel to abort.",
-        parse_mode="Markdown")
-    bot.register_next_step_handler(prompt, process_quick_quiz)
-
-
-def process_quick_quiz(msg: types.Message):
-    """Processes the admin's input and sends the quick quiz."""
-    if msg.text and msg.text.lower() == '/cancel':
-        bot.send_message(msg.chat.id, "❌ Quiz creation cancelled.")
-        return
-    try:
-        global QUIZ_SESSIONS, QUIZ_PARTICIPANTS
-        parts = msg.text.split(' | ')
-        if len(parts) != 7:
-            raise ValueError(
-                "Invalid format: Expected 7 parts separated by ' | '.")
-
-        duration_seconds, q, opts, correct_idx = int(
-            parts[0].strip()), parts[1].strip(), [
-                o.strip() for o in parts[2:6]
-            ], int(parts[6].strip()) - 1
-        if not (5 <= duration_seconds <= 600):
-            raise ValueError("Duration must be between 5 and 600 seconds.")
-        if not (0 <= correct_idx <= 3):
-            raise ValueError("Correct option must be between 1 and 4.")
-
-        poll = bot.send_poll(chat_id=GROUP_ID,
-                             question=f"🧠 Quick Quiz: {q}",
-                             options=opts,
-                             type='quiz',
-                             correct_option_id=correct_idx,
-                             is_anonymous=False,
-                             open_period=duration_seconds)
-        bot.send_message(
-            chat_id=GROUP_ID,
-            text=f"🔥 A new {duration_seconds}-second quiz has started 🔥",
-            reply_to_message_id=poll.message_id)
-        QUIZ_SESSIONS[poll.poll.id] = {
-            'correct_option': correct_idx,
-            'start_time': datetime.datetime.now().isoformat()
-        }
-        QUIZ_PARTICIPANTS[poll.poll.id] = {}
-        bot.send_message(msg.chat.id, "✅ Timed quick quiz sent")
-    except Exception as e:
-        bot.send_message(
-            msg.chat.id,
-            f"❌ Error creating quick quiz: {e}. Please check the format and try again."
-        )
-
 @bot.message_handler(commands=['randomquiz'])
 @admin_required
 def handle_random_quiz(msg: types.Message):
     """
-    Fetches a random, unused question from the 'questions' table and posts it.
-    This version uses correct boolean values and provides admin feedback.
+    Fetches a random quiz and posts it as a 10-minute poll,
+    replicating the style of the Daily Automated Quiz.
     """
     try:
-        # THE FIX: Use the boolean False, not the string 'false', for database queries.
         unused_questions = supabase.table('questions').select('*').eq('used', False).execute().data
 
         if not unused_questions:
-            print("ℹ️ No unused questions found. Resetting 'used' status for all questions.")
+            print("ℹ️ No unused questions found for /randomquiz. Resetting all questions.")
             supabase.table('questions').update({'used': False}).neq('id', 0).execute()
             unused_questions = supabase.table('questions').select('*').eq('used', False).execute().data
 
@@ -1525,79 +1204,41 @@ def handle_random_quiz(msg: types.Message):
         correct_index = quiz_data.get('correct_index')
         explanation_text = quiz_data.get('explanation')
 
-        # Basic validation to prevent crashes
         if not all([question_text, isinstance(options, list), len(options) >= 2, isinstance(correct_index, int)]):
              report_error_to_admin(f"Invalid question format in database for ID: {question_id}. Data: {quiz_data}")
              bot.send_message(msg.chat.id, "❌ Found a quiz with an invalid format in the database. Skipping.")
              return
 
-        bot.send_poll(
+        # THE FIX: Updated title to match the image style.
+        poll = bot.send_poll(
             chat_id=GROUP_ID,
-            question=f"🧠 Random Quiz:\n\n{question_text}",
+            question=f"🧠 Random Quiz 🧠\n\n{question_text}",
             options=options,
             type='quiz',
             correct_option_id=correct_index,
-            is_anonymous=True,
-            open_period=60,
+            is_anonymous=False, # Set to False to match daily quiz style
+            # THE FIX: Changed timer to 10 minutes (600 seconds).
+            open_period=600,
             explanation=explanation_text,
             explanation_parse_mode="Markdown"
         )
 
-        # Mark this specific question as used using the correct boolean True.
-        supabase.table('questions').update({'used': True}).eq('id', question_id).execute()
+        # THE FIX: Added the follow-up message, just like in the image.
+        bot.send_message(
+            GROUP_ID,
+            "👆 You have 10 minutes to answer this quiz. Good luck!",
+            reply_to_message_id=poll.message_id
+        )
 
-        # THE IMPROVEMENT: Send a confirmation message back to the admin.
+        supabase.table('questions').update({'used': True}).eq('id', question_id).execute()
+        
         bot.send_message(msg.chat.id, "✅ Random quiz posted successfully in the group.")
 
     except Exception as e:
         print(f"Error in /randomquiz: {traceback.format_exc()}")
         report_error_to_admin(f"Failed to post random quiz.\n\nError: {traceback.format_exc()}")
         bot.send_message(msg.chat.id, "❌ Oops! Something went wrong while fetching a random quiz.")
-# =============================================================================
-# 13 CONVERSATIONAL /setquiz FEATURE
-# =============================================================================
 
-@bot.message_handler(commands=['createquiztext'])
-@admin_required
-def handle_text_quiz_command(msg: types.Message):
-    """Starts the process for creating a simple text-based quiz."""
-    prompt = bot.send_message(
-        msg.chat.id,
-        "🧠 *Create Text Quiz*\n\nSend the quiz in the following format:\n`Question: Your question?`\n`A) Option1`\n`B) Option2`\n`C) Option3`\n`D) Option4`\n`Answer: A`\n\nType /cancel to abort.",
-        parse_mode="Markdown")
-    bot.register_next_step_handler(prompt, process_text_quiz)
-
-
-def process_text_quiz(msg: types.Message):
-    """Processes the input and sends the text quiz to the group."""
-    if msg.text and msg.text.lower() == '/cancel':
-        bot.send_message(msg.chat.id, "❌ Quiz creation cancelled.")
-        return
-    try:
-        lines = msg.text.strip().split('\n')
-        if len(lines) < 6:
-            raise ValueError(
-                "Invalid format. Please provide a question, 4 options, and an answer, each on a new line."
-            )
-
-        question = lines[0].replace('Question:', '').strip()
-        options = [line.strip()
-                   for line in lines[1:5]]  # Fix: Indentation error
-        answer = lines[5].replace('Answer:', '').strip().upper()
-
-        if answer not in ['A', 'B', 'C', 'D']:
-            raise ValueError("Answer must be A, B, C, or D.")
-
-        quiz_text = f"🧠 **Quiz Time**\n\n❓ {question}\n\n" + "\n".join(
-            options) + "\n\n💭 Reply with your answer (A, B, C, or D)"
-        bot.send_message(GROUP_ID, quiz_text)
-        bot.send_message(msg.chat.id,
-                         f"✅ Text quiz sent The correct answer is {answer}.")
-    except Exception as e:
-        bot.send_message(
-            msg.chat.id,
-            f"❌ Error creating quiz: {e}. Please check the format and try again."
-        )
 @bot.message_handler(commands=['announce'])
 @admin_required
 def handle_announce_command(msg: types.Message):
@@ -1708,67 +1349,6 @@ def handle_feedback_command(msg: types.Message):
             msg.chat.id,
             "❌ Sorry, something went wrong while sending your feedback.")
         print(f"Feedback error: {e}")
-
-# =============================================================================
-# 14 QUIZ RESULT COMMAND (For Bot's Internal Quizzes)
-# =============================================================================
-@bot.message_handler(commands=['quizresult'])
-@admin_required
-def handle_quiz_result_command(msg: types.Message):
-    """
-    Analyzes the bot's internal quiz session data and announces the winners.
-    This is for quizzes created via /quickquiz.
-    """
-    if not QUIZ_SESSIONS:
-        bot.send_message(
-            msg.chat.id,
-            "😕 No quizzes have been conducted in this session yet.")
-        return
-    try:
-        last_quiz_id = list(QUIZ_SESSIONS.keys())[-1]
-        quiz_start_time_iso = QUIZ_SESSIONS[last_quiz_id].get('start_time')
-        quiz_start_time = datetime.datetime.fromisoformat(quiz_start_time_iso)
-
-        participants = QUIZ_PARTICIPANTS.get(last_quiz_id)
-
-        if not participants:
-            bot.send_message(GROUP_ID, "🏁 The last quiz had no participants.")
-            return
-
-        correct_participants = []
-        for uid, data in participants.items():
-            if data.get('is_correct'):
-                time_taken = (
-                    data['answered_at'] -
-                    quiz_start_time).total_seconds()  # Fix: Indentation error
-                correct_participants.append({  # Fix: Indentation error
-                    'name': data['user_name'],
-                    'time': time_taken
-                })
-
-        if not correct_participants:
-            bot.send_message(GROUP_ID,
-                             "🤔 No one answered the last quiz correctly.")
-            return
-
-        sorted_winners = sorted(correct_participants, key=lambda x: x['time'])
-
-        result_text = "🎉 *Internal Quiz Results* 🎉\n\n🏆 Top performers for the last quiz:\n"
-        medals = ["🥇", "🥈", "🥉"]
-        for i, winner in enumerate(sorted_winners[:10]):
-            rank = medals[i] if i < 3 else f" {i+1}."
-            result_text += f"\n{rank} {winner['name']} - *{winner['time']:.2f} seconds*"
-
-        result_text += "\n\nGreat job to all participants 🚀"
-
-        bot.send_message(GROUP_ID, result_text, parse_mode="Markdown")
-        bot.send_message(msg.from_user.id,
-                         "✅ Quiz results announced in the group")
-
-    except Exception as e:
-        print(f"Error in /quizresult: {traceback.format_exc()}")
-        bot.send_message(msg.from_user.id, f"❌ Error announcing winners: {e}")
-
 
 # =============================================================================
 # 15 CONGRATULATE WINNERS FEATURE (/bdhai) - SUPER BOT EDITION
