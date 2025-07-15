@@ -771,15 +771,13 @@ def load_data():
 # =============================================================================
 # 9. TELEGRAM BOT HANDLERS (UPDATED /todayquiz)
 # =============================================================================
-
 @bot.message_handler(commands=['todayquiz'])
 def handle_today_quiz(msg: types.Message):
     """
-    Shows the quiz schedule for the day. This is the final, robust version.
-    It works ONLY in the group chat and provides feedback if used elsewhere.
-    It includes all time-based and creative greetings.
+    Shows the quiz schedule for the day, styled to match the example image,
+    and uses a Web App (Mini App) button for the schedule.
+    Works ONLY in the group chat.
     """
-    # First, enforce the "group only" rule.
     if not is_group_message(msg):
         bot.send_message(
             msg.chat.id,
@@ -787,24 +785,20 @@ def handle_today_quiz(msg: types.Message):
         )
         return
 
-    # Second, ensure the user is a member of the group.
     if not check_membership(msg.from_user.id):
         send_join_group_prompt(msg.chat.id)
         return
 
-    # If all checks pass, proceed with the main logic.
     try:
-        # Timezone and Time-of-Day Greeting Logic
         ist_tz = timezone(timedelta(hours=5, minutes=30))
         current_hour = datetime.datetime.now(ist_tz).hour
         if 5 <= current_hour < 12:
-            time_of_day_greeting = "🌅 Good Morning"
+            time_of_day_greeting = "🌅 Good Morning!"
         elif 12 <= current_hour < 17:
-            time_of_day_greeting = "☀️ Good Afternoon"
+            time_of_day_greeting = "☀️ Good Afternoon!"
         else:
-            time_of_day_greeting = "🌆 Good Evening"
+            time_of_day_greeting = "🌆 Good Evening!"
 
-        # Database Query
         today_date_str = datetime.datetime.now(ist_tz).strftime('%Y-%m-%d')
         response = supabase.table('quiz_schedule').select('*').eq('quiz_date', today_date_str).order('quiz_no').execute()
 
@@ -815,15 +809,16 @@ def handle_today_quiz(msg: types.Message):
             )
             return
         
-        # Creative Greeting Logic
-        user_name = f"*{escape_markdown(msg.from_user.first_name)}*"
+        user_name = msg.from_user.first_name # Using the raw name for a more natural look
         all_greetings = [
+            f"Knowledge building, brick by brick we build,\n{user_name}, today's quiz schedule keeps you skilled! 🧱",
             f"New day dawning, spirits high and free,\n{user_name}, today's quiz schedule is the key! 🗝️",
             f"Practice time calling, skills to refine,\n{user_name}, today's quiz schedule looks divine! ⭐",
             f"Challenge accepted, ready to play,\n{user_name}, here's your quiz lineup for today! 🎮",
-            f"Audit ki kasam, Law ki dua,\n{user_name}, dekho aaj schedule mein kya-kya hua! ✨",
         ]
-        message_text = f"_{time_of_day_greeting}!_\n\n{random.choice(all_greetings)}\n" + "─" * 20 + "\n"
+        # Using HTML parsing for better control over formatting, like bolding and emojis.
+        message_text = f"<b>{time_of_day_greeting}</b>\n\n{random.choice(all_greetings)}\n"
+        message_text += "———————————————\n\n"
         
         for quiz in response.data:
             try:
@@ -832,22 +827,28 @@ def handle_today_quiz(msg: types.Message):
             except (ValueError, TypeError):
                 formatted_time = "N/A"
 
+            # Replicating the format from the image with HTML and emojis
             message_text += (
-                f"\n*Quiz no. {quiz.get('quiz_no', 'N/A')}:*\n"
-                f"⏰ Time: `{formatted_time}`\n"
-                f"📝 Subject: {escape_markdown(str(quiz.get('subject', 'N/A')))}\n"
-                f"📖 Chapter: {escape_markdown(str(quiz.get('chapter_name', 'N/A')))}\n"
-                f"🧩 Topics: {escape_markdown(str(quiz.get('topics_covered', 'N/A')))}\n"
+                f"<b>Quiz no. {quiz.get('quiz_no', 'N/A')}:</b>\n"
+                f"⏰ Time: {formatted_time}\n"
+                f"📝 Subject: {escape(str(quiz.get('subject', 'N/A')))}\n"
+                f"📖 Chapter: {escape(str(quiz.get('chapter_name', 'N/A')))}\n"
+                f"✏️ Part: {escape(str(quiz.get('quiz_type', 'N/A')))}\n"
+                f"🧩 Topics: {escape(str(quiz.get('topics_covered', 'N/A')))}\n\n"
             )
         
-        message_text += "\n" + "─" * 20
+        message_text += "———————————————"
         
+        # --- THE MINI APP BUTTON FIX ---
         markup = types.InlineKeyboardMarkup()
-        schedule_url = "https://studyprosync.web.app/"
-        button = types.InlineKeyboardButton(text="📅 View Full Weekly Schedule", url=schedule_url)
-        markup.add(button)
+        # Use the WEBAPP_URL from your config for the button
+        schedule_button = types.InlineKeyboardButton(
+            text="📅 View Full Weekly Schedule",
+            web_app=types.WebAppInfo(WEBAPP_URL)
+        )
+        markup.add(schedule_button)
         
-        bot.send_message(msg.chat.id, message_text, parse_mode="Markdown", reply_markup=markup, disable_web_page_preview=True)
+        bot.send_message(msg.chat.id, message_text, parse_mode="HTML", reply_markup=markup)
 
     except Exception as e:
         print(f"CRITICAL Error in /todayquiz: {traceback.format_exc()}")
@@ -2206,8 +2207,7 @@ def send_marathon_question(session_id):
 @bot.message_handler(commands=['roko'])
 @admin_required
 def handle_stop_marathon_command(msg: types.Message):
-    """Forcefully stops a running Quiz Marathon."""
-    # THE DUPLICATE FIX: This is now the one and only /roko command.
+    """Forcefully stops a running Quiz Marathon and shows the results."""
     session_id = str(GROUP_ID)
     session = QUIZ_SESSIONS.get(session_id)
 
@@ -2215,25 +2215,46 @@ def handle_stop_marathon_command(msg: types.Message):
         bot.reply_to(msg, "🤷 There is no quiz marathon currently running.")
         return
 
+    # 1. Set the flag to False to prevent any new questions from being scheduled.
     session['is_active'] = False
+
+    # 2. Announce that the marathon has been stopped.
     bot.send_message(
         GROUP_ID,
-        "🛑 *Marathon Stopped!* 🛑\n\nAn admin has stopped the quiz. The final results will be displayed shortly.",
+        "🛑 *Marathon Stopped!* 🛑\n\nAn admin has stopped the quiz. Calculating the final results now...",
         parse_mode="Markdown"
     )
+    
+    # 3. THE FIX: Immediately call the function to send the results.
+    send_marathon_results(session_id)
+    
+    # 4. Cleanly delete the admin's /roko command message.
     try:
         bot.delete_message(msg.chat.id, msg.message_id)
     except Exception as e:
         print(f"Could not delete /roko command message: {e}")
 
 def send_marathon_results(session_id):
-    """Marks used questions, generates results, sends them, and cleans up the session."""
+    """
+    Marks used questions, generates results, sends them, and cleans up the session.
+    This version correctly handles marathons that are stopped mid-way.
+    """
     session = QUIZ_SESSIONS.get(session_id)
     participants = QUIZ_PARTICIPANTS.get(session_id)
 
-    if session and session.get('questions'):
+    # If the session doesn't exist anymore, do nothing.
+    if not session:
+        return
+
+    # THE FIX: Determine the correct number of questions that were actually asked.
+    # This is the current question index, which is accurate even if the marathon was stopped.
+    total_questions_asked = session.get('current_question_index', 0)
+
+    # Mark only the questions that were actually used as 'used'.
+    if session.get('questions') and total_questions_asked > 0:
         try:
-            used_question_ids = [q['id'] for q in session['questions']]
+            # Get the IDs of questions from index 0 up to the last one asked.
+            used_question_ids = [q['id'] for q in session['questions'][:total_questions_asked]]
             if used_question_ids:
                 supabase.table('quiz_questions').update({'used': True}).in_('id', used_question_ids).execute()
                 print(f"✅ Marked {len(used_question_ids)} marathon questions as used.")
@@ -2245,13 +2266,14 @@ def send_marathon_results(session_id):
         bot.send_message(GROUP_ID, f"🏁 The quiz *'{escape_markdown(session.get('title', ''))}'* has finished, but no one participated!")
     else:
         sorted_participants = sorted(participants.values(), key=lambda p: (p['score'], -p['total_time']), reverse=True)
-        total_questions = len(session['questions'])
+        
         results_text = f"🏁 The quiz *'{escape_markdown(session['title'])}'* has finished!\n\n*{len(participants)}* participants answered at least one question.\n\n"
         rank_emojis = ["🥇", "🥈", "🥉"]
-        for i, p in enumerate(sorted_participants[:10]): # Show top 10
+        for i, p in enumerate(sorted_participants[:10]):
             rank = rank_emojis[i] if i < 3 else f"  *{i + 1}.*"
             name = escape_markdown(p['name'])
-            percentage = (p['score'] / total_questions * 100) if total_questions > 0 else 0
+            # THE FIX: Calculate percentage based on questions asked, not the total planned.
+            percentage = (p['score'] / total_questions_asked * 100) if total_questions_asked > 0 else 0
             formatted_time = format_duration(p['total_time'])
             results_text += f"{rank} *{name}* – {p['score']} correct ({percentage:.0f}%) in {formatted_time}\n"
         results_text += "\n🏆 Congratulations to the winners!"
