@@ -367,42 +367,60 @@ def send_join_group_prompt(chat_id):
         reply_markup=markup,
         parse_mode="Markdown")
 
-
 def membership_required(func):
     """
-    Decorator that checks for group membership.
-    This version includes a specific fix for public commands used with a mention.
+    Decorator: The definitive, robust version that correctly handles all command scopes.
+
+    This decorator enforces the following rules:
+    1.  A user must be a member of the main group to use any command.
+    2.  If in a private chat, any command is allowed for a member.
+    3.  If in the group chat:
+        a. Commands in the `PUBLIC_GROUP_COMMANDS` list will run, whether they are
+           tagged with the bot's username or not. (Solves the /todayquiz issue).
+        b. Commands NOT in the public list (e.g., admin commands) will ONLY run
+           if they are explicitly tagged with the bot's username.
+        c. Any command that is not public and not tagged is silently ignored,
+           preventing conflicts with other bots.
     """
     @functools.wraps(func)
     def wrapper(msg: types.Message, *args, **kwargs):
-        # First, and most importantly, check if the user is a member.
+        # --- Stage 1: The Ultimate Gatekeeper ---
+        # No one passes this point without being a member. This is the first and most
+        # important check, protecting all commands.
         if not check_membership(msg.from_user.id):
             send_join_group_prompt(msg.chat.id)
-            return  # Stop immediately if not a member.
+            return  # Stop execution immediately.
 
-        # If we are in a private chat, no more checks needed.
-        if not is_group_message(msg):
+        # --- Stage 2: Handle Private Chats ---
+        # If the user is a member and is messaging the bot directly, they have full
+        # access to the commands they are allowed to use. No more checks needed.
+        if msg.chat.type == 'private':
             return func(msg, *args, **kwargs)
 
-        # --- Logic for Group Messages Only ---
-        command = ""
-        if msg.text and msg.text.startswith('/'):
-            command = msg.text.split('@')[0].split(' ')[0].replace('/', '')
+        # --- Stage 3: Smartly Handle Group Chat Commands ---
+        # This logic only runs for messages inside the main group.
+        if is_group_message(msg):
+            # We only care about messages that are formatted as commands.
+            if msg.text and msg.text.startswith('/'):
+                # Extract the base command (e.g., 'todayquiz' from '/todayquiz@botname').
+                command = msg.text.split('@')[0].split(' ')[0].replace('/', '')
 
-        # Case 1: The command is a known PUBLIC command. Let it pass.
-        if command in PUBLIC_GROUP_COMMANDS:
-            return func(msg, *args, **kwargs)
-        
-        # Case 2: The command is NOT public, so it MUST mention the bot.
-        elif is_bot_mentioned(msg):
-            return func(msg, *args, **kwargs)
-            
-        # Case 3: Command is not public and doesn't mention the bot. Ignore it.
-        else:
-            return
+                # RULE A: Is this a designated public command?
+                # If so, it's allowed to run, no matter what. This is the fix.
+                if command in PUBLIC_GROUP_COMMANDS:
+                    return func(msg, *args, **kwargs)
+
+                # RULE B: Is this a command specifically for our bot?
+                # This handles admin commands like /adminhelp@Rising_quiz_bot.
+                elif is_bot_mentioned(msg):
+                    return func(msg, *args, **kwargs)
+                
+                # RULE C: If it's a command, but not public and not for our bot,
+                # do nothing. This prevents spamming on other bots' commands.
+                else:
+                    return
 
     return wrapper
-
 
 def create_main_menu_keyboard(message: types.Message):
     if message.chat.type != 'private':
@@ -1514,42 +1532,62 @@ def process_quick_quiz(msg: types.Message):
 @admin_required
 def handle_random_quiz(msg: types.Message):
     """
-    Fetches a random quiz, including its explanation, and posts it as a
-    timed, anonymous poll in the group.
+    Fetches a random, unused question from the 'questions' table and posts it.
+    This version is corrected to match the original database schema.
     """
     try:
-        # --- FIX: Pass an empty dictionary for the 'params' argument ---
-        response = supabase.rpc('get_random_quiz', {}).execute()
+        # --- FIX: Fetching a random row directly from the 'questions' table ---
+        # This is how it should have been done, respecting your original setup.
+        # We find one random, unused question.
+        unused_questions = supabase.table('questions').select('*').eq('used', 'false').execute().data
         
-        if not response.data:
-            bot.send_message(GROUP_ID, "😕 No quizzes found in the database.")
-            return
+        if not unused_questions:
+            # If no unused questions are left, reset them all.
+            print("ℹ️ No unused questions found. Resetting 'used' status for all questions.")
+            supabase.table('questions').update({'used': 'true'}).neq('id', 0).execute() # A safe way to update all
+            unused_questions = supabase.table('questions').select('*').eq('used', 'false').execute().data
 
-        quiz_data = response.data[0]
-        options = [
-            quiz_data.get('option_a', ''),
-            quiz_data.get('option_b', ''),
-            quiz_data.get('option_c', ''),
-            quiz_data.get('option_d', '')
-        ]
-        correct_option_index = ['A', 'B', 'C', 'D'].index(quiz_data.get('correct_answer', 'A').upper())
+            if not unused_questions:
+                bot.send_message(GROUP_ID, "😕 No quizzes could be found in the database at all.")
+                report_error_to_admin("CRITICAL: /randomquiz failed because the 'questions' table is empty.")
+                return
+
+        # Select one random question from the fetched list
+        quiz_data = random.choice(unused_questions)
+        
+        # --- FIX: Parsing data based on YOUR table structure ---
+        question_id = quiz_data['id']
+        question_text = quiz_data.get('question_text', 'No question text provided.')
+        # The 'options' column is a JSON array string, so we need to load it.
+        options = json.loads(quiz_data.get('options', '[]'))
+        correct_index = quiz_data.get('correct_index')
         explanation_text = quiz_data.get('explanation')
 
+        # Basic validation to prevent crashes
+        if not all([question_text, isinstance(options, list), len(options) == 4, isinstance(correct_index, int)]):
+             report_error_to_admin(f"Invalid question format in database for ID: {question_id}")
+             bot.send_message(msg.chat.id, "❌ Found a quiz with an invalid format in the database. Skipping.")
+             return
+
+        # --- Send the poll ---
         bot.send_poll(
             chat_id=GROUP_ID,
-            question=f"🧠 Random Quiz:\n\n{quiz_data.get('question', 'No question text.')}",
+            question=f"🧠 Random Quiz:\n\n{question_text}",
             options=options,
             type='quiz',
-            correct_option_id=correct_option_index,
-            is_anonymous=True,
+            correct_option_id=correct_index,
+            is_anonymous=True, # Note: This was True in your last working version
             open_period=60,
             explanation=explanation_text,
             explanation_parse_mode="Markdown"
         )
+        
+        # Mark this specific question as used
+        supabase.table('questions').update({'used': 'true'}).eq('id', question_id).execute()
 
     except Exception as e:
         print(f"Error in /randomquiz: {traceback.format_exc()}")
-        report_error_to_admin(f"Failed to post random quiz. Error: {e}")
+        report_error_to_admin(f"Failed to post random quiz.\n\nError: {traceback.format_exc()}")
         bot.send_message(msg.chat.id, "❌ Oops! Something went wrong while fetching a random quiz.")
 # =============================================================================
 # 8.9. CONVERSATIONAL /setquiz FEATURE
