@@ -816,14 +816,13 @@ def load_data():
 # =============================================================================
 
 @bot.message_handler(commands=['todayquiz'])
-@membership_required
 def handle_today_quiz(msg: types.Message):
     """
-    Shows the quiz schedule for the day. This command is protected and will only
-    run properly in the group chat.
+    Shows the quiz schedule for the day. This is the final, robust version.
+    It works ONLY in the group chat and provides feedback if used elsewhere.
+    It includes all time-based and creative greetings.
     """
-    # This check enforces the "group only" rule. If a member (like the admin)
-    # uses this in a private chat, they will get this helpful message.
+    # First, enforce the "group only" rule.
     if not is_group_message(msg):
         bot.send_message(
             msg.chat.id,
@@ -831,11 +830,25 @@ def handle_today_quiz(msg: types.Message):
         )
         return
 
+    # Second, ensure the user is a member of the group.
+    if not check_membership(msg.from_user.id):
+        send_join_group_prompt(msg.chat.id)
+        return
+
+    # If all checks pass, proceed with the main logic.
     try:
+        # Timezone and Time-of-Day Greeting Logic
         ist_tz = timezone(timedelta(hours=5, minutes=30))
+        current_hour = datetime.datetime.now(ist_tz).hour
+        if 5 <= current_hour < 12:
+            time_of_day_greeting = "🌅 Good Morning"
+        elif 12 <= current_hour < 17:
+            time_of_day_greeting = "☀️ Good Afternoon"
+        else:
+            time_of_day_greeting = "🌆 Good Evening"
+
+        # Database Query
         today_date_str = datetime.datetime.now(ist_tz).strftime('%Y-%m-%d')
-        
-        # Your old working code used 'quiz_schedule'. We will use that.
         response = supabase.table('quiz_schedule').select('*').eq('quiz_date', today_date_str).order('quiz_no').execute()
 
         if not response.data:
@@ -844,8 +857,8 @@ def handle_today_quiz(msg: types.Message):
                 f"✅ Hey {msg.from_user.first_name}, no quizzes are scheduled for today. It might be a rest day! 🧘"
             )
             return
-            
-        # Using the creative greetings from your original file.
+        
+        # Creative Greeting Logic
         user_name = f"*{escape_markdown(msg.from_user.first_name)}*"
         all_greetings = [
             f"New day dawning, spirits high and free,\n{user_name}, today's quiz schedule is the key! 🗝️",
@@ -853,7 +866,7 @@ def handle_today_quiz(msg: types.Message):
             f"Challenge accepted, ready to play,\n{user_name}, here's your quiz lineup for today! 🎮",
             f"Audit ki kasam, Law ki dua,\n{user_name}, dekho aaj schedule mein kya-kya hua! ✨",
         ]
-        message_text = random.choice(all_greetings) + "\n" + "─" * 20 + "\n"
+        message_text = f"_{time_of_day_greeting}!_\n\n{random.choice(all_greetings)}\n" + "─" * 20 + "\n"
         
         for quiz in response.data:
             try:
