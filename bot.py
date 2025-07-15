@@ -170,33 +170,6 @@ def initialize_gsheet():
     except Exception as e:
         print(f"❌ Initial sheet check failed: {e}")
 
-
-
-# =============================================================================
-# 5. BACKGROUND USER TRACKING
-# =============================================================================
-
-@bot.message_handler(func=lambda msg: is_group_message(msg))
-def track_users(msg: types.Message):
-    """
-    A background handler that captures HUMAN user info from any message sent
-    in the group and upserts it into the 'group_members' table.
-    """
-    try:
-        user = msg.from_user
-        # --- NEW: Check if the user is a bot. If so, do nothing. ---
-        if user.is_bot:
-            return
-
-        # If it's a human user, proceed with adding/updating them.
-        supabase.rpc('upsert_group_member', {
-            'p_user_id': user.id,
-            'p_username': user.username,
-            'p_first_name': user.first_name,
-            'p_last_name': user.last_name
-        }).execute()
-    except Exception as e:
-        print(f"[User Tracking Error]: Could not update user {msg.from_user.id}. Reason: {e}")
 def format_duration(seconds: float) -> str:
     """Formats a duration in seconds into a 'X min Y sec' or 'Y.Y sec' string."""
     if seconds < 0:
@@ -2845,7 +2818,31 @@ def handle_new_member(msg: types.Message):
             welcome_text = f"Hey {member.first_name} 👋 Welcome to the group. Check quiz schedule of today by sending /todayquiz 🚀"
             # IMPORTANT: We remove parse_mode="Markdown" to avoid errors with user names.
             bot.send_message(msg.chat.id, welcome_text)
+# =============================================================================
+# 5. BACKGROUND USER TRACKING
+# =============================================================================
 
+@bot.message_handler(func=lambda msg: is_group_message(msg))
+def track_users(msg: types.Message):
+    """
+    A background handler that captures HUMAN user info from any message sent
+    in the group and upserts it into the 'group_members' table.
+    """
+    try:
+        user = msg.from_user
+        # --- NEW: Check if the user is a bot. If so, do nothing. ---
+        if user.is_bot:
+            return
+
+        # If it's a human user, proceed with adding/updating them.
+        supabase.rpc('upsert_group_member', {
+            'p_user_id': user.id,
+            'p_username': user.username,
+            'p_first_name': user.first_name,
+            'p_last_name': user.last_name
+        }).execute()
+    except Exception as e:
+        print(f"[User Tracking Error]: Could not update user {msg.from_user.id}. Reason: {e}")
 
 # --- Fallback Handler (Must be the VERY LAST message handler) ---
 
