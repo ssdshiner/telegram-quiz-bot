@@ -818,12 +818,17 @@ def save_data():
 # 8. TELEGRAM BOT HANDLERS (UPDATED /todayquiz)
 # =============================================================================
 @bot.message_handler(commands=['todayquiz'])
-@membership_required
 def handle_today_quiz(msg: types.Message):
     """
     Shows today's quiz schedule with a full list of creative English and Hinglish
     greetings and a clear, mobile-friendly format.
+    THIS IS THE MAIN FUNCTION FOR FETCHING THE SCHEDULE.
     """
+    # We add the membership check manually here to ensure security
+    if not check_membership(msg.from_user.id):
+        send_join_group_prompt(msg.chat.id)
+        return  # Stop if the user is not a member
+
     try:
         # --- Dynamic Time-Based Greeting ---
         ist_tz = timezone(timedelta(hours=5, minutes=30))
@@ -921,6 +926,38 @@ def handle_today_quiz(msg: types.Message):
             "Our admin team has been notified and will fix it shortly. Please try again in a little while."
         )
         bot.send_message(msg.chat.id, user_error_message)
+
+
+# --- NEW TEXT-BASED TRIGGER FOR TODAY'S QUIZ ---
+# This helper function checks if a message is asking for the quiz schedule.
+def is_today_quiz_message(msg: types.Message):
+    # It must be a text message
+    if not msg.text:
+        return False
+    # It must be in a group
+    if not is_group_message(msg):
+        return False
+    # It must NOT be a command
+    if msg.text.startswith('/'):
+        return False
+    
+    # Check if the message contains our keywords (case-insensitive)
+    text_lower = msg.text.lower()
+    if 'today quiz' in text_lower or 'todayquiz' in text_lower:
+        return True
+    
+    return False
+
+# This is the new message handler that uses the helper function above.
+@bot.message_handler(func=is_today_quiz_message)
+def handle_today_quiz_from_text(msg: types.Message):
+    """
+    This is a new listener that triggers on plain text like 'today quiz'.
+    It simply calls the main /todayquiz function to avoid repeating code.
+    """
+    print(f"User {msg.from_user.first_name} triggered today's quiz schedule with text: '{msg.text}'")
+    # We just call the original function, passing the message along.
+    handle_today_quiz(msg)
 # THIS IS THE COMPLETE AND CORRECT CODE FOR THE /createpoll FEATURE
 # =============================================================================
 # 8.5. INTERACTIVE COMMANDS (POLLS, QUIZZES, ETC.) - CORRECTED BLOCK
@@ -1533,18 +1570,16 @@ def process_quick_quiz(msg: types.Message):
 def handle_random_quiz(msg: types.Message):
     """
     Fetches a random, unused question from the 'questions' table and posts it.
-    This version is corrected to match the original database schema.
+    This version is corrected to handle pre-parsed JSON data.
     """
     try:
-        # --- FIX: Fetching a random row directly from the 'questions' table ---
-        # This is how it should have been done, respecting your original setup.
-        # We find one random, unused question.
+        # Fetch one random, unused question.
         unused_questions = supabase.table('questions').select('*').eq('used', 'false').execute().data
-        
+
         if not unused_questions:
             # If no unused questions are left, reset them all.
             print("ℹ️ No unused questions found. Resetting 'used' status for all questions.")
-            supabase.table('questions').update({'used': 'true'}).neq('id', 0).execute() # A safe way to update all
+            supabase.table('questions').update({'used': False}).neq('id', 0).execute() # A safe way to update all
             unused_questions = supabase.table('questions').select('*').eq('used', 'false').execute().data
 
             if not unused_questions:
@@ -1554,18 +1589,18 @@ def handle_random_quiz(msg: types.Message):
 
         # Select one random question from the fetched list
         quiz_data = random.choice(unused_questions)
-        
-        # --- FIX: Parsing data based on YOUR table structure ---
+
+        # --- THE FIX IS HERE ---
+        # The 'options' are already a Python list, so we don't need json.loads()
         question_id = quiz_data['id']
         question_text = quiz_data.get('question_text', 'No question text provided.')
-        # The 'options' column is a JSON array string, so we need to load it.
-        options = json.loads(quiz_data.get('options', '[]'))
+        options = quiz_data.get('options', []) # Use the list directly
         correct_index = quiz_data.get('correct_index')
         explanation_text = quiz_data.get('explanation')
 
         # Basic validation to prevent crashes
-        if not all([question_text, isinstance(options, list), len(options) == 4, isinstance(correct_index, int)]):
-             report_error_to_admin(f"Invalid question format in database for ID: {question_id}")
+        if not all([question_text, isinstance(options, list), len(options) >= 2, isinstance(correct_index, int)]):
+             report_error_to_admin(f"Invalid question format in database for ID: {question_id}. Data: {quiz_data}")
              bot.send_message(msg.chat.id, "❌ Found a quiz with an invalid format in the database. Skipping.")
              return
 
@@ -1576,14 +1611,14 @@ def handle_random_quiz(msg: types.Message):
             options=options,
             type='quiz',
             correct_option_id=correct_index,
-            is_anonymous=True, # Note: This was True in your last working version
+            is_anonymous=True,
             open_period=60,
             explanation=explanation_text,
             explanation_parse_mode="Markdown"
         )
-        
+
         # Mark this specific question as used
-        supabase.table('questions').update({'used': 'true'}).eq('id', question_id).execute()
+        supabase.table('questions').update({'used': True}).eq('id', question_id).execute()
 
     except Exception as e:
         print(f"Error in /randomquiz: {traceback.format_exc()}")
