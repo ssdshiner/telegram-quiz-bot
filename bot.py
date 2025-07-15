@@ -237,27 +237,19 @@ def live_countdown(chat_id, message_id, duration_seconds):
 
 
 def post_daily_quiz():
-    """Fetches a random, unused question from Supabase and posts it as a quiz."""
+    """
+    Fetches a random, unused question and posts it as a quiz.
+    This version now saves its state for correct answer validation.
+    """
     if not supabase: return
     try:
-        # THE FIX: Use the boolean False, not the string 'false'.
-        # We also fetch more questions to get a better random sample.
-        response = supabase.table('questions').select('*').eq(
-            'used', False).limit(50).execute()
-
-        # THE IMPROVEMENT: More efficient logic for when we run out of questions.
+        response = supabase.table('questions').select('*').eq('used', False).limit(50).execute()
         if not response.data:
-            print(
-                "ℹ️ No unused questions found. Resetting all questions to unused."
-            )
-            # We reset them and then fetch the newly available questions in one go.
+            print("ℹ️ No unused questions for daily quiz. Resetting.")
             supabase.table('questions').update({'used': False}).neq('id', 0).execute()
             response = supabase.table('questions').select('*').eq('used', False).limit(50).execute()
-            
             if not response.data:
-                print("❌ No questions found in the database at all.")
-                report_error_to_admin(
-                    "Daily Quiz Failed: No questions found in the database.")
+                report_error_to_admin("Daily Quiz Failed: No questions found in the database.")
                 return
 
         quiz_data = random.choice(response.data)
@@ -265,7 +257,6 @@ def post_daily_quiz():
         question_text = quiz_data.get('question_text', 'No question text provided.')
         options = quiz_data.get('options', [])
         correct_index = quiz_data.get('correct_index')
-        # THE IMPROVEMENT: Add the explanation field.
         explanation_text = quiz_data.get('explanation')
 
         poll = bot.send_poll(
@@ -275,25 +266,28 @@ def post_daily_quiz():
             type='quiz',
             correct_option_id=correct_index,
             is_anonymous=False,
-            open_period=600,  # 10-minutes quiz
-            # NEW: Add the explanation to the poll.
+            open_period=600,
             explanation=explanation_text,
             explanation_parse_mode="Markdown"
         )
+        
+        # THE FIX: Save the correct answer to memory for the poll handler.
+        QUIZ_SESSIONS[poll.poll.id] = {
+            'correct_option': correct_index,
+            'type': 'daily_quiz' # Add a type for clarity
+        }
+        
         bot.send_message(
             GROUP_ID,
             "👆 You have 10 minutes to answer the daily quiz. Good luck!",
-            reply_to_message_id=poll.message_id)
-            
-        # THE FIX: Use the boolean True, not the string 'true'.
+            reply_to_message_id=poll.message_id
+        )
         supabase.table('questions').update({'used': True}).eq('id', question_id).execute()
-        
         print(f"✅ Daily quiz posted using question ID: {question_id}")
         
     except Exception as e:
         print(f"❌ Failed to post daily quiz: {e}")
-        report_error_to_admin(
-            f"Failed to post daily quiz:\n{traceback.format_exc()}")
+        report_error_to_admin(f"Failed to post daily quiz:\n{traceback.format_exc()}")
 
 
 def admin_required(func):
@@ -1179,20 +1173,17 @@ def handle_notify_command(msg: types.Message):
 @admin_required
 def handle_random_quiz(msg: types.Message):
     """
-    Fetches a random quiz and posts it as a 10-minute poll,
-    replicating the style of the Daily Automated Quiz.
+    Fetches a random quiz and posts it as a 10-minute poll.
+    This version now saves its state for correct answer validation.
     """
     try:
         unused_questions = supabase.table('questions').select('*').eq('used', False).execute().data
-
         if not unused_questions:
-            print("ℹ️ No unused questions found for /randomquiz. Resetting all questions.")
+            print("ℹ️ No unused questions for /randomquiz. Resetting.")
             supabase.table('questions').update({'used': False}).neq('id', 0).execute()
             unused_questions = supabase.table('questions').select('*').eq('used', False).execute().data
-
             if not unused_questions:
-                bot.send_message(GROUP_ID, "😕 No quizzes could be found in the database at all.")
-                report_error_to_admin("CRITICAL: /randomquiz failed because the 'questions' table is empty.")
+                report_error_to_admin("CRITICAL: /randomquiz failed because 'questions' table is empty.")
                 return
 
         quiz_data = random.choice(unused_questions)
@@ -1203,33 +1194,34 @@ def handle_random_quiz(msg: types.Message):
         explanation_text = quiz_data.get('explanation')
 
         if not all([question_text, isinstance(options, list), len(options) >= 2, isinstance(correct_index, int)]):
-             report_error_to_admin(f"Invalid question format in database for ID: {question_id}. Data: {quiz_data}")
+             report_error_to_admin(f"Invalid question format in DB for ID: {question_id}")
              bot.send_message(msg.chat.id, "❌ Found a quiz with an invalid format in the database. Skipping.")
              return
 
-        # THE FIX: Updated title to match the image style.
         poll = bot.send_poll(
             chat_id=GROUP_ID,
             question=f"🧠 Random Quiz 🧠\n\n{question_text}",
             options=options,
             type='quiz',
             correct_option_id=correct_index,
-            is_anonymous=False, # Set to False to match daily quiz style
-            # THE FIX: Changed timer to 10 minutes (600 seconds).
+            is_anonymous=False,
             open_period=600,
             explanation=explanation_text,
             explanation_parse_mode="Markdown"
         )
-
-        # THE FIX: Added the follow-up message, just like in the image.
+        
+        # THE FIX: Save the correct answer to memory for the poll handler.
+        QUIZ_SESSIONS[poll.poll.id] = {
+            'correct_option': correct_index,
+            'type': 'random_quiz' # Add a type for clarity
+        }
+        
         bot.send_message(
             GROUP_ID,
             "👆 You have 10 minutes to answer this quiz. Good luck!",
             reply_to_message_id=poll.message_id
         )
-
         supabase.table('questions').update({'used': True}).eq('id', question_id).execute()
-        
         bot.send_message(msg.chat.id, "✅ Random quiz posted successfully in the group.")
 
     except Exception as e:
@@ -2363,7 +2355,6 @@ def handle_all_poll_answers(poll_answer: types.PollAnswer):
         if marathon_session and marathon_session.get('is_active') and poll_id_str == marathon_session.get('current_poll_id'):
             user_id = poll_answer.user.id
             user_name = poll_answer.user.first_name
-            # THE TIMEZONE FIX: Compare two timezone-aware datetime objects.
             time_taken = (current_time_ist - marathon_session['question_start_time']).total_seconds()
 
             if user_id not in QUIZ_PARTICIPANTS.get(session_id, {}):
@@ -2388,46 +2379,37 @@ def handle_all_poll_answers(poll_answer: types.PollAnswer):
                 participant['score'] += 1
                 participant['correct_answer_times'].append(time_taken)
                 q_stats['correct_times'][user_id] = time_taken
-            return
+            return # End processing for marathon answer
 
-        # --- ROUTE 2: Is this for a QuickQuiz? ---
+        # --- ROUTE 2: Is this a Daily or Random Quiz? ---
+        # This route now correctly handles polls from /randomquiz and the daily scheduler.
         elif poll_id_str in QUIZ_SESSIONS:
-            if poll_answer.option_ids:
-                selected_option = poll_answer.option_ids[0]
-                if poll_id_str in QUIZ_SESSIONS and 'correct_option' in QUIZ_SESSIONS[poll_id_str]:
-                    is_correct = (selected_option == QUIZ_SESSIONS[poll_id_str]['correct_option'])
-                    if poll_id_str not in QUIZ_PARTICIPANTS:
-                        QUIZ_PARTICIPANTS[poll_id_str] = {}
-                    
-                    # THE TIMEZONE FIX: Record the answer time with the correct timezone.
-                    QUIZ_PARTICIPANTS[poll_id_str][poll_answer.user.id] = {
-                        'user_name': poll_answer.user.first_name,
-                        'is_correct': is_correct,
-                        'answered_at': current_time_ist
-                    }
-            return
+            quiz_session_data = QUIZ_SESSIONS.get(poll_id_str)
+            # Ensure the session data is valid
+            if not quiz_session_data or 'correct_option' not in quiz_session_data:
+                return
 
-        # --- ROUTE 3: Fallback for any other polls (like Daily Quiz) ---
-        else:
-            # THE LOGIC FIX: Check if the answer is correct before awarding points.
-            # We can find out the correct answer from the poll object itself.
-            poll = bot.current_states.get_poll_by_id(poll_id_str)
-            if poll and poll.correct_option_id is not None and poll_answer.option_ids:
-                is_correct = (poll.correct_option_id == poll_answer.option_ids[0])
+            # Check if the user selected an answer
+            if poll_answer.option_ids:
+                is_correct = (poll_answer.option_ids[0] == quiz_session_data['correct_option'])
                 if is_correct:
-                    print(f"Received CORRECT answer for a daily poll from {poll_answer.user.first_name}. Awarding point.")
+                    print(f"Received CORRECT answer for a single quiz from {poll_answer.user.first_name}. Awarding point.")
                     supabase.rpc('increment_score', {
                         'user_id_in': poll_answer.user.id,
                         'user_name_in': poll_answer.user.first_name
                     }).execute()
                 else:
-                    print(f"Received incorrect answer for a daily poll from {poll_answer.user.first_name}. No points awarded.")
+                    print(f"Received incorrect answer for a single quiz from {poll_answer.user.first_name}. No points awarded.")
+            
+            # This quiz session is now over for this user, remove it from memory to prevent re-processing.
+            # We check if the key exists before deleting to be safe.
+            if poll_id_str in QUIZ_SESSIONS:
+                del QUIZ_SESSIONS[poll_id_str]
             return
 
     except Exception as e:
         print(f"Error in the master poll answer handler: {traceback.format_exc()}")
         report_error_to_admin(f"Error in handle_all_poll_answers:\n{traceback.format_exc()}")
-
 @bot.message_handler(content_types=['new_chat_members'])
 def handle_new_member(msg: types.Message):
     """
