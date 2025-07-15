@@ -623,7 +623,7 @@ def reverify(call: types.CallbackQuery):
             "❌ Verification failed. Please make sure you have joined the group, then try again.",
             show_alert=True)
 
-@bot.message_handler(func=lambda msg: msg.text == "🚀 See weekly quiz schedule
+@bot.message_handler(func=lambda msg: msg.text == "🚀 See weekly quiz schedule"
 @membership_required
 def handle_quiz_start_button(msg: types.Message):
     """
