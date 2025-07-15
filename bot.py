@@ -1367,15 +1367,20 @@ def parse_time_to_seconds(time_str):
 def parse_leaderboard(text):
     """
     Parses the leaderboard to extract quiz title, total questions, and top winners with detailed info.
+    This version is more robust against formatting variations.
     """
     data = {'quiz_title': None, 'total_questions': None, 'winners': []}
     title_match = re.search(r"The quiz '(.*?)' has finished", text)
     if title_match:
         data['quiz_title'] = title_match.group(1)
-    questions_match = re.search(r"(\d+) questions answered", text)
+    
+    # A safer way to find the total questions
+    questions_match = re.search(r"(\d+)\s+questions", text)
     if questions_match:
         data['total_questions'] = int(questions_match.group(1))
-    pattern = re.compile(r"(🥇|🥈|🥉|\s*\d+\.\s+)(.*?)\s+–\s+(\d+)\s+\((.*?)\)")
+        
+    # A more flexible pattern to find winners
+    pattern = re.compile(r"(🥇|🥈|🥉|\s*\d+\.\s+)\s*(.*?)\s+–\s+(\d+)\s+correct\s+\((.*?)\)")
     lines = text.split('\n')
     for line in lines:
         match = pattern.search(line)
@@ -1385,12 +1390,10 @@ def parse_leaderboard(text):
                 'name': match.group(2).strip(),
                 'score': int(match.group(3).strip()),
                 'time_str': match.group(4).strip(),
-                'time_in_seconds':
-                parse_time_to_seconds(match.group(4).strip())
+                'time_in_seconds': parse_time_to_seconds(match.group(4).strip())
             }
             data['winners'].append(winner_data)
     return data
-
 
 @bot.message_handler(commands=['bdhai'])
 @admin_required
@@ -1410,7 +1413,7 @@ def handle_congratulate_command(msg: types.Message):
 
     try:
         leaderboard_data = parse_leaderboard(leaderboard_text)
-        top_winners = leaderboard_data['winners'][:3]
+        top_winners = leaderboard_data.get('winners', [])[:3]
         if not top_winners:
             bot.send_message(
                 msg.chat.id,
@@ -1418,11 +1421,10 @@ def handle_congratulate_command(msg: types.Message):
             )
             return
 
-        quiz_title = escape_markdown(
-            leaderboard_data.get('quiz_title', 'the recent quiz'))
+        # THE FIX: Escape all user-generated content *before* putting it in an f-string.
+        quiz_title = escape_markdown(leaderboard_data.get('quiz_title', 'the recent quiz'))
         total_questions = leaderboard_data.get('total_questions', 0)
 
-        # CORRECTED: All '!' have been replaced with '.'
         intro_messages = [
             f"🎉 The results for *{quiz_title}* are in, and the performance was electrifying. Huge congratulations to our toppers.",
             f"🚀 What a performance in *{quiz_title}*. Let's give a huge round of applause for our champions.",
@@ -1431,23 +1433,24 @@ def handle_congratulate_command(msg: types.Message):
         congrats_message = random.choice(intro_messages) + "\n\n"
 
         for winner in top_winners:
-            percentage = (winner['score'] / total_questions *
-                          100) if total_questions > 0 else 0
+            percentage = (winner['score'] / total_questions * 100) if total_questions > 0 else 0
+            # Ensure every piece of text is escaped.
             safe_winner_name = escape_markdown(winner['name'])
             safe_time_str = escape_markdown(winner['time_str'])
+            
             congrats_message += (
                 f"{winner['rank_icon']} *{safe_winner_name}*\n"
                 f" ► Score: *{winner['score']}/{total_questions}* ({percentage:.2f}%)\n"
                 f" ► Time: *{safe_time_str}*\n\n")
 
         congrats_message += "*━━━ Performance Insights ━━━*\n"
-        fastest_winner_name = escape_markdown(
-            min(top_winners, key=lambda x: x['time_in_seconds'])['name'])
-        # CORRECTED: '!' replaced with '.'
+        # Find and escape the fastest winner's name safely.
+        fastest_winner = min(top_winners, key=lambda x: x['time_in_seconds'])
+        fastest_winner_name = escape_markdown(fastest_winner['name'])
         congrats_message += f"⚡️ *Speed King/Queen:* A special mention to *{fastest_winner_name}* for being the fastest among the toppers.\n"
 
-        # CORRECTED: '!' replaced. Note the escaped '.' -> '\.' for MarkdownV2
-        congrats_message += "\nKeep pushing your limits, everyone. The next leaderboard is waiting for you\. 🔥"
+        # THE FIX: Removed the problematic '\.' which can cause parsing errors.
+        congrats_message += "\nKeep pushing your limits, everyone. The next leaderboard is waiting for you. 🔥"
 
         bot.send_message(msg.chat.id, congrats_message, parse_mode="Markdown")
 
@@ -1460,7 +1463,7 @@ def handle_congratulate_command(msg: types.Message):
         print(f"Error in /bdhai command: {traceback.format_exc()}")
         bot.send_message(
             msg.chat.id,
-            f"❌ Oops Something went wrong while generating the message. Error: {e}"
+            f"❌ Oops! Something went wrong while generating the message. Error: {e}"
         )
 
 
