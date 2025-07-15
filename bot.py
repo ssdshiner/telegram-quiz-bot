@@ -1363,28 +1363,46 @@ def parse_time_to_seconds(time_str):
         seconds += float(time_str.replace('sec', '').strip())
     return seconds
 
-
 def parse_leaderboard(text):
     """
     Parses the leaderboard to extract quiz title, total questions, and top winners with detailed info.
     This version is more robust against formatting variations.
     """
     data = {'quiz_title': None, 'total_questions': None, 'winners': []}
-    title_match = re.search(r"The quiz '(.*?)' has finished", text)
+    # This pattern is more flexible for the title
+    title_match = re.search(r"The quiz '(.*?)'.*?has finished", text, re.DOTALL)
     if title_match:
-        data['quiz_title'] = title_match.group(1)
-    
-    # A safer way to find the total questions
+        data['quiz_title'] = title_match.group(1).replace('*', '') # Remove any asterisks
+
     questions_match = re.search(r"(\d+)\s+questions", text)
     if questions_match:
         data['total_questions'] = int(questions_match.group(1))
         
-    # A more flexible pattern to find winners
-    pattern = re.compile(r"(🥇|🥈|🥉|\s*\d+\.\s+)\s*(.*?)\s+–\s+(\d+)\s+correct\s+\((.*?)\)")
+    # --- THE FIX ---
+    # This new pattern makes the word "correct" optional by using (correct\s+)?
+    # It will now match "14 (7 min 4 sec)" AND "14 correct (7 min 4 sec)"
+    pattern = re.compile(r"(🥇|🥈|🥉|\s*\d+\.\s+)\s*(.*?)\s+–\s+(\d+)\s*(?:\(correct\s+)?\((.*?)\)")
     lines = text.split('\n')
+    
     for line in lines:
+        # A second, simpler pattern for lines that might not have a time, e.g., "13. ..... - 1"
         match = pattern.search(line)
-        if match:
+        if not match:
+             # This simpler pattern handles cases like "13. ..... - 1"
+            simple_pattern = re.compile(r"(🥇|🥈|🥉|\s*\d+\.\s+)\s*(.*?)\s+–\s+(\d+)")
+            match = simple_pattern.search(line)
+            if match:
+                winner_data = {
+                    'rank_icon': match.group(1).strip(),
+                    'name': match.group(2).strip(),
+                    'score': int(match.group(3).strip()),
+                    'time_str': 'N/A', # No time available
+                    'time_in_seconds': 9999
+                }
+                data['winners'].append(winner_data)
+                continue # Move to the next line
+
+        if match and len(match.groups()) >= 4:
             winner_data = {
                 'rank_icon': match.group(1).strip(),
                 'name': match.group(2).strip(),
@@ -1393,6 +1411,7 @@ def parse_leaderboard(text):
                 'time_in_seconds': parse_time_to_seconds(match.group(4).strip())
             }
             data['winners'].append(winner_data)
+            
     return data
 
 @bot.message_handler(commands=['bdhai'])
