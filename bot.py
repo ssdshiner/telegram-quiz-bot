@@ -817,18 +817,16 @@ def save_data():
 # =============================================================================
 # 8. TELEGRAM BOT HANDLERS (UPDATED /todayquiz)
 # =============================================================================
+# =============================================================================
+# 8. TELEGRAM BOT HANDLERS (UPDATED /todayquiz)
+# =============================================================================
 @bot.message_handler(commands=['todayquiz'])
+@membership_required
 def handle_today_quiz(msg: types.Message):
     """
     Shows today's quiz schedule with a full list of creative English and Hinglish
     greetings and a clear, mobile-friendly format.
-    THIS IS THE MAIN FUNCTION FOR FETCHING THE SCHEDULE.
     """
-    # We add the membership check manually here to ensure security
-    if not check_membership(msg.from_user.id):
-        send_join_group_prompt(msg.chat.id)
-        return  # Stop if the user is not a member
-
     try:
         # --- Dynamic Time-Based Greeting ---
         ist_tz = timezone(timedelta(hours=5, minutes=30))
@@ -926,38 +924,124 @@ def handle_today_quiz(msg: types.Message):
             "Our admin team has been notified and will fix it shortly. Please try again in a little while."
         )
         bot.send_message(msg.chat.id, user_error_message)
+# =============================================================================
+# 8. TELEGRAM BOT HANDLERS (UPDATED /todayquiz)
+# =============================================================================
+
+# --- This is the primary function for fetching the schedule.
+# --- It is called by the other handlers.
+def run_today_quiz_logic(msg: types.Message):
+    """
+    This function contains the actual logic for fetching and sending the quiz schedule.
+    It is NOT a handler itself, but a helper function.
+    """
+    try:
+        # --- Dynamic Time-Based Greeting ---
+        ist_tz = timezone(timedelta(hours=5, minutes=30))
+        current_hour = datetime.datetime.now(ist_tz).hour
+        if 5 <= current_hour < 12:
+            time_of_day_greeting = "🌅 Good Morning"
+        elif 12 <= current_hour < 17:
+            time_of_day_greeting = "☀️ Good Afternoon"
+        else:
+            time_of_day_greeting = "🌆 Good Evening"
+
+        # --- FINAL: The Full List of Poetic Greetings ---
+        user_name = f"*{escape_markdown(msg.from_user.first_name)}*" # User's name in bold
+        
+        all_greetings = [
+            # English Poetic Lines
+            f"New day dawning, spirits high and free,\n{user_name}, today's quiz schedule is the key! 🗝️",
+            f"Practice time calling, skills to refine,\n{user_name}, today's quiz schedule looks divine! ⭐",
+            f"Challenge accepted, ready to play,\n{user_name}, here's your quiz lineup for today! 🎮",
+            f"Knowledge building, brick by brick we build,\n{user_name}, today's quiz schedule keeps you skilled! 🧱",
+            # Hinglish Poetic Lines
+            f"Audit ki kasam, Law ki dua,\n{user_name}, dekho aaj schedule mein kya-kya hua! ✨",
+            f"Padhai ka junoon, aur rank ka hai khwaab,\nCheck kariye aaj ka quiz, *{msg.from_user.first_name}* janab!"
+        ]
+        
+        # --- Database Query ---
+        today_date_str = datetime.datetime.now(ist_tz).strftime('%Y-%m-%d')
+        response = supabase.table('quiz_schedule').select('*').eq('quiz_date', today_date_str).order('quiz_no').execute()
+
+        if response.data:
+            header = f"_{time_of_day_greeting}!_\n\n{random.choice(all_greetings)}\n"
+            message_text = header + "\n" + "─" * 20 + "\n"
+
+            for quiz_item in response.data:
+                subject = escape_markdown(str(quiz_item.get('subject', 'N/A')))
+                chapter = escape_markdown(str(quiz_item.get('chapter_name', 'N/A')))
+                topics = escape_markdown(str(quiz_item.get('topics_covered', 'N/A')))
+                quiz_no = quiz_item.get('quiz_no', 'N/A')
+                quiz_type = escape_markdown(str(quiz_item.get('quiz_type', 'N/A')))
+                time_str = quiz_item.get('quiz_time')
+                try:
+                    formatted_time = datetime.datetime.strptime(time_str, '%H:%M:%S').strftime('%I:%M %p')
+                except (ValueError, TypeError):
+                    formatted_time = "N/A"
+                
+                quiz_details = (
+                    f"\n*Quiz no. {quiz_no}:*\n"
+                    f"⏰ Time: `{formatted_time}`\n📝 Subject: {subject}\n"
+                    f"📖 Chapter: {chapter}\n✏️ Part: {quiz_type}\n🧩 Topics: {topics}\n"
+                )
+                message_text += quiz_details
+            
+            message_text += "\n" + "─" * 20
+            
+            markup = types.InlineKeyboardMarkup()
+            schedule_url = "https://studyprosync.web.app/"
+            button = types.InlineKeyboardButton(text="📅 View Full Weekly Schedule", url=schedule_url)
+            markup.add(button)
+            
+            bot.send_message(msg.chat.id, message_text, parse_mode="Markdown", reply_markup=markup, disable_web_page_preview=True)
+
+        else:
+            no_schedule_text = (
+                f"Hey {msg.from_user.first_name}! 👋\n\n"
+                "It seems the schedule for today has not been posted yet. It might be a rest day! 🧘\n\n"
+                "You can check the weekly schedule via the button in a previous message."
+            )
+            bot.send_message(msg.chat.id, no_schedule_text)
+
+    except Exception as e:
+        tb_string = traceback.format_exc()
+        print(f"CRITICAL Error in todayquiz logic: {tb_string}")
+        report_error_to_admin(f"Failed to fetch today's quiz schedule:\n{tb_string}")
+        bot.send_message(msg.chat.id, "😥 Oops! Something went wrong while fetching the schedule.")
 
 
-# --- NEW TEXT-BASED TRIGGER FOR TODAY'S QUIZ ---
-# This helper function checks if a message is asking for the quiz schedule.
+# --- HANDLER 1: For the /todayquiz command ---
+@bot.message_handler(commands=['todayquiz'])
+@membership_required  # The security guard is back, and now it knows 'todayquiz' is public.
+def handle_today_quiz_command(msg: types.Message):
+    """
+    Handles the /todayquiz command. It will now ONLY run in the group
+    because of the @membership_required decorator's rules.
+    """
+    run_today_quiz_logic(msg) # Calls the main logic function.
+
+
+# --- HANDLER 2: For the "today quiz" text ---
 def is_today_quiz_message(msg: types.Message):
-    # It must be a text message
-    if not msg.text:
+    # This function is the same, it defines what we are looking for.
+    if not msg.text or not is_group_message(msg) or msg.text.startswith('/'):
         return False
-    # It must be in a group
-    if not is_group_message(msg):
-        return False
-    # It must NOT be a command
-    if msg.text.startswith('/'):
-        return False
-    
-    # Check if the message contains our keywords (case-insensitive)
     text_lower = msg.text.lower()
-    if 'today quiz' in text_lower or 'todayquiz' in text_lower:
-        return True
-    
-    return False
+    return 'today quiz' in text_lower or 'todayquiz' in text_lower
 
-# This is the new message handler that uses the helper function above.
 @bot.message_handler(func=is_today_quiz_message)
 def handle_today_quiz_from_text(msg: types.Message):
     """
-    This is a new listener that triggers on plain text like 'today quiz'.
-    It simply calls the main /todayquiz function to avoid repeating code.
+    Handles plain text like 'today quiz'. It now ALSO checks for membership
+    before running, making it fully secure.
     """
+    # We add a manual membership check here for security.
+    if not check_membership(msg.from_user.id):
+        return # Silently ignore if a non-member somehow triggers this.
+        
     print(f"User {msg.from_user.first_name} triggered today's quiz schedule with text: '{msg.text}'")
-    # We just call the original function, passing the message along.
-    handle_today_quiz(msg)
+    run_today_quiz_logic(msg) # Calls the same main logic function.
 # THIS IS THE COMPLETE AND CORRECT CODE FOR THE /createpoll FEATURE
 # =============================================================================
 # 8.5. INTERACTIVE COMMANDS (POLLS, QUIZZES, ETC.) - CORRECTED BLOCK
