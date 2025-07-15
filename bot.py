@@ -623,19 +623,17 @@ def reverify(call: types.CallbackQuery):
             "❌ Verification failed. Please make sure you have joined the group, then try again.",
             show_alert=True)
 
-@bot.message_handler(func=lambda msg: msg.text == "🚀 See weekly quiz schedule"
+@bot.message_handler(func=lambda msg: msg.text == "🚀 See weekly quiz schedule")
 @membership_required
 def handle_quiz_start_button(msg: types.Message):
     """
-    Handles the 'See weekly quiz schedule' button press.
+    Handles the 'See weekly quiz schedule' button press from the main keyboard.
     The @membership_required decorator already ensures the user is a member.
     """
-    # THE IMPROVEMENT: The redundant 'if not check_membership...' block is removed.
-    # We can trust that @membership_required has already done its job.
-    
-    # If the button is clicked in a private chat, the Web App will open automatically.
-    # We can send a simple confirmation message.
-    bot.send_message(msg.chat.id, "🚀 Opening the quiz... Good luck! 🤞")
+    # This handler is primarily for the main keyboard button in private chat.
+    # When clicked, the Mini App opens automatically.
+    # We send a simple confirmation message to make the experience smoother.
+    bot.send_message(msg.chat.id, "🚀 Opening the weekly schedule...")
 
 @bot.message_handler(commands=['adminhelp'])
 @admin_required
