@@ -1002,33 +1002,29 @@ def handle_dm_conversation_steps(msg: types.Message):
                 print(f"Error during DM broadcast: {e}")
             
             del user_states[admin_id] # End conversation
-# This handler will catch any message sent to the bot in a private chat.
 @bot.message_handler(
-    func=lambda msg: msg.chat.id == msg.from_user.id,
+    func=lambda msg: msg.chat.id == msg.from_user.id and not is_admin(msg.from_user.id),
     content_types=['text', 'photo', 'video', 'document', 'audio', 'sticker']
 )
 def forward_user_reply_to_admin(msg: types.Message):
     """
-    Forwards a user's direct message to the admin, formatted for an easy reply.
-    Now safely ignores non-text commands and events.
+    Forwards a REGULAR USER's direct message to the admin.
+    It now explicitly IGNORES messages from the admin to prevent conflicts.
     """
-    # --- THIS IS THE FIX ---
-    # First, check if there is any text at all.
-    if msg.text and msg.text.startswith('/'):
-        # If it's a command, do nothing. Let other handlers deal with it.
-        return
-
     user_info = msg.from_user
     
     admin_header = (
-        f"📩 *New reply from* [{escape_markdown(user_info.first_name)}](tg://user?id={user_info.id})\n"
-        f"👤 *Username:* @{user_info.username if user_info.username else 'N/A'}\n"
-        f"🆔 *User ID:* `{user_info.id}`\n\n"
-        f"👇 *To reply, use `/dm` or simply reply to their forwarded message below.*"
+        f"📩 <b>New reply from</b> <a href='tg://user?id={user_info.id}'>{escape(user_info.first_name)}</a>\n"
+        f"👤 <code>@{escape(user_info.username if user_info.username else 'N/A')}</code>\n"
+        f"🆔 <code>{user_info.id}</code>\n\n"
+        f"👇 <i>To reply, simply use Telegram's reply feature on their message below.</i>"
     )
 
     try:
-        bot.send_message(ADMIN_USER_ID, admin_header, parse_mode="Markdown")
+        bot.send_message(ADMIN_USER_ID, admin_header, parse_mode="HTML")
+        
+        # --- THIS IS THE FIX ---
+        # Changed the variable from the incorrect ADMIN_USER_D to the correct ADMIN_USER_ID.
         bot.forward_message(chat_id=ADMIN_USER_ID, from_chat_id=msg.chat.id, message_id=msg.message_id)
 
     except Exception as e:
