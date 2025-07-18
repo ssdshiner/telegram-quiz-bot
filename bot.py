@@ -1173,62 +1173,47 @@ def handle_notify_command(msg: types.Message):
 @admin_required
 def handle_random_quiz(msg: types.Message):
     """
-    Fetches a random quiz and posts it as a 10-minute poll.
-    This version now saves its state for correct answer validation.
+    Fetches a random quiz and stores its correct answer information
+    before posting it as a timed poll.
     """
     try:
-        unused_questions = supabase.table('questions').select('*').eq('used', False).execute().data
-        if not unused_questions:
-            print("ℹ️ No unused questions for /randomquiz. Resetting.")
-            supabase.table('questions').update({'used': False}).neq('id', 0).execute()
-            unused_questions = supabase.table('questions').select('*').eq('used', False).execute().data
-            if not unused_questions:
-                report_error_to_admin("CRITICAL: /randomquiz failed because 'questions' table is empty.")
-                return
+        response = supabase.rpc('get_random_quiz', {}).execute()
+        if not response.data:
+            bot.send_message(GROUP_ID, "😕 No quizzes found in the database.")
+            return
 
-        quiz_data = random.choice(unused_questions)
-        question_id = quiz_data['id']
-        question_text = quiz_data.get('question_text', 'No question text provided.')
-        options = quiz_data.get('options', [])
-        correct_index = quiz_data.get('correct_index')
+        quiz_data = response.data[0]
+        options = [
+            quiz_data.get('option_a', ''), quiz_data.get('option_b', ''),
+            quiz_data.get('option_c', ''), quiz_data.get('option_d', '')
+        ]
+        correct_option_index = ['A', 'B', 'C', 'D'].index(quiz_data.get('correct_answer', 'A').upper())
         explanation_text = quiz_data.get('explanation')
 
-        if not all([question_text, isinstance(options, list), len(options) >= 2, isinstance(correct_index, int)]):
-             report_error_to_admin(f"Invalid question format in DB for ID: {question_id}")
-             bot.send_message(msg.chat.id, "❌ Found a quiz with an invalid format in the database. Skipping.")
-             return
-
-        poll = bot.send_poll(
+        sent_poll = bot.send_poll(
             chat_id=GROUP_ID,
-            question=f"🧠 Random Quiz 🧠\n\n{question_text}",
+            question=f"🧠 Random Quiz:\n\n{quiz_data.get('question', 'No question text.')}",
             options=options,
             type='quiz',
-            correct_option_id=correct_index,
-            is_anonymous=False,
-            open_period=600,
+            correct_option_id=correct_option_index,
+            is_anonymous=False, # Must be False to track scores
+            open_period=60,
             explanation=explanation_text,
             explanation_parse_mode="Markdown"
         )
         
-        # THE FIX: Save the correct answer to memory for the poll handler.
-        QUIZ_SESSIONS[poll.poll.id] = {
-            'correct_option': correct_index,
-            'type': 'random_quiz' # Add a type for clarity
-        }
-        
-        bot.send_message(
-            GROUP_ID,
-            "👆 You have 10 minutes to answer this quiz. Good luck!",
-            reply_to_message_id=poll.message_id
-        )
-        supabase.table('questions').update({'used': True}).eq('id', question_id).execute()
-        bot.send_message(msg.chat.id, "✅ Random quiz posted successfully in the group.")
+        # --- THIS IS THE NEW, CRITICAL PART ---
+        # The bot now remembers the correct answer for this specific poll.
+        active_polls.append({
+            'poll_id': sent_poll.poll.id,
+            'correct_option_id': correct_option_index,
+            'type': 'random_quiz' # Identify the quiz type
+        })
 
     except Exception as e:
         print(f"Error in /randomquiz: {traceback.format_exc()}")
-        report_error_to_admin(f"Failed to post random quiz.\n\nError: {traceback.format_exc()}")
+        report_error_to_admin(f"Failed to post random quiz. Error: {e}")
         bot.send_message(msg.chat.id, "❌ Oops! Something went wrong while fetching a random quiz.")
-
 @bot.message_handler(commands=['announce'])
 @admin_required
 def handle_announce_command(msg: types.Message):
@@ -1411,7 +1396,7 @@ def parse_leaderboard(text):
 def handle_congratulate_command(msg: types.Message):
     """
     Analyzes a replied-to leaderboard message and sends a personalized 
-    congratulatory message to the top 3 winners.
+    congratulatory message. Now correctly handles usernames.
     """
     if not msg.reply_to_message or not msg.reply_to_message.text:
         bot.send_message(
@@ -1424,7 +1409,7 @@ def handle_congratulate_command(msg: types.Message):
 
     try:
         leaderboard_data = parse_leaderboard(leaderboard_text)
-        top_winners = leaderboard_data.get('winners', [])[:3]
+        top_winners = leaderboard_data['winners'][:3]
         if not top_winners:
             bot.send_message(
                 msg.chat.id,
@@ -1432,7 +1417,6 @@ def handle_congratulate_command(msg: types.Message):
             )
             return
 
-        # THE FIX: Escape all user-generated content *before* putting it in an f-string.
         quiz_title = escape_markdown(leaderboard_data.get('quiz_title', 'the recent quiz'))
         total_questions = leaderboard_data.get('total_questions', 0)
 
@@ -1445,30 +1429,33 @@ def handle_congratulate_command(msg: types.Message):
 
         for winner in top_winners:
             percentage = (winner['score'] / total_questions * 100) if total_questions > 0 else 0
-            # Ensure every piece of text is escaped.
-            safe_winner_name = escape_markdown(winner['name'])
+            
+            # --- THIS IS THE FIX ---
+            # We no longer re-escape the winner's name. We just use it as is.
+            safe_winner_name = winner['name']
+            
+            # We still escape the time string, as that is safe practice.
             safe_time_str = escape_markdown(winner['time_str'])
             
             congrats_message += (
-                f"{winner['rank_icon']} *{safe_winner_name}*\n"
+                f"{winner['rank_icon']} *{safe_winner_name}*\n" # The name is now correctly bolded
                 f" ► Score: *{winner['score']}/{total_questions}* ({percentage:.2f}%)\n"
                 f" ► Time: *{safe_time_str}*\n\n")
 
         congrats_message += "*━━━ Performance Insights ━━━*\n"
-        # Find and escape the fastest winner's name safely.
-        fastest_winner = min(top_winners, key=lambda x: x['time_in_seconds'])
-        fastest_winner_name = escape_markdown(fastest_winner['name'])
+        
+        # We also fix the 'fastest_winner_name' here in the same way.
+        fastest_winner_name = min(top_winners, key=lambda x: x['time_in_seconds'])['name']
+        
         congrats_message += f"⚡️ *Speed King/Queen:* A special mention to *{fastest_winner_name}* for being the fastest among the toppers.\n"
+        congrats_message += "\nKeep pushing your limits, everyone. The next leaderboard is waiting for you\. 🔥"
 
-        # THE FIX: Removed the problematic '\.' which can cause parsing errors.
-        congrats_message += "\nKeep pushing your limits, everyone. The next leaderboard is waiting for you. 🔥"
-
-        bot.send_message(msg.chat.id, congrats_message, parse_mode="Markdown")
+        bot.send_message(GROUP_ID, congrats_message, parse_mode="Markdown")
 
         try:
             bot.delete_message(msg.chat.id, msg.message_id)
         except Exception:
-            pass  # Ignore if deletion fails
+            pass
 
     except Exception as e:
         print(f"Error in /bdhai command: {traceback.format_exc()}")
@@ -2338,32 +2325,40 @@ def generate_quiz_insights(session_id):
         insights_text += f"🎯 *Top Accuracy Award:* {escape_markdown(most_accurate)} ({max_accuracy:.0f}%)\n"
 
     bot.send_message(GROUP_ID, insights_text, parse_mode="Markdown")
+# =============================================================================
+# 8.Y. UNIFIED POLL ANSWER HANDLER (SIMPLIFIED & FINAL VERSION)
+# =============================================================================
+
 @bot.poll_answer_handler()
 def handle_all_poll_answers(poll_answer: types.PollAnswer):
     """
-    This is the single master handler for all poll answers. It routes the
-    answer to the correct logic and is fully timezone-aware and crash-proof.
+    This is the single master handler for all poll answers. It correctly handles
+    Marathon and Random/Daily quizzes without any conflicts.
     """
+    poll_id_str = poll_answer.poll_id
+    user_info = poll_answer.user
+    selected_option = poll_answer.option_ids[0] if poll_answer.option_ids else None
+
+    # This is a safety check: if a user retracts their vote, do nothing.
+    if selected_option is None:
+        return
+
     try:
-        poll_id_str = poll_answer.poll_id
+        # --- ROUTE 1: Marathon Quiz ---
         session_id = str(GROUP_ID)
         marathon_session = QUIZ_SESSIONS.get(session_id)
-        ist_tz = timezone(timedelta(hours=5, minutes=30))
-        current_time_ist = datetime.datetime.now(ist_tz)
-
-        # --- ROUTE 1: Is this for the active Marathon? ---
         if marathon_session and marathon_session.get('is_active') and poll_id_str == marathon_session.get('current_poll_id'):
-            user_id = poll_answer.user.id
-            user_name = poll_answer.user.first_name
+            ist_tz = timezone(timedelta(hours=5, minutes=30))
+            current_time_ist = datetime.datetime.now(ist_tz)
             time_taken = (current_time_ist - marathon_session['question_start_time']).total_seconds()
 
-            if user_id not in QUIZ_PARTICIPANTS.get(session_id, {}):
-                QUIZ_PARTICIPANTS.setdefault(session_id, {})[user_id] = {
-                    'name': user_name, 'score': 0, 'total_time': 0,
+            if user_info.id not in QUIZ_PARTICIPANTS.get(session_id, {}):
+                QUIZ_PARTICIPANTS.setdefault(session_id, {})[user_info.id] = {
+                    'name': user_info.first_name, 'score': 0, 'total_time': 0,
                     'questions_answered': 0, 'correct_answer_times': []
                 }
 
-            participant = QUIZ_PARTICIPANTS[session_id][user_id]
+            participant = QUIZ_PARTICIPANTS[session_id][user_info.id]
             participant['total_time'] += time_taken
             participant['questions_answered'] += 1
 
@@ -2375,37 +2370,28 @@ def handle_all_poll_answers(poll_answer: types.PollAnswer):
             q_stats['total_time'] += time_taken
             q_stats['answer_count'] += 1
 
-            if poll_answer.option_ids and poll_answer.option_ids[0] == correct_option_index:
+            if selected_option == correct_option_index:
                 participant['score'] += 1
                 participant['correct_answer_times'].append(time_taken)
-                q_stats['correct_times'][user_id] = time_taken
-            return # End processing for marathon answer
+                q_stats['correct_times'][user_info.id] = time_taken
+            return # IMPORTANT: End processing here for marathon answers
 
-        # --- ROUTE 2: Is this a Daily or Random Quiz? ---
-        # This route now correctly handles polls from /randomquiz and the daily scheduler.
-        elif poll_id_str in QUIZ_SESSIONS:
-            quiz_session_data = QUIZ_SESSIONS.get(poll_id_str)
-            # Ensure the session data is valid
-            if not quiz_session_data or 'correct_option' not in quiz_session_data:
-                return
-
-            # Check if the user selected an answer
-            if poll_answer.option_ids:
-                is_correct = (poll_answer.option_ids[0] == quiz_session_data['correct_option'])
-                if is_correct:
-                    print(f"Received CORRECT answer for a single quiz from {poll_answer.user.first_name}. Awarding point.")
-                    supabase.rpc('increment_score', {
-                        'user_id_in': poll_answer.user.id,
-                        'user_name_in': poll_answer.user.first_name
-                    }).execute()
-                else:
-                    print(f"Received incorrect answer for a single quiz from {poll_answer.user.first_name}. No points awarded.")
+        # --- ROUTE 2: Random Quiz / Daily Quiz ---
+        # We now correctly check the 'active_polls' list for these quizzes.
+        else:
+            active_poll_info = next((poll for poll in active_polls if poll['poll_id'] == poll_id_str), None)
             
-            # This quiz session is now over for this user, remove it from memory to prevent re-processing.
-            # We check if the key exists before deleting to be safe.
-            if poll_id_str in QUIZ_SESSIONS:
-                del QUIZ_SESSIONS[poll_id_str]
-            return
+            # If we found the poll and it's a random quiz type...
+            if active_poll_info and active_poll_info.get('type') == 'random_quiz':
+                # Check if the user's answer is the correct one
+                if selected_option == active_poll_info['correct_option_id']:
+                    print(f"Correct answer for random/daily quiz from {user_info.first_name}. Incrementing score.")
+                    # If it's correct, call our Supabase function
+                    supabase.rpc('increment_score', {
+                        'user_id_in': user_info.id,
+                        'user_name_in': user_info.first_name
+                    }).execute()
+            # No return here, allowing for other potential poll types in the future if needed
 
     except Exception as e:
         print(f"Error in the master poll answer handler: {traceback.format_exc()}")
