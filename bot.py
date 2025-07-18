@@ -1215,8 +1215,8 @@ def handle_random_quiz(msg: types.Message):
         safe_category = escape(category)
         safe_question_text = escape(question_text)
         formatted_question = (
-            f"<b>Sharpen Your Mind!</b> 💡\n\n"
-            f"<i>A random challenge from: <b>{safe_category}</b></i>\n\n"
+            f"Sharpen Your Mind! 💡\n\n"
+            f"A random challenge from: {safe_category}\n\n"
             f"{safe_question_text}"
         )
 
