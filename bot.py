@@ -1173,7 +1173,7 @@ def handle_notify_command(msg: types.Message):
 def handle_random_quiz(msg: types.Message):
     """
     Posts a polished 10-minute random quiz using HTML formatting. This is the
-    definitive, robust version with extensive error handling and admin confirmation.
+    definitive, robust version with all fixes applied.
     """
     admin_chat_id = msg.chat.id
 
@@ -1181,80 +1181,75 @@ def handle_random_quiz(msg: types.Message):
         response = supabase.rpc('get_random_quiz', {}).execute()
         if not response.data:
             bot.send_message(GROUP_ID, "😕 No unused quizzes found in the database. You might need to add more or reset them.")
-            bot.send_message(admin_chat_id, "⚠️ Could not post random quiz: No unused questions were found in the database.")
+            bot.send_message(admin_chat_id, "⚠️ Could not post random quiz: No unused questions were found.")
             return
 
         quiz_data = response.data[0]
         question_id = quiz_data.get('id')
         
-        # --- Step 1: Defensively extract and validate all data from Supabase ---
+        # Defensively extract and validate all data
         question_text = quiz_data.get('question_text')
         options_data = quiz_data.get('options')
         correct_index = quiz_data.get('correct_index')
         explanation_text = quiz_data.get('explanation')
         category = quiz_data.get('category', 'General Knowledge')
 
-        # Validate essential data to prevent crashes
         if not question_text or not isinstance(options_data, list) or len(options_data) != 4 or correct_index is None:
             error_detail = f"Question ID {question_id} has malformed or missing data (question, options, or correct answer)."
             report_error_to_admin(error_detail)
             bot.send_message(admin_chat_id, f"❌ Failed to post quiz: {error_detail} I am skipping this question.")
-            # Mark this bad question as 'used' so we don't encounter it again.
             supabase.table('questions').update({'used': True}).eq('id', question_id).execute()
             return
 
-        # --- Step 2: Format the options with emoji prefixes ---
+        # Format options with emoji prefixes
         option_emojis = ['1️⃣', '2️⃣', '3️⃣', '4️⃣']
         formatted_options = []
         for i, option_text in enumerate(options_data):
-            # Escape HTML special characters in the option to prevent formatting issues
             safe_option_text = escape(str(option_text))
             formatted_options.append(f"{option_emojis[i]} {safe_option_text}")
         
-        # --- Step 3: Create the new, beautifully formatted question header ---
+        # Create the HTML formatted question
         safe_category = escape(category)
         safe_question_text = escape(question_text)
         formatted_question = (
-            f"Sharpen Your Mind! 💡\n\n"
-            f"A random challenge from: {safe_category}\n\n"
+            f"<b>Sharpen Your Mind!</b> 💡\n\n"
+            f"<i>A random challenge from: <b>{safe_category}</b></i>\n\n"
             f"{safe_question_text}"
         )
 
-        # The timer is fixed at 10 minutes (600 seconds)
         open_period_seconds = 600
-        
-        # Escape the explanation text for safe HTML rendering
         safe_explanation = escape(explanation_text) if explanation_text else None
 
-        # --- Step 4: Send the fully formatted poll to the group ---
+        # --- THIS IS THE FULLY CORRECTED CALL ---
         sent_poll = bot.send_poll(
             chat_id=GROUP_ID,
             question=formatted_question,
             options=formatted_options,
             type='quiz',
             correct_option_id=correct_index,
-            is_anonymous=False, # Required for the leaderboard
+            is_anonymous=False,
             open_period=open_period_seconds,
             explanation=safe_explanation,
-            explanation_parse_mode="HTML" # Use HTML for the explanation
+            question_parse_mode="HTML",  # FIX APPLIED HERE
+            explanation_parse_mode="HTML"
         )
         
-        # --- Step 5: Send the polished reply message ---
+        # Send the polished reply message, also with HTML parsing
         timer_message = "☝️ You have <b>10 minutes</b> to solve this. Give it your best shot! Good luck! 🤞"
         bot.send_message(GROUP_ID, timer_message, reply_to_message_id=sent_poll.message_id, parse_mode="HTML")
         
-        # --- Step 6: Store poll info for score tracking ---
+        # Store poll info for score tracking
         active_polls.append({
             'poll_id': sent_poll.poll.id,
             'correct_option_id': correct_index,
             'type': 'random_quiz'
         })
 
-        # --- Step 7: Send a clear confirmation to the admin ---
+        # Send a clear confirmation to the admin
         bot.send_message(admin_chat_id, f"✅ Successfully posted a 10-minute random quiz (ID: {question_id}) to the group.")
 
     except Exception as e:
-        # --- Step 8: Comprehensive error reporting for the admin ---
+        # Comprehensive error reporting for the admin
         tb_string = traceback.format_exc()
         print(f"CRITICAL Error in /randomquiz: {tb_string}")
         report_error_to_admin(f"Failed to post random quiz:\n{tb_string}")
