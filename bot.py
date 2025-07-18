@@ -1173,41 +1173,56 @@ def handle_notify_command(msg: types.Message):
 @admin_required
 def handle_random_quiz(msg: types.Message):
     """
-    Fetches a random quiz and stores its correct answer information
-    before posting it as a timed poll.
+    Fetches a random quiz and defensively handles data from the 'questions' table
+    to prevent crashes from empty or malformed fields.
     """
     try:
         response = supabase.rpc('get_random_quiz', {}).execute()
         if not response.data:
-            bot.send_message(GROUP_ID, "😕 No quizzes found in the database.")
+            bot.send_message(GROUP_ID, "😕 No unused quizzes found in the database. You might need to add more or reset them.")
             return
 
         quiz_data = response.data[0]
-        options = [
-            quiz_data.get('option_a', ''), quiz_data.get('option_b', ''),
-            quiz_data.get('option_c', ''), quiz_data.get('option_d', '')
-        ]
-        correct_option_index = ['A', 'B', 'C', 'D'].index(quiz_data.get('correct_answer', 'A').upper())
+
+        # --- Defensive data handling ---
+        question_text = quiz_data.get('question_text')
+        options_data = quiz_data.get('options') # This will be a Python list
+        correct_index = quiz_data.get('correct_index')
         explanation_text = quiz_data.get('explanation')
+
+        # 1. Validate that the question text exists.
+        if not question_text:
+            report_error_to_admin(f"Random quiz failed: Question ID {quiz_data.get('id')} has empty question_text.")
+            bot.send_message(msg.chat.id, "❌ Oops! I found a quiz with a blank question. Skipping it. Admin has been notified.")
+            return
+
+        # 2. Validate the options list.
+        if not isinstance(options_data, list) or len(options_data) != 4:
+            report_error_to_admin(f"Random quiz failed: Question ID {quiz_data.get('id')} has invalid options.")
+            bot.send_message(msg.chat.id, "❌ Oops! I found a quiz with invalid answers. Skipping it. Admin has been notified.")
+            return
+        
+        # Ensure all options are strings, as required by the bot API
+        options = [str(opt) for opt in options_data]
+
+        # --- End of defensive handling ---
 
         sent_poll = bot.send_poll(
             chat_id=GROUP_ID,
-            question=f"🧠 Random Quiz:\n\n{quiz_data.get('question', 'No question text.')}",
+            question=f"🧠 Random Quiz:\n\n{question_text}",
             options=options,
             type='quiz',
-            correct_option_id=correct_option_index,
-            is_anonymous=False, # Must be False to track scores
+            correct_option_id=correct_index,
+            is_anonymous=False, # Must be False for the leaderboard to work
             open_period=60,
             explanation=explanation_text,
             explanation_parse_mode="Markdown"
         )
         
-        # --- THIS IS THE NEW, CRITICAL PART ---
-        # The bot now remembers the correct answer for this specific poll.
         active_polls.append({
             'poll_id': sent_poll.poll.id,
-            'correct_option_id': correct_option_index,
-            'type': 'random_quiz' # Identify the quiz type
+            'correct_option_id': correct_index,
+            'type': 'random_quiz'
         })
 
     except Exception as e:
