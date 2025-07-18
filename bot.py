@@ -1172,8 +1172,8 @@ def handle_notify_command(msg: types.Message):
 @admin_required
 def handle_random_quiz(msg: types.Message):
     """
-    Posts a polished 10-minute random quiz using HTML formatting. This is the
-    definitive, robust version with all fixes applied.
+    Posts a polished 10-minute random quiz. This is the definitive, robust,
+    and library-compatible version.
     """
     admin_chat_id = msg.chat.id
 
@@ -1181,71 +1181,65 @@ def handle_random_quiz(msg: types.Message):
         response = supabase.rpc('get_random_quiz', {}).execute()
         if not response.data:
             bot.send_message(GROUP_ID, "😕 No unused quizzes found in the database. You might need to add more or reset them.")
-            bot.send_message(admin_chat_id, "⚠️ Could not post random quiz: No unused questions were found.")
+            bot.send_message(admin_chat_id, "⚠️ Could not post random quiz: No unused questions were found in the database.")
             return
 
         quiz_data = response.data[0]
         question_id = quiz_data.get('id')
         
-        # Defensively extract and validate all data
+        # Defensive data extraction
         question_text = quiz_data.get('question_text')
         options_data = quiz_data.get('options')
         correct_index = quiz_data.get('correct_index')
         explanation_text = quiz_data.get('explanation')
         category = quiz_data.get('category', 'General Knowledge')
 
+        # Robust validation of the data
         if not question_text or not isinstance(options_data, list) or len(options_data) != 4 or correct_index is None:
-            error_detail = f"Question ID {question_id} has malformed or missing data (question, options, or correct answer)."
+            error_detail = f"Question ID {question_id} has malformed or missing data."
             report_error_to_admin(error_detail)
             bot.send_message(admin_chat_id, f"❌ Failed to post quiz: {error_detail} I am skipping this question.")
             supabase.table('questions').update({'used': True}).eq('id', question_id).execute()
             return
 
-        # Format options with emoji prefixes
+        # --- FIX: Revert to a clean, plain-text format for options and question ---
+        # The emoji prefixes are safe and will still work.
         option_emojis = ['1️⃣', '2️⃣', '3️⃣', '4️⃣']
-        formatted_options = []
-        for i, option_text in enumerate(options_data):
-            safe_option_text = escape(str(option_text))
-            formatted_options.append(f"{option_emojis[i]} {safe_option_text}")
+        formatted_options = [f"{option_emojis[i]} {str(opt)}" for i, opt in enumerate(options_data)]
         
-        # Create the HTML formatted question
-        safe_category = escape(category)
-        safe_question_text = escape(question_text)
+        # This new format uses Markdown that looks good as plain text.
         formatted_question = (
-            f"<b>Sharpen Your Mind!</b> 💡\n\n"
-            f"<i>A random challenge from: <b>{safe_category}</b></i>\n\n"
-            f"{safe_question_text}"
+            f"🧠 Random Quiz: {category}\n\n"
+            f"{question_text}"
         )
 
-        open_period_seconds = 600
-        safe_explanation = escape(explanation_text) if explanation_text else None
+        open_period_seconds = 600 # 10 minutes
 
-        # --- THIS IS THE FULLY CORRECTED CALL ---
+        # --- THE CRITICAL FIX ---
+        # We REMOVE the unsupported 'question_parse_mode' argument.
         sent_poll = bot.send_poll(
             chat_id=GROUP_ID,
-            question=formatted_question,
-            options=formatted_options,
+            question=formatted_question, # Now plain text with Markdown
+            options=formatted_options,   # Plain text with emojis
             type='quiz',
             correct_option_id=correct_index,
             is_anonymous=False,
             open_period=open_period_seconds,
-            explanation=safe_explanation,
-            question_parse_mode="HTML",  # FIX APPLIED HERE
-            explanation_parse_mode="HTML"
+            explanation=explanation_text,
+            explanation_parse_mode="Markdown" # This is supported and remains
         )
         
-        # Send the polished reply message, also with HTML parsing
-        timer_message = "☝️ You have <b>10 minutes</b> to solve this. Give it your best shot! Good luck! 🤞"
-        bot.send_message(GROUP_ID, timer_message, reply_to_message_id=sent_poll.message_id, parse_mode="HTML")
+        # The reply message now also uses Markdown for consistency.
+        timer_message = "☝️ You have *10 minutes* to answer this quiz. Give it your best shot! Good luck! 🤞"
+        bot.send_message(GROUP_ID, timer_message, reply_to_message_id=sent_poll.message_id, parse_mode="Markdown")
         
-        # Store poll info for score tracking
         active_polls.append({
             'poll_id': sent_poll.poll.id,
             'correct_option_id': correct_index,
             'type': 'random_quiz'
         })
 
-        # Send a clear confirmation to the admin
+        # Admin Confirmation
         bot.send_message(admin_chat_id, f"✅ Successfully posted a 10-minute random quiz (ID: {question_id}) to the group.")
 
     except Exception as e:
