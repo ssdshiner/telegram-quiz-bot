@@ -659,7 +659,7 @@ Hello Admin! Here are your available tools.
 `/bestanswer` - Mark a reply as the best answer.
 
 *🛠️ Utilities & Leaderboards*
-`/leaderboard` - Show all-time quiz scores.
+`/leaderboard` - Show all-time random quiz scores.
 `/section` - Get details for a law section.
 `/bdhai` - Congrats winners (for QuizBot).
 """
@@ -1002,39 +1002,38 @@ def handle_dm_conversation_steps(msg: types.Message):
                 print(f"Error during DM broadcast: {e}")
             
             del user_states[admin_id] # End conversation
-# This handler will catch any message sent to the bot in a private chat that is NOT a command.
+# This handler will catch any message sent to the bot in a private chat.
 @bot.message_handler(
-    func=lambda msg: msg.chat.id == msg.from_user.id and not msg.text.startswith('/'),
+    func=lambda msg: msg.chat.id == msg.from_user.id,
     content_types=['text', 'photo', 'video', 'document', 'audio', 'sticker']
 )
 def forward_user_reply_to_admin(msg: types.Message):
     """
     Forwards a user's direct message to the admin, formatted for an easy reply.
+    Now safely ignores non-text commands and events.
     """
+    # --- THIS IS THE FIX ---
+    # First, check if there is any text at all.
+    if msg.text and msg.text.startswith('/'):
+        # If it's a command, do nothing. Let other handlers deal with it.
+        return
+
     user_info = msg.from_user
     
-    # We create a special "header" to send to the admin.
-    # This header contains all the information the admin needs to reply.
-    # The user's ID is included in a hidden, clickable format.
     admin_header = (
         f"📩 *New reply from* [{escape_markdown(user_info.first_name)}](tg://user?id={user_info.id})\n"
-        f"👤 *Username:* @{user_info.username}\n"
+        f"👤 *Username:* @{user_info.username if user_info.username else 'N/A'}\n"
         f"🆔 *User ID:* `{user_info.id}`\n\n"
-        f"👇 *To reply to this user, use the /dm command or simply forward their message below to me and type your reply.*"
+        f"👇 *To reply, use `/dm` or simply reply to their forwarded message below.*"
     )
 
     try:
-        # Step 1: Send the informative header to the admin.
         bot.send_message(ADMIN_USER_ID, admin_header, parse_mode="Markdown")
-        
-        # Step 2: Forward the user's original message to the admin.
-        # This preserves the message perfectly (stickers, photos, etc.).
         bot.forward_message(chat_id=ADMIN_USER_ID, from_chat_id=msg.chat.id, message_id=msg.message_id)
 
     except Exception as e:
         print(f"Error forwarding user DM to admin: {e}")
-        # Optionally, inform the user that their message couldn't be delivered.
-        bot.send_message(msg.chat.id, "I'm sorry, but I was unable to deliver your message to the admin at this time. Please try again later.")
+        bot.send_message(msg.chat.id, "I'm sorry, I was unable to deliver your message to the admin at this time.")
 @bot.message_handler(commands=['prunedms'])
 @admin_required
 def handle_prune_dms(msg: types.Message):
