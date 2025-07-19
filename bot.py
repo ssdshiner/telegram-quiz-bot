@@ -1207,8 +1207,8 @@ def handle_random_quiz(msg: types.Message):
         
         # This new format is short, clean, and uses compatible Markdown.
         formatted_question = (
-            f"*{random.choice(titles)}*\n"
-            f"_{escape_markdown(category)}_\n\n"
+            f"{random.choice(titles)}\n"
+            f"{escape_markdown(category)}\n\n"
             f"{escape_markdown(question_text)}"
         )
         
@@ -1231,7 +1231,7 @@ def handle_random_quiz(msg: types.Message):
         )
         
         # The reply message now also uses Markdown for consistency.
-        timer_message = "☝️ You have *10 minutes* to answer this quiz. Give it your best shot! Good luck! 🤞"
+        timer_message = "☝️ You have *10 minutes* to answer this quiz. Good luck bro! 🤞"
         bot.send_message(GROUP_ID, timer_message, reply_to_message_id=sent_poll.message_id, parse_mode="Markdown")
         
         active_polls.append({
