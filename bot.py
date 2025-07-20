@@ -1168,7 +1168,7 @@ def handle_notify_command(msg: types.Message):
 def handle_random_quiz(msg: types.Message):
     """
     Posts a polished 10-minute random quiz using library-compatible Markdown.
-    This is the definitive, error-free version.
+    This is the definitive, error-free version with proper emojis.
     """
     admin_chat_id = msg.chat.id
 
@@ -1197,23 +1197,41 @@ def handle_random_quiz(msg: types.Message):
             supabase.table('questions').update({'used': True}).eq('id', question_id).execute()
             return
 
-        # --- NEW: Markdown-based formatting ---
+        # Custom escape function that preserves blanks (underscores)
+        def safe_escape_markdown(text):
+            """
+            Escape markdown characters but preserve fill-in-the-blanks (underscores)
+            """
+            if not text:
+                return ""
+            
+            text = str(text)
+            # Only escape problematic characters, NOT underscores for blanks
+            # Escape: * [ ] ( ) ~ ` > # + - = | { } . !
+            escape_chars = ['*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+            
+            for char in escape_chars:
+                text = text.replace(char, f'\\{char}')
+            
+            return text
+
+        # --- NEW: Markdown-based formatting with emojis ---
         option_emojis = ['1️⃣', '2️⃣', '3️⃣', '4️⃣']
-        # Escape any markdown characters in the user-provided options to prevent formatting breaks
-        formatted_options = [f"{option_emojis[i]} {escape_markdown(str(opt))}" for i, opt in enumerate(options_data)]
+        # Use safe escape function for options
+        formatted_options = [f"{option_emojis[i]} {safe_escape_markdown(str(opt))}" for i, opt in enumerate(options_data)]
         
         # New, short, two-word liner titles
         titles = ["🧠 Knowledge Check!", "💡 Brain Teaser!", "🎯 Test Yourself!", "🔥 Quick Challenge!"]
         
-        # This new format is short, clean, and uses compatible Markdown.
+        # This new format adds emojis to category and question as requested
         formatted_question = (
             f"{random.choice(titles)}\n"
-            f"{escape_markdown(category)}\n\n"
-            f"{escape_markdown(question_text)}"
+            f"✏️{safe_escape_markdown(category)}\n"
+            f"❓{safe_escape_markdown(question_text)}"
         )
         
-        # Explanation will also use Markdown. No spoiler tag.
-        safe_explanation = escape_markdown(explanation_text) if explanation_text else None
+        # Explanation will also use safe escaping
+        safe_explanation = safe_escape_markdown(explanation_text) if explanation_text else None
         open_period_seconds = 600 # 10 minutes
 
         # --- THE DEFINITIVE FIX ---
