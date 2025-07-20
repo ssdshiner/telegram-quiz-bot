@@ -1197,40 +1197,41 @@ def handle_random_quiz(msg: types.Message):
             supabase.table('questions').update({'used': True}).eq('id', question_id).execute()
             return
 
-        # Custom escape function that preserves blanks (underscores)
+        # --- CORRECTED ESCAPE FUNCTION ---
         def safe_escape_markdown(text):
             """
-            Escape markdown characters but preserve fill-in-the-blanks (underscores)
+            Escapes characters for Telegram's original 'Markdown' parse mode.
+            This version ONLY escapes characters that would break the formatting.
+            It will correctly handle parentheses, underscores, and other characters.
             """
             if not text:
                 return ""
             
             text = str(text)
-            # Only escape problematic characters, NOT underscores for blanks
-            # Escape: * [ ] ( ) ~ ` > # + - = | { } . !
-            escape_chars = ['*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+            # The characters to escape for 'Markdown' are _, *, `, [
+            escape_chars = r'_*`['
             
-            for char in escape_chars:
-                text = text.replace(char, f'\\{char}')
-            
-            return text
+            # This creates a new string, adding a '\' before any character that needs escaping.
+            return ''.join(['\\' + char if char in escape_chars else char for char in text])
 
         # --- NEW: Markdown-based formatting with emojis ---
         option_emojis = ['1️⃣', '2️⃣', '3️⃣', '4️⃣']
-        # Use safe escape function for options
-        formatted_options = [f"{option_emojis[i]} {safe_escape_markdown(str(opt))}" for i, opt in enumerate(options_data)]
+        # Use the corrected safe escape function for options
+        # Note: We are no longer escaping options to allow for bold/italics if you want them.
+        formatted_options = [f"{option_emojis[i]} {str(opt)}" for i, opt in enumerate(options_data)]
         
         # New, short, two-word liner titles
         titles = ["🧠 Knowledge Check!", "💡 Brain Teaser!", "🎯 Test Yourself!", "🔥 Quick Challenge!"]
         
         # This new format adds emojis to category and question as requested
+        # No need to escape the question text itself, as polls support limited formatting
         formatted_question = (
             f"{random.choice(titles)}\n"
-            f"✏️{safe_escape_markdown(category)}\n"
-            f"❓{safe_escape_markdown(question_text)}"
+            f"✏️ {category}\n"
+            f"❓ {question_text}"
         )
         
-        # Explanation will also use safe escaping
+        # Explanation will use the corrected safe escaping
         safe_explanation = safe_escape_markdown(explanation_text) if explanation_text else None
         open_period_seconds = 600 # 10 minutes
 
