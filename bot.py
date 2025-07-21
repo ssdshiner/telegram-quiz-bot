@@ -2523,7 +2523,7 @@ required_vars = [
 'SUPABASE_KEY'
 ]
 
-THE IMPROVEMENT: Check for missing variables and report exactly which ones are missing.
+Check for missing variables and report exactly which ones are missing.
 missing_vars = [var for var in required_vars if not os.getenv(var)]
 if missing_vars:
 print("❌ FATAL: The following critical environment variables are missing:")
@@ -2553,10 +2553,5 @@ time.sleep(1) # A small delay to ensure the old webhook is removed before settin
 webhook_url = f"{SERVER_URL.rstrip('/')}/{BOT_TOKEN}"
 bot.set_webhook(url=webhook_url)
 print(f"✅ Webhook is set to: {webhook_url}")
-
 This block is for running the bot locally on your own computer.
 Gunicorn on Render will directly use the 'app' object, so this part is not needed on the server.
-if name == "main":
-port = int(os.environ.get("PORT", 8080))
-print(f"Starting Flask server for local testing on host 0.0.0.0 and port {port}...")
-app.run(host="0.0.0.0", port=port)
