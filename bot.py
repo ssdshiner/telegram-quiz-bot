@@ -29,7 +29,7 @@ SERVER_URL = os.getenv('SERVER_URL')
 GROUP_ID_STR = os.getenv('GROUP_ID')
 WEBAPP_URL = os.getenv('WEBAPP_URL')
 ADMIN_USER_ID_STR = os.getenv('ADMIN_USER_ID')
-BOT_USERNAME = "Rising_quiz_bot"
+BOT_USERNAME = "CAVYA_bot"
 PUBLIC_GROUP_COMMANDS = [
     'todayquiz', 'askdoubt', 'answer', 'section', 'feedback'
 ]
@@ -331,8 +331,8 @@ def is_bot_mentioned(message):
         return False
     
     # We check for the @username in lowercase to avoid case sensitivity issues.
-    # This correctly finds "@rising_quiz_bot" in commands like "/adminhelp@rising_quiz_bot"
-    # or in messages like "@rising_quiz_bot please help".
+    # This correctly finds "@CAVYA_bot" in commands like "/adminhelp@CAVYA_bot"
+    # or in messages like "@CAVYA_bot please help".
     return f'@{BOT_USERNAME.lower()}' in message.text.lower()
 
 
@@ -356,7 +356,7 @@ def send_join_group_prompt(chat_id):
         invite_link = bot.export_chat_invite_link(GROUP_ID)
     except Exception:
         # If it fails (e.g., bot permissions changed), use a reliable backup link
-        invite_link = "https://t.me/ca_interdiscussion"
+        invite_link = "https://t.me/cainterquizhub"
 
     markup = types.InlineKeyboardMarkup()
     markup.add(
@@ -423,7 +423,7 @@ def membership_required(func):
                     return func(msg, *args, **kwargs)
 
                 # RULE B: Is this a command specifically for our bot?
-                # This handles admin commands like /adminhelp@Rising_quiz_bot.
+                # This handles admin commands like /adminhelp@CAVYAbot.
                 elif is_bot_mentioned(msg):
                     return func(msg, *args, **kwargs)
                 
@@ -958,7 +958,7 @@ def handle_dm_conversation_steps(msg: types.Message):
         def send_message_to_user(target_id, name):
             try:
                 # Add a personalized header
-                header = f"👋 Hello {name},\n\nYou have a new message from the Rising Empire Quiz group:\n\n---\n"
+                header = f"👋 Hello {name},\n\nYou have a new message from the CA INTER Quiz Hub group:\n\n---\n"
                 bot.send_message(target_id, header)
                 
                 # Forward the admin's message (text, photo, etc.)
