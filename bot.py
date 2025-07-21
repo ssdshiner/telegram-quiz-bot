@@ -2549,25 +2549,24 @@ def handle_new_member(msg: types.Message):
 
 @bot.message_handler(func=lambda msg: is_group_message(msg))
 def track_users(msg: types.Message):
-    """
-    A background handler that captures HUMAN user info from any message sent
-    in the group and upserts it into the 'group_members' table.
-    """
-    try:
-        user = msg.from_user
-        # --- NEW: Check if the user is a bot. If so, do nothing. ---
-        if user.is_bot:
-            return
-
-        # If it's a human user, proceed with adding/updating them.
-        supabase.rpc('upsert_group_member', {
-            'p_user_id': user.id,
-            'p_username': user.username,
-            'p_first_name': user.first_name,
-            'p_last_name': user.last_name
-        }).execute()
-    except Exception as e:
-        print(f"[User Tracking Error]: Could not update user {msg.from_user.id}. Reason: {e}")
+"""
+A background handler that captures HUMAN user info from any message sent
+in the group and upserts it into the 'group_members' table.
+"""
+try:
+user = msg.from_user
+# --- NEW: Check if the user is a bot. If so, do nothing. ---
+if user.is_bot:
+return
+    # If it's a human user, proceed with adding/updating them.
+    supabase.rpc('upsert_group_member', {
+        'p_user_id': user.id,
+        'p_username': user.username,
+        'p_first_name': user.first_name,
+        'p_last_name': user.last_name
+    }).execute()
+except Exception as e:
+    print(f"[User Tracking Error]: Could not update user {msg.from_user.id}. Reason: {e}")</code></pre>
 
 # --- Fallback Handler (Must be the VERY LAST message handler) ---
 
