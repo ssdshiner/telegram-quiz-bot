@@ -808,6 +808,7 @@ def handle_today_quiz(msg: types.Message):
      f"Audit ki kasam, Law ki dua,\n{user_name}, dekho aaj schedule mein kya-kya hua! ✨",
      f"Confidence building, knowledge to test,\n{user_name}, today's quiz schedule brings out your best! 💪",
      f"Dreams in motion, goals within reach,\n{user_name}, today's quiz schedule has these lessons to teach! 📚",
+     f"Ready for a challenge, {user_name}?\nHere is the quiz schedule to help you ace your day! 🎯",
         ]
         message_text = f"<b>{time_of_day_greeting}</b>\n\n{random.choice(all_greetings)}\n"
         message_text += "———————————————\n\n"
