@@ -760,6 +760,38 @@ def load_data():
     except Exception as e:
         print(f"❌ FATAL: Error loading data from Supabase. Bot state may be lost. Error: {e}")
         traceback.print_exc()
+def save_data():
+    """
+    Saves the current bot state to Supabase. This version is simplified and robust.
+    """
+    if not supabase:
+        # If Supabase isn't working, we can't save.
+        return
+
+    try:
+        # Convert complex data to a simple text format (JSON) for saving.
+        # This handles active_polls with datetime objects correctly.
+        polls_to_save = []
+        for poll in active_polls:
+            poll_copy = poll.copy()
+            if 'close_time' in poll_copy and isinstance(poll_copy['close_time'], datetime.datetime):
+                poll_copy['close_time'] = poll_copy['close_time'].strftime('%Y-%m-%d %H:%M:%S')
+            polls_to_save.append(poll_copy)
+
+        # This is a list of all the things we want to save.
+        data_to_save = [
+            {'key': 'active_polls', 'value': json.dumps(polls_to_save)},
+            {'key': 'quiz_sessions', 'value': json.dumps(QUIZ_SESSIONS)},
+            {'key': 'quiz_participants', 'value': json.dumps(QUIZ_PARTICIPANTS)}
+        ]
+
+        # This command tells Supabase: "update or add these items".
+        supabase.table('bot_state').upsert(data_to_save).execute()
+        
+    except Exception as e:
+        # If saving fails, print an error and notify the admin.
+        print(f"❌ CRITICAL: Failed to save bot state to Supabase. Error: {e}")
+        report_error_to_admin(f"Failed to save bot state to Supabase:\n{traceback.format_exc()}")
 # =============================================================================
 # 9. TELEGRAM BOT HANDLERS (UPDATED /todayquiz)
 # =============================================================================
