@@ -1877,8 +1877,8 @@ def create_new_doubt(chat_id, user, question_text, priority):
             'student_id': student_id,
             'question': question_text,
             'status': 'unanswered',
-            'priority': priority
-            'all_answer_message_ids': []  # <-- YEH NAYI LINE ADD HUI HAI
+            'priority': priority,
+            'all_answer_message_ids': []
         }).execute()
 
         doubt_id = insert_response.data[0]['id']
