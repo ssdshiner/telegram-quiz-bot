@@ -2516,42 +2516,46 @@ def handle_unknown_messages(msg: types.Message):
 # =============================================================================
 # 18 MAIN EXECUTION BLOCK
 # =============================================================================
-print("🤖 Initializing bot...")
+if __name__ == "__main__":
+    print("🤖 Initializing bot...")
 
-required_vars = [
-'BOT_TOKEN', 'SERVER_URL', 'GROUP_ID', 'ADMIN_USER_ID', 'SUPABASE_URL',
-'SUPABASE_KEY'
-]
+    required_vars = [
+        'BOT_TOKEN', 'SERVER_URL', 'GROUP_ID', 'ADMIN_USER_ID', 'SUPABASE_URL',
+        'SUPABASE_KEY'
+    ]
+    
+    # THE IMPROVEMENT: Check for missing variables and report exactly which ones are missing.
+    missing_vars = [var for var in required_vars if not os.getenv(var)]
+    if missing_vars:
+        print("❌ FATAL: The following critical environment variables are missing:")
+        for var in missing_vars:
+            print(f"  - {var}")
+        print("\nPlease set these variables in your hosting environment (e.g., Render Secrets) and restart the bot.")
+        exit()
+        
+    print("✅ All required environment variables are loaded.")
 
-Check for missing variables and report exactly which ones are missing.
-missing_vars = [var for var in required_vars if not os.getenv(var)]
-if missing_vars:
-print("❌ FATAL: The following critical environment variables are missing:")
-for var in missing_vars:
-print(f"  - {var}")
-print("\nPlease set these variables in your hosting environment (e.g., Render Secrets) and restart the bot.")
-exit()
+    # Load persistent data from Supabase
+    load_data()
+    
+    # Initialize the Google Sheet connection
+    initialize_gsheet()
 
-print("✅ All required environment variables are loaded.")
+    # Start the background worker thread for scheduled tasks
+    print("Starting background scheduler...")
+    scheduler_thread = threading.Thread(target=background_worker, daemon=True)
+    scheduler_thread.start()
+    print("✅ Background scheduler is running.")
 
-Load persistent data from Supabase
-load_data()
+    # Set the webhook for Telegram to send updates
+    print(f"Setting webhook for bot...")
+    bot.remove_webhook()
+    time.sleep(1) # A small delay to ensure the old webhook is removed before setting a new one
+    webhook_url = f"{SERVER_URL.rstrip('/')}/{BOT_TOKEN}"
+    bot.set_webhook(url=webhook_url)
+    print(f"✅ Webhook is set to: {webhook_url}")
 
-Initialize the Google Sheet connection
-initialize_gsheet()
-
-Start the background worker thread for scheduled tasks
-print("Starting background scheduler...")
-scheduler_thread = threading.Thread(target=background_worker, daemon=True)
-scheduler_thread.start()
-print("✅ Background scheduler is running.")
-
-Set the webhook for Telegram to send updates
-print(f"Setting webhook for bot...")
-bot.remove_webhook()
-time.sleep(1) # A small delay to ensure the old webhook is removed before setting a new one
-webhook_url = f"{SERVER_URL.rstrip('/')}/{BOT_TOKEN}"
-bot.set_webhook(url=webhook_url)
-print(f"✅ Webhook is set to: {webhook_url}")
-This block is for running the bot locally on your own computer.
-Gunicorn on Render will directly use the 'app' object, so this part is not needed on the server.
+    # Start the web server to listen for updates from Telegram
+    port = int(os.environ.get("PORT", 8080))
+    print(f"Starting Flask server on host 0.0.0.0 and port {port}...")
+    app.run(host="0.0.0.0", port=port)
