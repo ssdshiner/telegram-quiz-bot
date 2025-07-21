@@ -31,7 +31,7 @@ WEBAPP_URL = os.getenv('WEBAPP_URL')
 ADMIN_USER_ID_STR = os.getenv('ADMIN_USER_ID')
 BOT_USERNAME = "CAVYA_bot"
 PUBLIC_GROUP_COMMANDS = [
-    'todayquiz', 'askdoubt', 'answer', 'section', 'feedback'
+    'todayquiz', 'askdoubt', 'answer', 'section', 'alldoubts' 'feedback'
 ]
 GOOGLE_SHEETS_CREDENTIALS_PATH = os.getenv('GOOGLE_SHEETS_CREDENTIALS_PATH')
 GOOGLE_SHEET_KEY = os.getenv('GOOGLE_SHEET_KEY')
@@ -2160,7 +2160,52 @@ def handle_best_answer(msg: types.Message):
     except Exception as e:
         print(f"Error in /bestanswer: {traceback.format_exc()}")
         bot.reply_to(msg, "❌ Oops! Something went wrong.")
+@bot.message_handler(commands=['alldoubts'])
+@membership_required
+def handle_all_doubts(msg: types.Message):
+"""
+Fetches and lists all unanswered doubts for any group member.
+Includes instructions on how to reply and a tip for the original poster.
+"""
+try:
+# Fetch up to 15 unanswered doubts, newest first.
+response = supabase.table('doubts').select('id, question').eq('status', 'unanswered').order('id', desc=True).limit(15).execute()
+    if not response.data:
+        bot.send_message(
+            msg.chat.id,
+            "✅ Great news! There are currently no unanswered doubts."
+        )
+        return
 
+    # Start building the message string
+    message_text = "📝 *Unanswered Doubts List* 📝\n\n"
+    
+    for doubt in response.data:
+        doubt_id = doubt.get('id')
+        # Truncate the question to keep the list clean
+        question_preview = doubt.get('question', '')[:70]
+        safe_question_preview = escape_markdown(question_preview)
+
+        message_text += f"*#Doubt{doubt_id}:* _{safe_question_preview}..._\n"
+        # NEW: Clearer, pre-formatted instruction on how to reply
+        message_text += f"_Reply with:_ `/answer {doubt_id} [Your Answer]`\n\n"
+    
+    # Add a horizontal line for separation
+    message_text += "--- \n"
+    # NEW: Add the tip at the end of the message
+    message_text += (
+        "💡 *For those who asked a doubt:*\n"
+        "Once your question is resolved, please *reply* to the most helpful message and use the `/bestanswer [Doubt_ID]` command. "
+        "This saves the best solution for everyone's future reference! 🙏"
+    )
+
+    # Send the complete list to the user who asked
+    bot.send_message(msg.chat.id, message_text, parse_mode="Markdown")
+
+except Exception as e:
+    print(f"Error in /alldoubts command: {traceback.format_exc()}")
+    report_error_to_admin(f"Failed to fetch doubt list:\n{traceback.format_exc()}")
+    bot.send_message(msg.chat.id, "😥 Oops! Something went wrong while fetching the doubt list.")
 # =============================================================================
 # 17 ADVANCED QUIZ MARATHON FEATURE (FULLY CORRECTED AND ROBUST)
 # =============================================================================
