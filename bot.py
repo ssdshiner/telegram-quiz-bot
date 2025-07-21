@@ -2170,43 +2170,43 @@ def handle_all_doubts(msg: types.Message):
     """
     try:
         # Fetch up to 15 unanswered doubts, newest first.
-        response = supabase.table('doubts').select('id, question').eq('status', 'unanswered').order('id', desc=True).limit(15).execute()
-    if not response.data:
-        bot.send_message(
-            msg.chat.id,
-            "✅ Great news! There are currently no unanswered doubts."
+        response = supabase.table('doubts').select('id', 'question').eq('status', 'unanswered').order('id', desc=True).limit(15).execute()
+        if not response.data:
+            bot.send_message(
+                msg.chat.id,
+                "✅ Great news! There are currently no unanswered doubts."
+            )
+            return
+
+        # Start building the message string
+        message_text = "📝 *Unanswered Doubts List* 📝\n\n"
+        
+        for doubt in response.data:
+            doubt_id = doubt.get('id')
+            # Truncate the question to keep the list clean
+            question_preview = doubt.get('question', '')[:70]
+            safe_question_preview = escape_markdown(question_preview)
+
+            message_text += f"*#Doubt{doubt_id}:* _{safe_question_preview}..._\n"
+            # NEW: Clearer, pre-formatted instruction on how to reply
+            message_text += f"_Reply with:_ `/answer {doubt_id} [Your Answer]`\n\n"
+        
+        # Add a horizontal line for separation
+        message_text += "---\n"
+        # NEW: Add the tip at the end of the message
+        message_text += (
+            "💡 *For those who asked a doubt:*\n"
+            "Once your question is resolved, please *reply* to the most helpful message and use the `/bestanswer [Doubt_ID]` command. "
+            "This saves the best solution for everyone's future reference! 🙏"
         )
-        return
 
-    # Start building the message string
-    message_text = "📝 *Unanswered Doubts List* 📝\n\n"
-    
-    for doubt in response.data:
-        doubt_id = doubt.get('id')
-        # Truncate the question to keep the list clean
-        question_preview = doubt.get('question', '')[:70]
-        safe_question_preview = escape_markdown(question_preview)
+        # Send the complete list to the user who asked
+        bot.send_message(msg.chat.id, message_text, parse_mode="Markdown")
 
-        message_text += f"*#Doubt{doubt_id}:* _{safe_question_preview}..._\n"
-        # NEW: Clearer, pre-formatted instruction on how to reply
-        message_text += f"_Reply with:_ `/answer {doubt_id} [Your Answer]`\n\n"
-    
-    # Add a horizontal line for separation
-    message_text += "--- \n"
-    # NEW: Add the tip at the end of the message
-    message_text += (
-        "💡 *For those who asked a doubt:*\n"
-        "Once your question is resolved, please *reply* to the most helpful message and use the `/bestanswer [Doubt_ID]` command. "
-        "This saves the best solution for everyone's future reference! 🙏"
-    )
-
-    # Send the complete list to the user who asked
-    bot.send_message(msg.chat.id, message_text, parse_mode="Markdown")
-
-except Exception as e:
-    print(f"Error in /alldoubts command: {traceback.format_exc()}")
-    report_error_to_admin(f"Failed to fetch doubt list:\n{traceback.format_exc()}")
-    bot.send_message(msg.chat.id, "😥 Oops! Something went wrong while fetching the doubt list.")
+    except Exception as e:
+        print(f"Error in /alldoubts command: {traceback.format_exc()}")
+        report_error_to_admin(f"Failed to fetch doubt list:\n{traceback.format_exc()}")
+        bot.send_message(msg.chat.id, "😥 Oops! Something went wrong while fetching the doubt list.")
 # =============================================================================
 # 17 ADVANCED QUIZ MARATHON FEATURE (FULLY CORRECTED AND ROBUST)
 # =============================================================================
@@ -2549,24 +2549,24 @@ def handle_new_member(msg: types.Message):
 
 @bot.message_handler(func=lambda msg: is_group_message(msg))
 def track_users(msg: types.Message):
-"""
-A background handler that captures HUMAN user info from any message sent
-in the group and upserts it into the 'group_members' table.
-"""
-try:
-user = msg.from_user
-# --- NEW: Check if the user is a bot. If so, do nothing. ---
-if user.is_bot:
-return
-    # If it's a human user, proceed with adding/updating them.
-    supabase.rpc('upsert_group_member', {
-        'p_user_id': user.id,
-        'p_username': user.username,
-        'p_first_name': user.first_name,
-        'p_last_name': user.last_name
-    }).execute()
-except Exception as e:
-    print(f"[User Tracking Error]: Could not update user {msg.from_user.id}. Reason: {e}")</code></pre>
+    """
+    A background handler that captures HUMAN user info from any message sent
+    in the group and upserts it into the 'group_members' table.
+    """
+    try:
+        user = msg.from_user
+        # --- NEW: Check if the user is a bot. If so, do nothing. ---
+        if user.is_bot:
+            return
+        # If it's a human user, proceed with adding/updating them.
+        supabase.rpc('upsert_group_member', {
+            'p_user_id': user.id,
+            'p_username': user.username,
+            'p_first_name': user.first_name,
+            'p_last_name': user.last_name
+        }).execute()
+    except Exception as e:
+        print(f"[User Tracking Error]: Could not update user {msg.from_user.id}. Reason: {e}")
 
 # --- Fallback Handler (Must be the VERY LAST message handler) ---
 
