@@ -2556,6 +2556,6 @@ if __name__ == "__main__":
     print(f"✅ Webhook is set to: {webhook_url}")
 
     # Start the web server to listen for updates from Telegram
-    port = int(os.environ.get("PORT", 8080))
+    port = int(os.environ.get("PORT", 10000))
     print(f"Starting Flask server on host 0.0.0.0 and port {port}...")
     app.run(host="0.0.0.0", port=port)
