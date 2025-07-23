@@ -31,7 +31,7 @@ WEBAPP_URL = os.getenv('WEBAPP_URL')
 ADMIN_USER_ID_STR = os.getenv('ADMIN_USER_ID')
 BOT_USERNAME = "CAVYA_bot"
 PUBLIC_GROUP_COMMANDS = [
-    'todayquiz', 'section', 'feedback'
+    'todayquiz', 'section', 'feedback', 'mystats', 'info'
 ]
 GOOGLE_SHEETS_CREDENTIALS_PATH = os.getenv('GOOGLE_SHEETS_CREDENTIALS_PATH')
 GOOGLE_SHEET_KEY = os.getenv('GOOGLE_SHEET_KEY')
@@ -812,6 +812,39 @@ def save_data():
         # If saving fails, print an error and notify the admin.
         print(f"❌ CRITICAL: Failed to save bot state to Supabase. Error: {e}")
         report_error_to_admin(f"Failed to save bot state to Supabase:\n{traceback.format_exc()}")
+# === ADD THIS ENTIRE NEW FUNCTION ===
+@bot.message_handler(commands=['info'])
+@membership_required
+def handle_info_command(msg: types.Message):
+    """
+    Provides a list of all available commands for members with corrected Markdown formatting.
+    """
+    info_text = """
+*🤖 Bot Commands for Members 🤖*
+
+Here are the commands you can use to interact with the bot.
+
+*📅 `/todayquiz`*
+   ► Shows the quiz schedule for today.
+
+*📊 `/mystats`*
+   ► Get your personal performance stats (Ranks, Streaks, etc.) sent to you in a private message.
+
+*📖 `/section` _<number>_*
+   ► Get details for a specific Companies Act section.
+   ► _Example:_ `/section 141`
+
+*✍️ `/feedback` _<your message>_*
+   ► Send your valuable feedback or report an issue directly to the admin.
+   ► _Example:_ `/feedback The new features are great!`
+
+*📝 `/submit`*
+   ► *(During Written Practice)* Reply to your answer sheet photo with this command to submit it for review.
+
+*✅ `/review_done`*
+   ► *(For Checkers)* Reply to the answer sheet photo with this command after you have finished checking it.
+"""
+    bot.send_message(msg.chat.id, info_text, parse_mode="Markdown")
 # =============================================================================
 # 9. TELEGRAM BOT HANDLERS (UPDATED /todayquiz)
 # =============================================================================
