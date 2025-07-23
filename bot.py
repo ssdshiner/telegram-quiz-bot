@@ -2015,92 +2015,93 @@ def handle_stop_marathon_command(msg: types.Message):
 
 def send_marathon_results(session_id):
     """
-    Marks used questions, generates results, sends them, and cleans up the session.
-    This version correctly handles marathons that are stopped mid-way.
+    Generates and sends marathon results with advanced insights like
+    Personal Best, Streak Completion, and Participation Percentage.
+    Records ALL participants but displays only the top 10.
     """
     session = QUIZ_SESSIONS.get(session_id)
     participants = QUIZ_PARTICIPANTS.get(session_id)
-
-    if not session:
-        return
+    if not session: return
 
     total_questions_asked = session.get('current_question_index', 0)
 
+    # Mark used questions in the database
     if session.get('questions') and total_questions_asked > 0:
         try:
             used_question_ids = [q['id'] for q in session['questions'][:total_questions_asked]]
             if used_question_ids:
                 supabase.table('quiz_questions').update({'used': True}).in_('id', used_question_ids).execute()
-                print(f"✅ Marked {len(used_question_ids)} marathon questions as used.")
         except Exception as e:
-            print(f"❌ CRITICAL ERROR: Could not mark marathon questions as used. Error: {e}")
             report_error_to_admin(f"Failed to mark marathon questions as used.\n\nError: {traceback.format_exc()}")
 
     if not participants:
         bot.send_message(GROUP_ID, f"🏁 The quiz *'{escape_markdown(session.get('title', ''))}'* has finished, but no one participated!")
     else:
+        # Sort participants by score and time
         sorted_items = sorted(participants.items(), key=lambda item: (item[1]['score'], -item[1]['total_time']), reverse=True)
         
-        results_text = f"🏁 The quiz *'{escape_markdown(session['title'])}'* has finished!\n\n*{len(participants)}* participants answered at least one question.\n\n"
+        # --- NEW LOGIC: Fetch pre-quiz stats for all participants ---
+        participant_ids = list(participants.keys())
+        pre_quiz_stats_response = supabase.rpc('get_pre_marathon_stats', {'p_user_ids': participant_ids}).execute()
+        pre_quiz_stats_dict = {item['user_id']: item for item in pre_quiz_stats_response.data}
+
+        total_active_members_response = supabase.rpc('get_total_active_members', {'days_interval': 7}).execute()
+        total_active_members = total_active_members_response.data
+        # -----------------------------------------------------------
+
+        # --- Step 1: Record data and check for achievements for ALL participants ---
+        APPRECIATION_STREAK = 8
+        for user_id, p in sorted_items:
+            # Record participation for everyone
+            record_quiz_participation(user_id, p['name'], p['score'], p['total_time'])
+            
+            # Check for Personal Best and Streak Completion
+            user_pre_stats = pre_quiz_stats_dict.get(user_id, {})
+            highest_before = user_pre_stats.get('highest_marathon_score') or 0
+            streak_before = user_pre_stats.get('current_streak') or 0
+            
+            if p['score'] > highest_before:
+                p['pb_achieved'] = True
+            
+            if (streak_before + 1) == APPRECIATION_STREAK:
+                p['streak_completed'] = True
+        # -------------------------------------------------------------------------
+
+        # --- Step 2: Prepare the display text for only the TOP 10 ---
+        results_text = f"🏁 The quiz *'{escape_markdown(session['title'])}'* has finished!\n\n"
+        
+        # Add participation stat first
+        if total_active_members > 0:
+            participation_percentage = (len(participants) / total_active_members) * 100
+            results_text += f"*{len(participants)}* members ({participation_percentage:.0f}% of active members) participated.\n\n"
+        
         rank_emojis = ["🥇", "🥈", "🥉"]
         
         for i, (user_id, p) in enumerate(sorted_items[:10]):
-            record_quiz_participation(user_id, p['name'], p['score'], p['total_time'])
             rank = rank_emojis[i] if i < 3 else f"  *{i + 1}.*"
             name = escape_markdown(p['name'])
             percentage = (p['score'] / total_questions_asked * 100) if total_questions_asked > 0 else 0
             formatted_time = format_duration(p['total_time'])
-            results_text += f"{rank} *{name}* – {p['score']} correct ({percentage:.0f}%) in {formatted_time}\n"
-        
+            
+            # Add name, score, and time
+            results_text += f"{rank} *{name}* – {p['score']} correct ({percentage:.0f}%) in {formatted_time}"
+            
+            # Add icons for achievements
+            if p.get('pb_achieved'):
+                results_text += " 🏆 PB!"
+            if p.get('streak_completed'):
+                results_text += " 🔥 Streak!"
+            
+            results_text += "\n" # New line for the next entry
+            
         results_text += "\n🏆 Congratulations to the winners!"
         bot.send_message(GROUP_ID, results_text, parse_mode="Markdown")
         time.sleep(2)
         generate_quiz_insights(session_id)
-    
+        
+    # Cleanup session data
     if session_id in QUIZ_SESSIONS: del QUIZ_SESSIONS[session_id]
     if session_id in QUIZ_PARTICIPANTS: del QUIZ_PARTICIPANTS[session_id]
-def generate_quiz_insights(session_id):
-    """Calculates and displays interesting insights about the marathon."""
-    session = QUIZ_SESSIONS.get(session_id)
-    participants = QUIZ_PARTICIPANTS.get(session_id)
-    if not session or not participants: return
-        
-    insights_text = "📊 *Quiz Insights*\n\n"
-    question_avg_times = []
-    for q_idx, data in session.get('stats', {}).get('question_times', {}).items():
-        if data['answer_count'] > 0:
-            avg_time = data['total_time'] / data['answer_count']
-            question_avg_times.append({'idx': q_idx, 'time': avg_time})
-    
-    if question_avg_times:
-        slowest_q = max(question_avg_times, key=lambda x: x['time'])
-        fastest_q = min(question_avg_times, key=lambda x: x['time'])
-        insights_text += f"🧠 *Toughest Question (longest time):* Question #{slowest_q['idx'] + 1}\n"
-        insights_text += f"⚡ *Easiest Question (quickest time):* Question #{fastest_q['idx'] + 1}\n\n"
-
-    fastest_finger = None
-    min_avg_correct_time = float('inf')
-    for p_data in participants.values():
-        if p_data.get('correct_answer_times'):
-            avg_time = sum(p_data['correct_answer_times']) / len(p_data['correct_answer_times'])
-            if avg_time < min_avg_correct_time:
-                min_avg_correct_time = avg_time
-                fastest_finger = p_data['name']
-    if fastest_finger:
-        insights_text += f"💨 *Fastest Finger Award:* {escape_markdown(fastest_finger)}\n"
-
-    most_accurate = None
-    max_accuracy = -1.0
-    for p_data in participants.values():
-        if p_data.get('questions_answered', 0) > 0:
-            accuracy = (p_data['score'] / p_data['questions_answered']) * 100
-            if accuracy > max_accuracy:
-                max_accuracy = accuracy
-                most_accurate = p_data['name']
-    if most_accurate and len(participants) > 1:
-        insights_text += f"🎯 *Top Accuracy Award:* {escape_markdown(most_accurate)} ({max_accuracy:.0f}%)\n"
-
-    bot.send_message(GROUP_ID, insights_text, parse_mode="Markdown")
 # === Ranker command setup ===
 @bot.message_handler(commands=['rankers'])
 @admin_required
