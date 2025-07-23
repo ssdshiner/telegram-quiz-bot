@@ -828,7 +828,7 @@ Here are the commands you can use to interact with the bot.
    ► Shows the quiz schedule for today.
 
 *📊 `/mystats`*
-   ► Get your personal performance stats (Ranks, Streaks, etc.) sent to you in a private message.
+   ► Get your personal performance stats (Quiz marathon-daily quizzes Ranks, Streaks, etc.).
 
 *📖 `/section` _<number>_*
    ► Get details for a specific Companies Act section.
