@@ -849,21 +849,13 @@ Here are the commands you can use to interact with the bot.
 # 9. TELEGRAM BOT HANDLERS (UPDATED /todayquiz)
 # =============================================================================
 @bot.message_handler(commands=['todayquiz'])
+@membership_required
 def handle_today_quiz(msg: types.Message):
     """
-    Shows the quiz schedule for the day, styled to match the example image.
-    This version uses a standard URL button to avoid the invalid button type error in groups.
-    Works ONLY in the group chat.
+    Shows the quiz schedule with greetings, detailed info, and interactive buttons.
     """
     if not is_group_message(msg):
-        bot.send_message(
-            msg.chat.id,
-            "ℹ️ The `/todayquiz` command is designed to be used in the main group chat."
-        )
-        return
-
-    if not check_membership(msg.from_user.id):
-        send_join_group_prompt(msg.chat.id)
+        bot.send_message(msg.chat.id, "ℹ️ The `/todayquiz` command is designed to be used in the main group chat.")
         return
 
     try:
@@ -880,20 +872,15 @@ def handle_today_quiz(msg: types.Message):
         response = supabase.table('quiz_schedule').select('*').eq('quiz_date', today_date_str).order('quiz_no').execute()
 
         if not response.data:
-            bot.send_message(
-                msg.chat.id,
-                f"✅ Hey {msg.from_user.first_name}, no quizzes are scheduled for today. It might be a rest day! 🧘"
-            )
+            bot.send_message(msg.chat.id, f"✅ Hey {msg.from_user.first_name}, no quizzes are scheduled for today. It might be a rest day! 🧘")
             return
         
         user_name = msg.from_user.first_name
         all_greetings = [
-     f"Step by step rising, never looking back,\n{user_name}, today's quiz schedule keeps you on track! 🛤️",
-     f"Challenge accepted, ready to play,\n{user_name}, here's your quiz lineup for today! 🎮",
-     f"Audit ki kasam, Law ki dua,\n{user_name}, dekho aaj schedule mein kya-kya hua! ✨",
-     f"Confidence building, knowledge to test,\n{user_name}, today's quiz schedule brings out your best! 💪",
-     f"Dreams in motion, goals within reach,\n{user_name}, today's quiz schedule has these lessons to teach! 📚",
-     f"Ready for a challenge, {user_name}?\nHere is the quiz schedule to help you ace your day! 🎯",
+            f"Step by step rising, never looking back,\n{user_name}, today's quiz schedule keeps you on track! 🛤️",
+            f"Challenge accepted, ready to play,\n{user_name}, here's your quiz lineup for today! 🎮",
+            f"Audit ki kasam, Law ki dua,\n{user_name}, dekho aaj schedule mein kya-kya hua! ✨",
+            f"Confidence building, knowledge to test,\n{user_name}, today's quiz schedule brings out your best! 💪",
         ]
         message_text = f"<b>{time_of_day_greeting}</b>\n\n{random.choice(all_greetings)}\n"
         message_text += "———————————————\n\n"
@@ -916,21 +903,42 @@ def handle_today_quiz(msg: types.Message):
         
         message_text += "———————————————"
         
-        # --- THE FIX: Changed from a Mini App button to a standard URL button ---
-        # This is the only type of button allowed on an inline keyboard in a group chat.
-        markup = types.InlineKeyboardMarkup()
-        schedule_button = types.InlineKeyboardButton(
-            text="📅 View Full Weekly Schedule",
-            url=WEBAPP_URL # Use the 'url' parameter instead of 'web_app'
+        # --- Interactive Buttons Logic ---
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            types.InlineKeyboardButton("📊 My Stats", callback_data=f"show_mystats_{msg.from_user.id}"),
+            types.InlineKeyboardButton("🤖 All Commands", callback_data="show_info"),
+            types.InlineKeyboardButton("📅 View Full Schedule", url=WEBAPP_URL) # Kept the original button too
         )
-        markup.add(schedule_button)
         
         bot.send_message(msg.chat.id, message_text, parse_mode="HTML", reply_markup=markup)
 
     except Exception as e:
         print(f"CRITICAL Error in /todayquiz: {traceback.format_exc()}")
         report_error_to_admin(f"Failed to fetch today's quiz schedule:\n{traceback.format_exc()}")
-        bot.send_message(msg.chat.id, "😥 Oops! Something went wrong while fetching the schedule. The admin has been notified.")
+        bot.send_message(msg.chat.id, "😥 Oops! Something went wrong while fetching the schedule.")
+# === ADD THIS FUNCTION IF IT DOESN'T EXIST ===
+@bot.callback_query_handler(func=lambda call: call.data.startswith('show_'))
+def handle_interlink_callbacks(call: types.CallbackQuery):
+    """
+    Handles button clicks from other commands to create an interactive flow.
+    """
+    # Logic for the 'My Stats' button
+    if call.data.startswith('show_mystats_'):
+        target_user_id = int(call.data.split('_')[-1])
+        if call.from_user.id == target_user_id:
+            bot.answer_callback_query(call.id) # Acknowledge the button press
+            # Create a minimal message object for the handler to use
+            fake_message = call.message
+            fake_message.from_user = call.from_user
+            handle_mystats_command(fake_message)
+        else:
+            bot.answer_callback_query(call.id, "You can only view your own stats. Please use the /mystats command yourself.", show_alert=True)
+    
+    # Logic for the 'All Commands' button
+    elif call.data == 'show_info':
+        bot.answer_callback_query(call.id)
+        handle_info_command(call.message)
 # =============================================================================
 # 11. DIRECT MESSAGING SYSTEM (/dm)
 # =============================================================================
