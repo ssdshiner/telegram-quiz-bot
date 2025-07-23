@@ -1131,6 +1131,57 @@ def handle_prune_dms(msg: types.Message):
 # =============================================================================
 # 12 GENERAL ADMIN COMMANDS (CLEANED UP)
 # =============================================================================
+# === ADD THIS ENTIRE NEW FUNCTION ===
+@bot.message_handler(commands=['mystats'])
+@membership_required
+def handle_mystats_command(msg: types.Message):
+    """
+    Fetches and sends a user their personal performance statistics in a private message.
+    """
+    user_id = msg.from_user.id
+    user_name = msg.from_user.first_name
+
+    # Inform the user in the group that the stats are being sent privately
+    if is_group_message(msg):
+        bot.reply_to(msg, f"Hey @{user_name}, I'm sending your personal stats to our private chat. 🤫")
+
+    try:
+        # Call the powerful RPC function to get all stats in one go
+        response = supabase.rpc('get_user_stats', {'p_user_id': user_id}).execute()
+        stats = response.data
+
+        # --- Format the stats into a beautiful message ---
+        stats_message = f"📊 **Your Personal Performance Stats, {user_name}** 📊\n\n"
+
+        # Weekly & All-Time Ranks for Marathon
+        stats_message += "--- *Quiz Marathon Performance* ---\n"
+        stats_message += f"🏆 **All-Time Rank:** {stats.get('all_time_rank', 'Not Ranked Yet')}\n"
+        stats_message += f"📅 **This Week's Rank:** {stats.get('weekly_rank', 'Not Ranked Yet')}\n"
+        stats_message += f"▶️ **Total Quizzes Played:** {stats.get('total_quizzes_played', 0)}\n\n"
+
+        # Random Quiz Leaderboard Stats
+        stats_message += "--- *Random Quiz Performance* ---\n"
+        stats_message += f"🎯 **Leaderboard Rank:** {stats.get('random_quiz_rank', 'Not Ranked Yet')}\n"
+        stats_message += f"⭐ **Total Score:** {stats.get('random_quiz_score', 0)} points\n\n"
+
+        # Engagement Stats
+        stats_message += "--- *Community Engagement* ---\n"
+        stats_message += f"🔥 **Current Appreciation Streak:** {stats.get('current_streak', 0)} quizzes\n"
+        stats_message += f"✍️ **Practice Copies Checked:** {stats.get('copies_checked', 0)}\n\n"
+
+        stats_message += "Keep participating to improve your stats! 💪"
+
+        # Send the final message to the user's private chat
+        bot.send_message(user_id, stats_message, parse_mode="Markdown")
+
+    except Exception as e:
+        # Handle cases where the bot can't DM the user
+        if 'bot was blocked by the user' in str(e) or 'chat not found' in str(e):
+             bot.send_message(msg.chat.id, f"@{user_name}, I couldn't send you a private message. Please start a chat with me first by clicking here: @{BOT_USERNAME} and then try again.")
+        else:
+            print(f"Error in /mystats: {traceback.format_exc()}")
+            report_error_to_admin(traceback.format_exc())
+            bot.send_message(msg.chat.id, "❌ Oops! Something went wrong while fetching your stats.")
 # NEW: Direct Message Command
 @bot.message_handler(commands=['message'])
 @admin_required
@@ -1961,15 +2012,16 @@ def send_marathon_results(session_id):
             print(f"❌ CRITICAL ERROR: Could not mark marathon questions as used. Error: {e}")
             report_error_to_admin(f"Failed to mark marathon questions as used.\n\nError: {traceback.format_exc()}")
 
-    if not participants:
+if not participants:
         bot.send_message(GROUP_ID, f"🏁 The quiz *'{escape_markdown(session.get('title', ''))}'* has finished, but no one participated!")
     else:
-# Sort participants by score (desc) and then by time (asc)
+        # Sort participants by score (desc) and then by time (asc)
         sorted_items = sorted(participants.items(), key=lambda item: (item[1]['score'], -item[1]['total_time']), reverse=True)
         
         results_text = f"🏁 The quiz *'{escape_markdown(session['title'])}'* has finished!\n\n*{len(participants)}* participants answered at least one question.\n\n"
         rank_emojis = ["🥇", "🥈", "🥉"]
-for i, (user_id, p) in enumerate(sorted_items[:10]):
+        
+        for i, (user_id, p) in enumerate(sorted_items[:10]):
             # --- Call our new function to record the data ---
             record_quiz_participation(user_id, p['name'], p['score'], p['total_time'])
             # --------------------------------------------------
@@ -1979,11 +2031,11 @@ for i, (user_id, p) in enumerate(sorted_items[:10]):
             percentage = (p['score'] / total_questions_asked * 100) if total_questions_asked > 0 else 0
             formatted_time = format_duration(p['total_time'])
             results_text += f"{rank} *{name}* – {p['score']} correct ({percentage:.0f}%) in {formatted_time}\n"
+        
         results_text += "\n🏆 Congratulations to the winners!"
         bot.send_message(GROUP_ID, results_text, parse_mode="Markdown")
         time.sleep(2)
         generate_quiz_insights(session_id)
-    
     # Cleanup session data from memory
     if session_id in QUIZ_SESSIONS: del QUIZ_SESSIONS[session_id]
     if session_id in QUIZ_PARTICIPANTS: del QUIZ_PARTICIPANTS[session_id]
