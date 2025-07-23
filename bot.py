@@ -2543,13 +2543,10 @@ def handle_all_poll_answers(poll_answer: types.PollAnswer):
             return # IMPORTANT: End processing here for marathon answers
 
         # --- ROUTE 2: Random Quiz / Daily Quiz ---
-        # We now correctly check the 'active_polls' list for these quizzes.
         else:
             active_poll_info = next((poll for poll in active_polls if poll['poll_id'] == poll_id_str), None)
             
-            # If we found the poll and it's a random quiz type...
             if active_poll_info and active_poll_info.get('type') == 'random_quiz':
-                # Check if the user's answer is the correct one
                 if selected_option == active_poll_info['correct_option_id']:
                     print(f"Correct answer for random/daily quiz from {user_info.first_name}. Incrementing score.")
                     # If it's correct, call our Supabase function
@@ -2557,7 +2554,6 @@ def handle_all_poll_answers(poll_answer: types.PollAnswer):
                         'user_id_in': user_info.id,
                         'user_name_in': user_info.first_name
                     }).execute()
-            # No return here, allowing for other potential poll types in the future if needed
 
     except Exception as e:
         print(f"Error in the master poll answer handler: {traceback.format_exc()}")
