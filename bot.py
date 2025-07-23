@@ -1164,29 +1164,31 @@ def handle_prune_dms(msg: types.Message):
 # =============================================================================
 # 12 GENERAL ADMIN COMMANDS (CLEANED UP)
 # =============================================================================
+# === REPLACE WITH THIS NEW VERSION ===
 @bot.message_handler(commands=['mystats'])
 @membership_required
 def handle_mystats_command(msg: types.Message):
     """
-    Fetches and sends a user their personal performance statistics
-    and adds a contextual "Coach's Comment".
+    Fetches personal stats, posts them as a reply in the group,
+    and deletes both messages after 2 minutes.
     """
     user_id = msg.from_user.id
     user_name = msg.from_user.first_name
 
     try:
-        if is_group_message(msg):
-            bot.reply_to(msg, f"Hey @{user_name}, aapke personal stats aapko private message (DM) mein bhej raha hoon. 🤫")
-
         response = supabase.rpc('get_user_stats', {'p_user_id': user_id}).execute()
         stats = response.data
 
         if not stats or not stats.get('user_name'):
-            bot.send_message(user_id, f"Sorry {user_name}, I couldn't find any stats for you yet. Please participate in a quiz first!")
+            # Send a temporary error message if no stats are found
+            error_msg = bot.reply_to(msg, f"Sorry @{user_name}, I couldn't find any stats for you yet. Please participate in a quiz first!")
+            # Delete both the command and the error message after 15 seconds
+            delete_message_in_thread(msg.chat.id, msg.message_id, 15)
+            delete_message_in_thread(error_msg.chat.id, error_msg.message_id, 15)
             return
 
-        # --- Format the main stats message ---
-        stats_message = f"📊 **Your Personal Performance Stats, {user_name}** 📊\n\n"
+        # --- Format the stats into a beautiful message ---
+        stats_message = f"📊 **Personal Performance Stats for @{user_name}** 📊\n\n"
         stats_message += "--- *Quiz Marathon Performance* ---\n"
         stats_message += f"🏆 **All-Time Rank:** {stats.get('all_time_rank') or 'Not Ranked'}\n"
         stats_message += f"📅 **This Week's Rank:** {stats.get('weekly_rank') or 'Not Ranked'}\n"
@@ -1197,35 +1199,23 @@ def handle_mystats_command(msg: types.Message):
         stats_message += "--- *Community Engagement* ---\n"
         stats_message += f"🔥 **Current Appreciation Streak:** {stats.get('current_streak', 0)} quizzes\n"
         stats_message += f"✍️ **Practice Copies Checked:** {stats.get('copies_checked', 0)}\n\n"
+        stats_message += "This message will be deleted in 2 minutes."
 
-        # --- NEW: Smart "Coach's Comment" Logic ---
-        coach_comment = ""
-        APPRECIATION_STREAK = 8
-        current_streak = stats.get('current_streak', 0)
-        
-        if current_streak == (APPRECIATION_STREAK - 1):
-            coach_comment = f"Kamaal hai! Aap apni {APPRECIATION_STREAK}-quiz ki appreciation streak se bas ek quiz door hain! Keep it up!"
-        elif stats.get('weekly_rank') == 0 and stats.get('total_quizzes_played', 0) > 0:
-            coach_comment = "Aapne is hafte abhi tak rank nahi banayi hai. Chaliye, agle quiz mein score karte hain!"
-        elif stats.get('copies_checked', 0) == 0 and stats.get('total_quizzes_played', 0) > 2:
-            coach_comment = "Written practice mein doosron ki copies check karke bhi aap bahut kuch seekh sakte hain. Try kijiye!"
-        else:
-            coach_comment = "Aapki performance aachi hai. Keep practicing consistently!"
+        # Send the stats as a reply in the group chat
+        sent_stats_message = bot.reply_to(msg, stats_message, parse_mode="Markdown")
 
-        final_message = stats_message + f"--- *Coach's Comment* ---\n💡 {coach_comment}\n\nKeep pushing your limits! 💪"
-        
-        # Send the final message to the user's private chat
-        bot.send_message(user_id, final_message, parse_mode="Markdown")
+        # --- NEW: Schedule deletion for both messages ---
+        DELETE_DELAY_SECONDS = 120  # 2 minutes
+        delete_message_in_thread(msg.chat.id, msg.message_id, DELETE_DELAY_SECONDS)
+        delete_message_in_thread(sent_stats_message.chat.id, sent_stats_message.message_id, DELETE_DELAY_SECONDS)
 
     except Exception as e:
-        if 'bot was blocked by the user' in str(e) or 'chat not found' in str(e):
-             bot.send_message(msg.chat.id, f"@{user_name}, I couldn't send you a private message. Please start a chat with me first by clicking here: @{BOT_USERNAME} and then try again.")
-        else:
-            print(f"Error in /mystats: {traceback.format_exc()}")
-            report_error_to_admin(traceback.format_exc())
-            bot.send_message(msg.chat.id, "❌ Oops! Something went wrong while fetching your stats.")
-
-
+        print(f"Error in /mystats: {traceback.format_exc()}")
+        report_error_to_admin(traceback.format_exc())
+        error_msg = bot.reply_to(msg, "❌ Oops! Something went wrong while fetching your stats.")
+        # Delete messages on error too, to keep the chat clean
+        delete_message_in_thread(msg.chat.id, msg.message_id, 15)
+        delete_message_in_thread(error_msg.chat.id, error_msg.message_id, 15)
 # NEW: Smart Notification Command (Using the new "To-Do List" system)
 @bot.message_handler(commands=['notify'])
 @admin_required
@@ -1999,7 +1989,20 @@ def handle_stop_marathon_command(msg: types.Message):
         bot.delete_message(msg.chat.id, msg.message_id)
     except Exception as e:
         print(f"Could not delete /roko command message: {e}")
-
+# === ADD THIS NEW HELPER FUNCTION ===
+def delete_message_in_thread(chat_id, message_id, delay):
+    """
+    Waits for a specified delay and then deletes a message.
+    Runs in a separate thread to not block the bot.
+    """
+    def task():
+        time.sleep(delay)
+        try:
+            bot.delete_message(chat_id, message_id)
+        except Exception as e:
+            print(f"Could not delete message {message_id} in chat {chat_id}: {e}")
+    
+    threading.Thread(target=task).start()
 def send_marathon_results(session_id):
     """
     Generates and sends marathon results with advanced insights like
