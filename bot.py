@@ -1164,79 +1164,66 @@ def handle_prune_dms(msg: types.Message):
 # =============================================================================
 # 12 GENERAL ADMIN COMMANDS (CLEANED UP)
 # =============================================================================
-# === ADD THIS ENTIRE NEW FUNCTION ===
 @bot.message_handler(commands=['mystats'])
 @membership_required
 def handle_mystats_command(msg: types.Message):
     """
-    Fetches and sends a user their personal performance statistics in the group chat.
+    Fetches and sends a user their personal performance statistics
+    and adds a contextual "Coach's Comment".
     """
     user_id = msg.from_user.id
     user_name = msg.from_user.first_name
 
     try:
-        # Call the powerful RPC function to get all stats in one go
+        if is_group_message(msg):
+            bot.reply_to(msg, f"Hey @{user_name}, aapke personal stats aapko private message (DM) mein bhej raha hoon. 🤫")
+
         response = supabase.rpc('get_user_stats', {'p_user_id': user_id}).execute()
         stats = response.data
 
-        if not stats:
-            bot.reply_to(msg, f"Sorry @{user_name}, I couldn't find any stats for you yet. Please participate in a quiz first!")
+        if not stats or not stats.get('user_name'):
+            bot.send_message(user_id, f"Sorry {user_name}, I couldn't find any stats for you yet. Please participate in a quiz first!")
             return
 
-        # --- Format the stats into a beautiful message ---
-        stats_message = f"📊 **Personal Performance Stats for @{user_name}** 📊\n\n"
-
-        # Weekly & All-Time Ranks for Marathon
+        # --- Format the main stats message ---
+        stats_message = f"📊 **Your Personal Performance Stats, {user_name}** 📊\n\n"
         stats_message += "--- *Quiz Marathon Performance* ---\n"
         stats_message += f"🏆 **All-Time Rank:** {stats.get('all_time_rank') or 'Not Ranked'}\n"
         stats_message += f"📅 **This Week's Rank:** {stats.get('weekly_rank') or 'Not Ranked'}\n"
         stats_message += f"▶️ **Total Quizzes Played:** {stats.get('total_quizzes_played', 0)}\n\n"
-
-        # Random Quiz Leaderboard Stats
         stats_message += "--- *Random Quiz Performance* ---\n"
         stats_message += f"🎯 **Leaderboard Rank:** {stats.get('random_quiz_rank') or 'Not Ranked'}\n"
         stats_message += f"⭐ **Total Score:** {stats.get('random_quiz_score', 0)} points\n\n"
-
-        # Engagement Stats
         stats_message += "--- *Community Engagement* ---\n"
         stats_message += f"🔥 **Current Appreciation Streak:** {stats.get('current_streak', 0)} quizzes\n"
         stats_message += f"✍️ **Practice Copies Checked:** {stats.get('copies_checked', 0)}\n\n"
 
-        stats_message += "Keep participating to improve your stats! 💪"
+        # --- NEW: Smart "Coach's Comment" Logic ---
+        coach_comment = ""
+        APPRECIATION_STREAK = 8
+        current_streak = stats.get('current_streak', 0)
+        
+        if current_streak == (APPRECIATION_STREAK - 1):
+            coach_comment = f"Kamaal hai! Aap apni {APPRECIATION_STREAK}-quiz ki appreciation streak se bas ek quiz door hain! Keep it up!"
+        elif stats.get('weekly_rank') == 0 and stats.get('total_quizzes_played', 0) > 0:
+            coach_comment = "Aapne is hafte abhi tak rank nahi banayi hai. Chaliye, agle quiz mein score karte hain!"
+        elif stats.get('copies_checked', 0) == 0 and stats.get('total_quizzes_played', 0) > 2:
+            coach_comment = "Written practice mein doosron ki copies check karke bhi aap bahut kuch seekh sakte hain. Try kijiye!"
+        else:
+            coach_comment = "Aapki performance aachi hai. Keep practicing consistently!"
 
-        # Send the final message as a reply in the group chat
-        bot.reply_to(msg, stats_message, parse_mode="Markdown")
-
-    except Exception as e:
-        print(f"Error in /mystats: {traceback.format_exc()}")
-        report_error_to_admin(traceback.format_exc())
-        bot.reply_to(msg, "❌ Oops! Something went wrong while fetching your stats.")
-# NEW: Direct Message Command
-@bot.message_handler(commands=['message'])
-@admin_required
-def handle_message_command(msg: types.Message):
-    """Sends a direct message to the group in one go."""
-    try:
-        # Extract the message text after the command
-        message_text = msg.text.replace('/message', '').strip()
-        if not message_text:
-            bot.send_message(
-                msg.chat.id,
-                "❌ Please type a message after the command.\nExample: /message Hello everyone!",
-                parse_mode="Markdown")
-            return
-        # Send the message to the main group
-        bot.send_message(GROUP_ID, message_text, parse_mode="Markdown")
-
-        # Send a confirmation back to the admin
-        bot.send_message(msg.chat.id,
-                         "✅ Your message has been sent to the group!")
+        final_message = stats_message + f"--- *Coach's Comment* ---\n💡 {coach_comment}\n\nKeep pushing your limits! 💪"
+        
+        # Send the final message to the user's private chat
+        bot.send_message(user_id, final_message, parse_mode="Markdown")
 
     except Exception as e:
-        error_message = f"Failed to send direct message: {e}"
-        print(error_message)
-        report_error_to_admin(traceback.format_exc())
-        bot.send_message(msg.chat.id, f"❌ Oops! Something went wrong: {e}")
+        if 'bot was blocked by the user' in str(e) or 'chat not found' in str(e):
+             bot.send_message(msg.chat.id, f"@{user_name}, I couldn't send you a private message. Please start a chat with me first by clicking here: @{BOT_USERNAME} and then try again.")
+        else:
+            print(f"Error in /mystats: {traceback.format_exc()}")
+            report_error_to_admin(traceback.format_exc())
+            bot.send_message(msg.chat.id, "❌ Oops! Something went wrong while fetching your stats.")
 
 
 # NEW: Smart Notification Command (Using the new "To-Do List" system)
