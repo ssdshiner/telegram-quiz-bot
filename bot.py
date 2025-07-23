@@ -67,7 +67,6 @@ def new_make_request(token,
         params = None,
         files = None):
     ""
-"
 A patched version of _make_request that automatically retries on connection errors.
 ""
 "
