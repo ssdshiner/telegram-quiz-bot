@@ -408,34 +408,138 @@ def bot_is_target(message: types.Message):
 # =============================================================================
 # 6. BACKGROUND SCHEDULER (Corrected and Improved)
 # =============================================================================
+# === Quiz participatios recording ===
+def record_quiz_participation(user_id, user_name, score_achieved, time_taken_seconds):
+    """
+    Records a user's participation data into all relevant Supabase tables.
+    """
+    if not supabase:
+        return
+
+    try:
+        # 1. Calculate the Comparable Score
+        # Formula: (Score * 1000) - Time. Prioritizes score, time is a tie-breaker.
+        comparable_score = (score_achieved * 1000) - int(time_taken_seconds)
+
+        # 2. Record in weekly_quiz_scores table
+        supabase.table('weekly_quiz_scores').insert({
+            'user_id': user_id,
+            'user_name': user_name,
+            'score_achieved': score_achieved,
+            'time_taken_seconds': time_taken_seconds
+        }).execute()
+
+        # 3. Update all_time_scores using the RPC function
+        supabase.rpc('update_all_time_score', {
+            'p_user_id': user_id,
+            'p_user_name': user_name,
+            'p_comparable_score': comparable_score
+        }).execute()
+        
+        # 4. Update quiz_activity using the RPC function
+        supabase.rpc('update_quiz_activity', {
+            'p_user_id': user_id,
+            'p_user_name': user_name
+        }).execute()
+
+        print(f"✅ Successfully recorded participation for user {user_id} ({user_name}).")
+
+    except Exception as e:
+        print(f"❌ Error in record_quiz_participation for user {user_id}: {e}")
+        report_error_to_admin(f"Failed to record participation for {user_id}:\n{traceback.format_exc()}")
+# === REPLACE THE OLD background_worker WITH THIS NEW VERSION ===
+
+# Add this new global variable at the top of your file with the others
+last_daily_check_day = -1 
+
+# === REPLACE THE OLD run_daily_checks AND ADD THE TWO NEW FUNCTIONS BENEATH IT ===
+
+def run_inactivity_checks():
+    """Finds and warns inactive users."""
+    print("Running inactivity checks...")
+    
+    # 1. Handle Final Warnings (Level 2)
+    final_warning_users = supabase.rpc('get_users_for_final_warning').execute().data
+    if final_warning_users:
+        user_list = [f"@{user['user_name']}" for user in final_warning_users]
+        user_ids_to_update = [user['user_id'] for user in final_warning_users]
+        
+        message = f"Admins, please take action. The following members did not participate even after a final warning:\n" + ", ".join(user_list)
+        bot.send_message(GROUP_ID, message)
+        
+        # Update their warning level to 2
+        supabase.table('quiz_activity').update({'warning_level': 2}).in_('user_id', user_ids_to_update).execute()
+
+    # 2. Handle First Warnings (Level 1)
+    first_warning_users = supabase.rpc('get_users_to_warn').execute().data
+    if first_warning_users:
+        user_list = [f"@{user['user_name']}" for user in first_warning_users]
+        user_ids_to_update = [user['user_id'] for user in first_warning_users]
+
+        message = (
+            f"⚠️ **Quiz Activity Warning!** ⚠️\n"
+            f"The following members have not participated in any quiz for the last 3 days: {', '.join(user_list)}.\n"
+            f"This is your final 24-hour notice. Please participate in at least one quiz tomorrow to remain in the group."
+        )
+        bot.send_message(GROUP_ID, message)
+        
+        # Update their warning level to 1
+        supabase.table('quiz_activity').update({'warning_level': 1}).in_('user_id', user_ids_to_update).execute()
+
+
+def run_appreciation_checks():
+    """Finds and appreciates consistent users."""
+    print("Running appreciation checks...")
+    
+    # 1. Reset streaks for users who missed today's quizzes
+    supabase.rpc('reset_missed_streaks').execute()
+    
+    # 2. Find users who have hit the appreciation target (e.g., 8 quizzes)
+    APPRECIATION_STREAK = 8
+    users_to_appreciate = supabase.rpc('get_users_to_appreciate', {'streak_target': APPRECIATION_STREAK}).execute().data
+    
+    if users_to_appreciate:
+        for user in users_to_appreciate:
+            message = (
+                f"🏆 **Star Performer Alert!** 🏆\n\n"
+                f"Hats off to **@{user['user_name']}** for showing incredible consistency by participating in the last {APPRECIATION_STREAK} quizzes straight! Your dedication is what makes this community awesome. Keep it up! 👏"
+            )
+            bot.send_message(GROUP_ID, message)
+
+def run_daily_checks():
+    """
+    Runs all daily automated tasks like inactivity checks and appreciation.
+    """
+    try:
+        print("Starting daily checks...")
+        run_inactivity_checks()
+        run_appreciation_checks()
+        print("✅ Daily checks completed.")
+    except Exception as e:
+        print(f"❌ Error during daily checks: {e}")
+        report_error_to_admin(f"Error in run_daily_checks:\n{traceback.format_exc()}")
+
+
 def background_worker():
     """Runs all scheduled tasks in a continuous loop."""
-    global last_quiz_posted_hour, last_doubt_reminder_hour
+    global last_daily_check_day
 
     while True:
         try:
-            # Get the current time in IST once at the start of the loop for consistency.
             ist_tz = timezone(timedelta(hours=5, minutes=30))
             current_time_ist = datetime.datetime.now(ist_tz)
+            current_day = current_time_ist.day
             current_hour = current_time_ist.hour
 
-            # --- Process and Close Active Polls ---
-            for poll in active_polls[:]: # Use a copy to safely remove items
-                close_time = poll.get('close_time')
-                if isinstance(close_time, datetime.datetime):
-                    # Ensure the close_time is timezone-aware for correct comparison
-                    if current_time_ist >= close_time.astimezone(ist_tz):
-                        try:
-                            bot.stop_poll(poll['chat_id'], poll['message_id'])
-                            print(f"✅ Closed poll {poll['message_id']}.")
-                        except Exception as e:
-                            print(f"⚠️ Could not stop poll {poll['message_id']}: {e}")
-                        active_polls.remove(poll)
-                        
+            # --- Daily Check at a specific time (e.g., 10:30 PM IST) ---
+            if current_hour == 22 and last_daily_check_day != current_day:
+                print(f"⏰ It's 10 PM, time for daily automated checks...")
+                run_daily_checks()
+                last_daily_check_day = current_day
+
             # --- Process Scheduled Tasks (e.g., /notify follow-up) ---
+            # (This part remains the same)
             for task in scheduled_tasks[:]:
-                # THE BUG FIX: Compare the task's run_at time with the current IST time.
-                # This ensures scheduled tasks run correctly according to Indian time.
                 if current_time_ist >= task['run_at'].astimezone(ist_tz):
                     try:
                         bot.send_message(task['chat_id'], task['text'], parse_mode="Markdown")
@@ -450,10 +554,8 @@ def background_worker():
             report_error_to_admin(f"An error occurred in the background worker: {tb_string}")
 
         finally:
-            # THE IMPROVEMENT: Save data outside the main try block.
-            # This ensures data is saved even if one of the tasks above had a minor, non-fatal error.
             save_data()
-            time.sleep(30) # Wait for 30 seconds before the next loop
+            time.sleep(30)
 # =============================================================================
 # 7. FLASK WEB SERVER & WEBHOOK
 # =============================================================================
@@ -1862,14 +1964,18 @@ def send_marathon_results(session_id):
     if not participants:
         bot.send_message(GROUP_ID, f"🏁 The quiz *'{escape_markdown(session.get('title', ''))}'* has finished, but no one participated!")
     else:
-        sorted_participants = sorted(participants.values(), key=lambda p: (p['score'], -p['total_time']), reverse=True)
+# Sort participants by score (desc) and then by time (asc)
+        sorted_items = sorted(participants.items(), key=lambda item: (item[1]['score'], -item[1]['total_time']), reverse=True)
         
         results_text = f"🏁 The quiz *'{escape_markdown(session['title'])}'* has finished!\n\n*{len(participants)}* participants answered at least one question.\n\n"
         rank_emojis = ["🥇", "🥈", "🥉"]
-        for i, p in enumerate(sorted_participants[:10]):
+for i, (user_id, p) in enumerate(sorted_items[:10]):
+            # --- Call our new function to record the data ---
+            record_quiz_participation(user_id, p['name'], p['score'], p['total_time'])
+            # --------------------------------------------------
+
             rank = rank_emojis[i] if i < 3 else f"  *{i + 1}.*"
             name = escape_markdown(p['name'])
-            # THE FIX: Calculate percentage based on questions asked, not the total planned.
             percentage = (p['score'] / total_questions_asked * 100) if total_questions_asked > 0 else 0
             formatted_time = format_duration(p['total_time'])
             results_text += f"{rank} *{name}* – {p['score']} correct ({percentage:.0f}%) in {formatted_time}\n"
@@ -1924,6 +2030,415 @@ def generate_quiz_insights(session_id):
         insights_text += f"🎯 *Top Accuracy Award:* {escape_markdown(most_accurate)} ({max_accuracy:.0f}%)\n"
 
     bot.send_message(GROUP_ID, insights_text, parse_mode="Markdown")
+# === Ranker command setup ===
+@bot.message_handler(commands=['rankers'])
+@admin_required
+def handle_weekly_rankers(msg: types.Message):
+    """
+    Fetches and displays the weekly quiz leaderboard.
+    Posts the result in the main group.
+    """
+    try:
+        # Call the Supabase RPC function we created
+        response = supabase.rpc('get_weekly_rankers').execute()
+
+        if not response.data:
+            bot.send_message(GROUP_ID, "🏆 The weekly leaderboard is still empty. Let's play some quizzes to kickstart the week!")
+            bot.send_message(msg.chat.id, "✅ Weekly leaderboard is currently empty. A message has been sent to the group.")
+            return
+
+        leaderboard_text = "📊 **This Week's Quiz Rankers** 📊\n\nHere are the top performers for the current week based on score and speed!\n\n"
+        rank_emojis = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
+
+        for item in response.data:
+            rank = item.get('rank')
+            rank_emoji = rank_emojis[rank - 1] if rank <= len(rank_emojis) else f"*{rank}*."
+            user_name = item.get('user_name', 'Unknown User')
+            safe_name = escape_markdown(user_name)
+            total_score = item.get('total_score', 0)
+            leaderboard_text += f"{rank_emoji} *{safe_name}* - {total_score} points\n"
+        
+        leaderboard_text += "\nKeep participating to climb up the leaderboard! 🔥"
+
+        # Send the leaderboard to the main group
+        bot.send_message(GROUP_ID, leaderboard_text, parse_mode="Markdown")
+        # Send confirmation to the admin
+        bot.send_message(msg.chat.id, "✅ Weekly leaderboard has been sent to the group successfully.")
+
+    except Exception as e:
+        print(f"Error in /rankers: {traceback.format_exc()}")
+        report_error_to_admin(traceback.format_exc())
+        bot.send_message(msg.chat.id, "❌ Could not fetch the weekly leaderboard. The error has been logged.")
+# === Al time rankers command ===
+@bot.message_handler(commands=['alltimerankers'])
+@admin_required
+def handle_all_time_rankers(msg: types.Message):
+    """
+    Fetches and displays the all-time quiz leaderboard.
+    Posts the result in the main group.
+    """
+    try:
+        # Call the simple and fast RPC function
+        response = supabase.rpc('get_all_time_rankers').execute()
+
+        if not response.data:
+            bot.send_message(GROUP_ID, "🏆 The All-Time leaderboard is empty! Let's create some legends!")
+            bot.send_message(msg.chat.id, "✅ All-Time leaderboard is currently empty.")
+            return
+
+        leaderboard_text = "✨ **All-Time Legends Leaderboard** ✨\n\nHonoring the most consistent and high-scoring members of our community!\n\n"
+        rank_emojis = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
+
+        for item in response.data:
+            rank = item.get('rank')
+            rank_emoji = rank_emojis[rank - 1] if rank <= len(rank_emojis) else f"*{rank}*."
+            user_name = item.get('user_name', 'Unknown User')
+            safe_name = escape_markdown(user_name)
+            total_score = item.get('total_score', 0)
+            leaderboard_text += f"{rank_emoji} *{safe_name}* - {total_score} lifetime points\n"
+        
+        leaderboard_text += "\nYour legacy is built with every quiz! 💪"
+
+        # Send the leaderboard to the main group
+        bot.send_message(GROUP_ID, leaderboard_text, parse_mode="Markdown")
+        # Send confirmation to the admin
+        bot.send_message(msg.chat.id, "✅ All-Time leaderboard has been sent to the group successfully.")
+
+    except Exception as e:
+        print(f"Error in /alltimerankers: {traceback.format_exc()}")
+        report_error_to_admin(traceback.format_exc())
+        bot.send_message(msg.chat.id, "❌ Could not fetch the All-Time leaderboard. The error has been logged.")
+# === Question posted part ===
+
+def process_total_marks(message, session_id, expected_setter_id):
+    """
+    This function is called after the Question Setter replies with the marks.
+    It validates the marks and updates the database.
+    """
+    try:
+        # Security Check: Ensure the reply is from the correct Question Setter
+        if message.from_user.id != expected_setter_id:
+            # Silently ignore replies from other users
+            return
+
+        total_marks_str = message.text.strip()
+        if not total_marks_str.isdigit():
+            # Ask again if the input is not a number
+            prompt = bot.reply_to(message, "❌ That's not a number. Please enter a number between 3 and 20.")
+            bot.register_next_step_handler(prompt, process_total_marks, session_id, expected_setter_id)
+            return
+
+        total_marks = int(total_marks_str)
+        if not (3 <= total_marks <= 20):
+            # Ask again if the number is not in the valid range
+            prompt = bot.reply_to(message, f"❌ Invalid marks. '{total_marks}' is not between 3 and 20. Please try again.")
+            bot.register_next_step_handler(prompt, process_total_marks, session_id, expected_setter_id)
+            return
+
+        # If all checks pass, update the database
+        supabase.table('practice_sessions').update({
+            'total_marks': total_marks,
+            'status': 'Questions Posted'
+        }).eq('session_id', session_id).execute()
+
+        bot.reply_to(message, f"✅ Total marks set to **{total_marks}**. Members can now start submitting their answers using the `/submit` command.", parse_mode="Markdown")
+
+    except Exception as e:
+        print(f"Error in process_total_marks: {traceback.format_exc()}")
+        bot.send_message(message.chat.id, "❌ An error occurred while setting the marks.")
+
+
+@bot.message_handler(commands=['questions_posted'])
+def handle_questions_posted(msg: types.Message):
+    """
+    Handles the /questions_posted command from the assigned Question Setter.
+    """
+    if not is_group_message(msg):
+        bot.reply_to(msg, "This command can only be used in the main group chat.")
+        return
+
+    if not msg.reply_to_message:
+        bot.reply_to(msg, "Please use this command by replying to the message containing the questions.")
+        return
+
+    try:
+        # Get the latest active session from the database
+        session_response = supabase.table('practice_sessions').select('*').order('session_id', desc=True).limit(1).execute()
+        if not session_response.data:
+            return # No active session
+
+        latest_session = session_response.data[0]
+        session_id = latest_session['session_id']
+        question_setter_id = latest_session['question_setter_id']
+
+        # Check if the command is from the correct user
+        if msg.from_user.id != question_setter_id:
+            bot.reply_to(msg, "❌ Only the assigned Question Setter can use this command for the current session.")
+            return
+
+        # Check if marks have already been set
+        if latest_session.get('total_marks') is not None:
+            bot.reply_to(msg, "Marks for this session have already been set.")
+            return
+
+        # Ask for marks publicly and register the next step handler
+        prompt = bot.reply_to(msg, f"@{msg.from_user.first_name}, please reply to **this message** with the total marks for these questions (a number between 3 and 20).", parse_mode="Markdown")
+        bot.register_next_step_handler(prompt, process_total_marks, session_id, question_setter_id)
+
+    except Exception as e:
+        print(f"Error in /questions_posted command: {traceback.format_exc()}")
+        report_error_to_admin(traceback.format_exc())
+        bot.send_message(msg.chat.id, "❌ An error occurred.")
+# === Submit command ===
+@bot.message_handler(commands=['submit'])
+def handle_submission(msg: types.Message):
+    """
+    Handles a user's answer sheet submission.
+    Assigns another active member to review the submission.
+    """
+    if not is_group_message(msg):
+        bot.reply_to(msg, "This command can only be used in the main group chat.")
+        return
+
+    if not msg.reply_to_message or not msg.reply_to_message.photo:
+        bot.reply_to(msg, "Please use this command by replying to the message containing the photo of your answer sheet.")
+        return
+
+    try:
+        submitter_id = msg.from_user.id
+        
+        # 1. Get the latest active session
+        session_response = supabase.table('practice_sessions').select('*').eq('status', 'Questions Posted').order('session_id', desc=True).limit(1).execute()
+        if not session_response.data:
+            bot.reply_to(msg, "There is no active practice session to submit to right now.")
+            return
+        
+        latest_session = session_response.data[0]
+        session_id = latest_session['session_id']
+
+        # 2. Check for duplicate submissions
+        existing_submission = supabase.table('practice_submissions').select('submission_id').eq('session_id', session_id).eq('submitter_id', submitter_id).execute()
+        if existing_submission.data:
+            bot.reply_to(msg, "You have already submitted your answer for this session.")
+            return
+
+        # 3. Record the submission first
+        submission_insert_response = supabase.table('practice_submissions').insert({
+            'session_id': session_id,
+            'submitter_id': submitter_id,
+            'submission_message_id': msg.reply_to_message.message_id
+        }).execute()
+        submission_id = submission_insert_response.data[0]['submission_id']
+        
+        # 4. Call the RPC to get a fair checker
+        checker_response = supabase.rpc('assign_checker', {'p_session_id': session_id, 'p_submitter_id': submitter_id}).execute()
+
+        if not checker_response.data:
+            bot.reply_to(msg, "✅ Submission received! However, I couldn't find any available members to check your copy right now. An admin might need to assign it manually.")
+            return
+            
+        checker = checker_response.data
+        checker_id = checker['user_id']
+        checker_name = checker['user_name']
+
+        # 5. Update the submission with the assigned checker
+        supabase.table('practice_submissions').update({
+            'checker_id': checker_id,
+            'review_status': 'Pending Review'
+        }).eq('submission_id', submission_id).execute()
+
+        # 6. Announce the assignment publicly
+        bot.reply_to(msg, f"✅ Submission received from @{msg.from_user.first_name}!\n\nYour answer sheet has been assigned to @{checker_name} for review. Please provide your feedback and marks.", parse_mode="Markdown")
+
+    except Exception as e:
+        print(f"Error in /submit command: {traceback.format_exc()}")
+        report_error_to_admin(traceback.format_exc())
+        bot.send_message(msg.chat.id, "❌ An error occurred while submitting.")
+
+# === ADD THESE NEXT TWO FUNCTIONS ===
+
+def process_awarded_marks(message, submission_id, total_marks, expected_checker_id):
+    """
+    This function is called after the Checker replies with the marks.
+    It validates the marks and completes the review process.
+    """
+    try:
+        # Security Check: Ensure the reply is from the correct Checker
+        if message.from_user.id != expected_checker_id:
+            return # Silently ignore replies from other users
+
+        marks_str = message.text.strip()
+        if not marks_str.isdigit():
+            prompt = bot.reply_to(message, "❌ That's not a number. Please enter the marks you want to award.")
+            bot.register_next_step_handler(prompt, process_awarded_marks, submission_id, total_marks, expected_checker_id)
+            return
+
+        marks_awarded = int(marks_str)
+        if not (0 <= marks_awarded <= total_marks):
+            prompt = bot.reply_to(message, f"❌ Invalid marks. Please enter a number between 0 and {total_marks}.")
+            bot.register_next_step_handler(prompt, process_awarded_marks, submission_id, total_marks, expected_checker_id)
+            return
+
+        # If all checks pass, update the submission in the database
+        update_response = supabase.table('practice_submissions').update({
+            'marks_awarded': marks_awarded,
+            'review_status': 'Completed'
+        }).eq('submission_id', submission_id).execute()
+        
+        # Get submitter's name to mention them
+        submission_data = supabase.table('practice_submissions').select('submitter_id').eq('submission_id', submission_id).single().execute().data
+        submitter_info = supabase.table('all_time_scores').select('user_name').eq('user_id', submission_data['submitter_id']).single().execute().data
+        submitter_name = submitter_info.get('user_name', 'the submitter')
+
+        bot.reply_to(message, f"✅ Marks awarded successfully! @{submitter_name} has scored **{marks_awarded}/{total_marks}**.", parse_mode="Markdown")
+
+    except Exception as e:
+        print(f"Error in process_awarded_marks: {traceback.format_exc()}")
+        bot.send_message(message.chat.id, "❌ An error occurred while awarding the marks.")
+
+
+@bot.message_handler(commands=['review_done'])
+def handle_review_done(msg: types.Message):
+    """
+    Handles the /review_done command from the assigned Checker.
+    """
+    if not is_group_message(msg):
+        bot.reply_to(msg, "This command can only be used in the main group chat.")
+        return
+
+    if not msg.reply_to_message or not msg.reply_to_message.photo:
+        bot.reply_to(msg, "Please use this command by replying to the photo of the answer sheet you have reviewed.")
+        return
+
+    try:
+        checker_id = msg.from_user.id
+        submission_msg_id = msg.reply_to_message.message_id
+
+        # 1. Find the submission record based on the message ID
+        # We also join with sessions to get the total_marks
+        submission_response = supabase.table('practice_submissions').select('*, practice_sessions(*)').eq('submission_message_id', submission_msg_id).single().execute()
+
+        if not submission_response.data:
+            return # This message is not a registered submission
+
+        submission = submission_response.data
+        submission_id = submission['submission_id']
+        assigned_checker_id = submission['checker_id']
+        total_marks = submission['practice_sessions']['total_marks']
+
+        # 2. Verify the command is from the correct checker
+        if checker_id != assigned_checker_id:
+            bot.reply_to(msg, "❌ You are not assigned to review this answer sheet.")
+            return
+
+        # 3. Check if it's already reviewed
+        if submission['review_status'] == 'Completed':
+            bot.reply_to(msg, "This submission has already been marked and completed.")
+            return
+
+        # 4. Ask for marks and register the handler
+        prompt = bot.reply_to(msg, f"@{msg.from_user.first_name}, thank you for the review. Please reply to **this message** with the marks awarded out of **{total_marks}**.", parse_mode="Markdown")
+        bot.register_next_step_handler(prompt, process_awarded_marks, submission_id, total_marks, checker_id)
+
+    except Exception as e:
+        print(f"Error in /review_done command: {traceback.format_exc()}")
+        report_error_to_admin(traceback.format_exc())
+        bot.send_message(msg.chat.id, "❌ An error occurred.")
+# === Practice command setup ===
+@bot.message_handler(commands=['practice'])
+@admin_required
+def handle_practice_command(msg: types.Message):
+    """
+    Asks the admin if they want to generate yesterday's report before starting a new session.
+    """
+    markup = types.InlineKeyboardMarkup()
+    markup.add(
+        types.InlineKeyboardButton("✅ Yes, Post Report", callback_data="report_yes"),
+        types.InlineKeyboardButton("❌ No, Just Start Session", callback_data="report_no")
+    )
+    bot.send_message(msg.chat.id, "Do you want to post the report card for yesterday's practice session first?", reply_markup=markup)
+# ===function contains the logic to start a new practice session.===
+
+def start_new_practice_session(chat_id):
+    """
+    This helper function contains the logic to start a new practice session.
+    """
+    try:
+        active_users_response = supabase.rpc('get_active_users_for_practice').execute()
+        if not active_users_response.data:
+            bot.send_message(chat_id, "❌ Cannot start a practice session. No users have been active in quizzes recently.")
+            return
+
+        question_setter = random.choice(active_users_response.data)
+        setter_id = question_setter['user_id']
+        setter_name = question_setter['user_name']
+        question_source = random.choice(['ICAI RTPs', 'ICAI MTPs', 'Previous Year Questions'])
+
+        supabase.table('practice_sessions').insert({
+            'question_setter_id': setter_id,
+            'question_source': question_source,
+            'status': 'Announced'
+        }).execute()
+
+        announcement = (
+            f"✍️ **Today's Written Practice Session!** ✍️\n\n"
+            f"Today's Question Setter is **@{setter_name}**!\n\n"
+            f"They will post 2 questions from **{question_source}** related to tomorrow's quiz topics.\n\n"
+            f"After posting the questions, please use the `/questions_posted` command by replying to your message."
+        )
+        bot.send_message(GROUP_ID, announcement)
+        bot.send_message(chat_id, f"✅ New practice session started. @{setter_name} has been assigned as the Question Setter.")
+    except Exception as e:
+        print(f"Error in start_new_practice_session: {traceback.format_exc()}")
+        report_error_to_admin(traceback.format_exc())
+        bot.send_message(chat_id, "❌ An error occurred while starting the practice session.")
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('report_'))
+def handle_report_confirmation(call: types.CallbackQuery):
+    """
+    Handles the admin's 'Yes' or 'No' choice for posting the report.
+    """
+    admin_chat_id = call.message.chat.id
+    bot.edit_message_text("Processing your request...", admin_chat_id, call.message.message_id)
+
+    if call.data == 'report_yes':
+        try:
+            # Call the RPC to get the report data
+            report_response = supabase.rpc('get_practice_report').execute()
+            report_data = report_response.data
+
+            if not report_data or not report_data.get('ranked_performers'):
+                 bot.send_message(GROUP_ID, "No completed practice submissions found for yesterday's session.")
+            else:
+                # Format the report
+                report_card_text = f"📋 **Written Practice Report Card: {datetime.date.today() - datetime.timedelta(days=1)}** 📋\n\n"
+                
+                # Part 1: Ranked Performers
+                report_card_text += "--- \n**🏆 Performance Ranking 🏆**\n\n"
+                rank_emojis = ["🥇", "🥈", "🥉"]
+                for i, performer in enumerate(report_data['ranked_performers']):
+                    emoji = rank_emojis[i] if i < 3 else f"*{i+1}.*"
+                    report_card_text += f"{emoji} **@{performer['submitter_name']}** - {performer['marks_awarded']}/{performer['total_marks']} ({performer['percentage']}%)\n    *(Checked by: @{performer['checker_name']})*\n\n"
+
+                # Part 2: Pending Reviews
+                if report_data.get('pending_reviews'):
+                    report_card_text += "--- \n**⚠️ Submissions Not Checked ⚠️**\n"
+                    for pending in report_data['pending_reviews']:
+                        report_card_text += f"• Answer sheet of **@{pending['submitter_name']}** is pending review by **@{pending['checker_name']}**.\n"
+                
+                # TODO: Add 'Not Submitted' logic here if needed by enhancing the RPC
+                
+                report_card_text += "\n--- \nGreat effort everyone! Keep practicing! ✨"
+                bot.send_message(GROUP_ID, report_card_text, parse_mode="Markdown")
+            
+            bot.send_message(admin_chat_id, "✅ Report posted. Now starting today's session...")
+        except Exception as e:
+            print(f"Error generating report: {traceback.format_exc()}")
+            bot.send_message(admin_chat_id, "❌ Failed to generate the report. Starting session anyway.")
+
+    # Start the new session regardless of the choice
+    start_new_practice_session(admin_chat_id)
 # =============================================================================
 # 8.Y. UNIFIED POLL ANSWER HANDLER (SIMPLIFIED & FINAL VERSION)
 # =============================================================================
