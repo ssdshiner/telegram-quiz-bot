@@ -1188,7 +1188,7 @@ def handle_mystats_command(msg: types.Message):
             return
 
         # --- Format the stats into a beautiful message ---
-        stats_message = f"📊 **Personal Performance Stats for @{user_name}** 📊\n\n"
+        stats_message = f"📊 **Personal Performance Stats for {user_name}** 📊\n\n"
         stats_message += "--- *Quiz Marathon Performance* ---\n"
         stats_message += f"🏆 **All-Time Rank:** {stats.get('all_time_rank') or 'Not Ranked'}\n"
         stats_message += f"📅 **This Week's Rank:** {stats.get('weekly_rank') or 'Not Ranked'}\n"
