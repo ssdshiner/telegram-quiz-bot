@@ -1992,18 +1992,13 @@ def send_marathon_results(session_id):
     session = QUIZ_SESSIONS.get(session_id)
     participants = QUIZ_PARTICIPANTS.get(session_id)
 
-    # If the session doesn't exist anymore, do nothing.
     if not session:
         return
 
-    # THE FIX: Determine the correct number of questions that were actually asked.
-    # This is the current question index, which is accurate even if the marathon was stopped.
     total_questions_asked = session.get('current_question_index', 0)
 
-    # Mark only the questions that were actually used as 'used'.
     if session.get('questions') and total_questions_asked > 0:
         try:
-            # Get the IDs of questions from index 0 up to the last one asked.
             used_question_ids = [q['id'] for q in session['questions'][:total_questions_asked]]
             if used_question_ids:
                 supabase.table('quiz_questions').update({'used': True}).in_('id', used_question_ids).execute()
@@ -2012,20 +2007,16 @@ def send_marathon_results(session_id):
             print(f"❌ CRITICAL ERROR: Could not mark marathon questions as used. Error: {e}")
             report_error_to_admin(f"Failed to mark marathon questions as used.\n\nError: {traceback.format_exc()}")
 
-if not participants:
+    if not participants:
         bot.send_message(GROUP_ID, f"🏁 The quiz *'{escape_markdown(session.get('title', ''))}'* has finished, but no one participated!")
     else:
-        # Sort participants by score (desc) and then by time (asc)
         sorted_items = sorted(participants.items(), key=lambda item: (item[1]['score'], -item[1]['total_time']), reverse=True)
         
         results_text = f"🏁 The quiz *'{escape_markdown(session['title'])}'* has finished!\n\n*{len(participants)}* participants answered at least one question.\n\n"
         rank_emojis = ["🥇", "🥈", "🥉"]
         
         for i, (user_id, p) in enumerate(sorted_items[:10]):
-            # --- Call our new function to record the data ---
             record_quiz_participation(user_id, p['name'], p['score'], p['total_time'])
-            # --------------------------------------------------
-
             rank = rank_emojis[i] if i < 3 else f"  *{i + 1}.*"
             name = escape_markdown(p['name'])
             percentage = (p['score'] / total_questions_asked * 100) if total_questions_asked > 0 else 0
@@ -2036,10 +2027,9 @@ if not participants:
         bot.send_message(GROUP_ID, results_text, parse_mode="Markdown")
         time.sleep(2)
         generate_quiz_insights(session_id)
-    # Cleanup session data from memory
+    
     if session_id in QUIZ_SESSIONS: del QUIZ_SESSIONS[session_id]
     if session_id in QUIZ_PARTICIPANTS: del QUIZ_PARTICIPANTS[session_id]
-
 def generate_quiz_insights(session_id):
     """Calculates and displays interesting insights about the marathon."""
     session = QUIZ_SESSIONS.get(session_id)
@@ -2494,7 +2484,6 @@ def handle_report_confirmation(call: types.CallbackQuery):
 # =============================================================================
 # 8.Y. UNIFIED POLL ANSWER HANDLER (SIMPLIFIED & FINAL VERSION)
 # =============================================================================
-
 @bot.poll_answer_handler()
 def handle_all_poll_answers(poll_answer: types.PollAnswer):
     """
@@ -2505,12 +2494,10 @@ def handle_all_poll_answers(poll_answer: types.PollAnswer):
     user_info = poll_answer.user
     selected_option = poll_answer.option_ids[0] if poll_answer.option_ids else None
 
-    # This is a safety check: if a user retracts their vote, do nothing.
     if selected_option is None:
         return
 
     try:
-        # --- ROUTE 1: Marathon Quiz ---
         session_id = str(GROUP_ID)
         marathon_session = QUIZ_SESSIONS.get(session_id)
         if marathon_session and marathon_session.get('is_active') and poll_id_str == marathon_session.get('current_poll_id'):
@@ -2540,16 +2527,14 @@ def handle_all_poll_answers(poll_answer: types.PollAnswer):
                 participant['score'] += 1
                 participant['correct_answer_times'].append(time_taken)
                 q_stats['correct_times'][user_info.id] = time_taken
-            return # IMPORTANT: End processing here for marathon answers
+            return
 
-        # --- ROUTE 2: Random Quiz / Daily Quiz ---
         else:
             active_poll_info = next((poll for poll in active_polls if poll['poll_id'] == poll_id_str), None)
             
             if active_poll_info and active_poll_info.get('type') == 'random_quiz':
                 if selected_option == active_poll_info['correct_option_id']:
                     print(f"Correct answer for random/daily quiz from {user_info.first_name}. Incrementing score.")
-                    # If it's correct, call our Supabase function
                     supabase.rpc('increment_score', {
                         'user_id_in': user_info.id,
                         'user_name_in': user_info.first_name
@@ -2558,6 +2543,7 @@ def handle_all_poll_answers(poll_answer: types.PollAnswer):
     except Exception as e:
         print(f"Error in the master poll answer handler: {traceback.format_exc()}")
         report_error_to_admin(f"Error in handle_all_poll_answers:\n{traceback.format_exc()}")
+
 @bot.message_handler(content_types=['new_chat_members'])
 def handle_new_member(msg: types.Message):
     """
