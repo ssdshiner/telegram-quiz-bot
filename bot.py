@@ -1169,32 +1169,32 @@ def handle_prune_dms(msg: types.Message):
 @membership_required
 def handle_mystats_command(msg: types.Message):
     """
-    Fetches and sends a user their personal performance statistics in a private message.
+    Fetches and sends a user their personal performance statistics in the group chat.
     """
     user_id = msg.from_user.id
     user_name = msg.from_user.first_name
-
-    # Inform the user in the group that the stats are being sent privately
-    if is_group_message(msg):
-        bot.reply_to(msg, f"Hey @{user_name}, I'm sending your personal stats to our private chat. 🤫")
 
     try:
         # Call the powerful RPC function to get all stats in one go
         response = supabase.rpc('get_user_stats', {'p_user_id': user_id}).execute()
         stats = response.data
 
+        if not stats:
+            bot.reply_to(msg, f"Sorry @{user_name}, I couldn't find any stats for you yet. Please participate in a quiz first!")
+            return
+
         # --- Format the stats into a beautiful message ---
-        stats_message = f"📊 **Your Personal Performance Stats, {user_name}** 📊\n\n"
+        stats_message = f"📊 **Personal Performance Stats for @{user_name}** 📊\n\n"
 
         # Weekly & All-Time Ranks for Marathon
         stats_message += "--- *Quiz Marathon Performance* ---\n"
-        stats_message += f"🏆 **All-Time Rank:** {stats.get('all_time_rank', 'Not Ranked Yet')}\n"
-        stats_message += f"📅 **This Week's Rank:** {stats.get('weekly_rank', 'Not Ranked Yet')}\n"
+        stats_message += f"🏆 **All-Time Rank:** {stats.get('all_time_rank') or 'Not Ranked'}\n"
+        stats_message += f"📅 **This Week's Rank:** {stats.get('weekly_rank') or 'Not Ranked'}\n"
         stats_message += f"▶️ **Total Quizzes Played:** {stats.get('total_quizzes_played', 0)}\n\n"
 
         # Random Quiz Leaderboard Stats
         stats_message += "--- *Random Quiz Performance* ---\n"
-        stats_message += f"🎯 **Leaderboard Rank:** {stats.get('random_quiz_rank', 'Not Ranked Yet')}\n"
+        stats_message += f"🎯 **Leaderboard Rank:** {stats.get('random_quiz_rank') or 'Not Ranked'}\n"
         stats_message += f"⭐ **Total Score:** {stats.get('random_quiz_score', 0)} points\n\n"
 
         # Engagement Stats
@@ -1204,17 +1204,13 @@ def handle_mystats_command(msg: types.Message):
 
         stats_message += "Keep participating to improve your stats! 💪"
 
-        # Send the final message to the user's private chat
-        bot.send_message(user_id, stats_message, parse_mode="Markdown")
+        # Send the final message as a reply in the group chat
+        bot.reply_to(msg, stats_message, parse_mode="Markdown")
 
     except Exception as e:
-        # Handle cases where the bot can't DM the user
-        if 'bot was blocked by the user' in str(e) or 'chat not found' in str(e):
-             bot.send_message(msg.chat.id, f"@{user_name}, I couldn't send you a private message. Please start a chat with me first by clicking here: @{BOT_USERNAME} and then try again.")
-        else:
-            print(f"Error in /mystats: {traceback.format_exc()}")
-            report_error_to_admin(traceback.format_exc())
-            bot.send_message(msg.chat.id, "❌ Oops! Something went wrong while fetching your stats.")
+        print(f"Error in /mystats: {traceback.format_exc()}")
+        report_error_to_admin(traceback.format_exc())
+        bot.reply_to(msg, "❌ Oops! Something went wrong while fetching your stats.")
 # NEW: Direct Message Command
 @bot.message_handler(commands=['message'])
 @admin_required
