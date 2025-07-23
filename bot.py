@@ -69,7 +69,6 @@ def new_make_request(token,
     ""
 A patched version of _make_request that automatically retries on connection errors.
 ""
-"
 retry_count = 3# How many times to retry
 retry_delay = 2# Seconds to wait between retries
 
