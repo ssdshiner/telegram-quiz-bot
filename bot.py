@@ -31,7 +31,7 @@ WEBAPP_URL = os.getenv('WEBAPP_URL')
 ADMIN_USER_ID_STR = os.getenv('ADMIN_USER_ID')
 BOT_USERNAME = "CAVYA_bot"
 PUBLIC_GROUP_COMMANDS = [
-    'todayquiz', 'askdoubt', 'answer', 'section', 'alldoubts' 'feedback'
+    'todayquiz', 'section', 'feedback'
 ]
 GOOGLE_SHEETS_CREDENTIALS_PATH = os.getenv('GOOGLE_SHEETS_CREDENTIALS_PATH')
 GOOGLE_SHEET_KEY = os.getenv('GOOGLE_SHEET_KEY')
@@ -112,9 +112,6 @@ QUIZ_SESSIONS = {}
 # Stores detailed participant stats for marathons: score, time, questions answered, etc.
 QUIZ_PARTICIPANTS = {}
 user_states = {}
-last_quiz_posted_hour = -1
-last_doubt_reminder_hour = -1
-
 
 # =============================================================================
 # 4. GOOGLE SHEETS INTEGRATION
@@ -234,62 +231,6 @@ def live_countdown(chat_id, message_id, duration_seconds):
 
     except Exception as e:
         print(f"Error in countdown thread: {e}")
-
-
-def post_daily_quiz():
-    """
-    Fetches a random, unused question and posts it as a quiz.
-    This version now saves its state for correct answer validation.
-    """
-    if not supabase: return
-    try:
-        response = supabase.table('questions').select('*').eq('used', False).limit(50).execute()
-        if not response.data:
-            print("ℹ️ No unused questions for daily quiz. Resetting.")
-            supabase.table('questions').update({'used': False}).neq('id', 0).execute()
-            response = supabase.table('questions').select('*').eq('used', False).limit(50).execute()
-            if not response.data:
-                report_error_to_admin("Daily Quiz Failed: No questions found in the database.")
-                return
-
-        quiz_data = random.choice(response.data)
-        question_id = quiz_data['id']
-        question_text = quiz_data.get('question_text', 'No question text provided.')
-        options = quiz_data.get('options', [])
-        correct_index = quiz_data.get('correct_index')
-        explanation_text = quiz_data.get('explanation')
-
-        poll = bot.send_poll(
-            chat_id=GROUP_ID,
-            question=f"🧠 Daily Automated Quiz 🧠\n\n{question_text}",
-            options=options,
-            type='quiz',
-            correct_option_id=correct_index,
-            is_anonymous=False,
-            open_period=600,
-            explanation=explanation_text,
-            explanation_parse_mode="Markdown"
-        )
-        
-        # THE FIX: Save the correct answer to memory for the poll handler.
-        QUIZ_SESSIONS[poll.poll.id] = {
-            'correct_option': correct_index,
-            'type': 'daily_quiz' # Add a type for clarity
-        }
-        
-        bot.send_message(
-            GROUP_ID,
-            "👆 You have 10 minutes to answer the daily quiz. Good luck!",
-            reply_to_message_id=poll.message_id
-        )
-        supabase.table('questions').update({'used': True}).eq('id', question_id).execute()
-        print(f"✅ Daily quiz posted using question ID: {question_id}")
-        
-    except Exception as e:
-        print(f"❌ Failed to post daily quiz: {e}")
-        report_error_to_admin(f"Failed to post daily quiz:\n{traceback.format_exc()}")
-
-
 def admin_required(func):
     """Decorator to restrict a command to the admin."""
 
@@ -478,27 +419,6 @@ def background_worker():
             current_time_ist = datetime.datetime.now(ist_tz)
             current_hour = current_time_ist.hour
 
-            # --- Automated Bi-Hourly Quiz ---
-            if (current_hour % 2 == 0) and (last_quiz_posted_hour != current_hour):
-                print(f"⏰ It's {current_hour}:00 IST, time for a bi-hourly quiz Posting...")
-                post_daily_quiz()
-                last_quiz_posted_hour = current_hour
-
-            # --- Unanswered Doubts Reminder ---
-            if (current_hour % 2 != 0) and (last_doubt_reminder_hour != current_hour):
-                print(f"⏰ It's {current_hour}:00 IST, checking for unanswered doubts...")
-                try:
-                    response = supabase.table('doubts').select('id', count='exact').eq('status', 'unanswered').execute()
-                    unanswered_count = response.count
-                    if unanswered_count and unanswered_count > 0:
-                        # THE FIX: Removed unnecessary backslashes for standard Markdown.
-                        reminder_message = f"📢 *Doubt Reminder*\n\nThere are currently *{unanswered_count} unanswered doubt(s)* in the group. Let's help each other out! 🤝"
-                        bot.send_message(GROUP_ID, reminder_message, parse_mode="Markdown")
-                        print(f"✅ Sent a reminder for {unanswered_count} unanswered doubts.")
-                except Exception as e:
-                    print(f"❌ Failed to check for doubt reminders: {e}")
-                last_doubt_reminder_hour = current_hour
-
             # --- Process and Close Active Polls ---
             for poll in active_polls[:]: # Use a copy to safely remove items
                 close_time = poll.get('close_time')
@@ -651,12 +571,10 @@ Hello Admin! Here are your available tools.
 `/randomquiz` - Post a single quiz.
 `/roko` - Force-stop a running marathon.
 
-*💬 Member & Doubt Hub*
+*💬 Member interactions*
 `/dm` - Send a direct message.
 `/prunedms` - Clean the DM list.
-`/askdoubt` - Ask a question for the group.
-`/answer` - Reply to a specific doubt.
-`/bestanswer` - Mark a reply as the best answer.
+
 
 *🛠️ Utilities & Leaderboards*
 `/leaderboard` - Show all-time random quiz scores.
@@ -1554,207 +1472,122 @@ def handle_congratulate_command(msg: types.Message):
             f"❌ Oops! Something went wrong while generating the message. Error: {e}"
         )
 
-
 @bot.message_handler(commands=['motivate'])
 @admin_required
 def handle_motivation_command(msg: types.Message):
-    """Sends a powerful, context-rich, and extensive motivational quote for CA students."""
+    """Sends a professional and effective motivational quote from a famous personality."""
 
     quotes = [
-        # ===============================================
-        # --- Hinglish & Relatable Quotes for CA Students ---
-        # ===============================================
-        "📖 Books se ishq karoge, toh ICAI bhi tumse pyaar karega. Result dekh lena.",
-        "😴 Sapne wo nahi jo sone par aate hain, sapne wo hain jo tumhein sone nahi dete... especially during exam season.",
-        "✍️ Har attempt ek naya 'Provision' hai, bas 'Amendment' ke saath taiyaar raho.",
-        "Don't tell people your plans. Show them your results. Aur result ke din, show them your ICAI certificate.",
-        "The goal is not to be better than anyone else, but to be better than you were yesterday. Kal se ek section toh zyada yaad kar hi sakte ho.",
-        "Ye 'Study Material' ka bojh nahi, Rank-holder banne ka raasta hai. Uthao aur aage badho.",
-        "Thoda aur padh le, baad mein 'Exemption' ka maza hi kuch aur hoga.",
-        "CA banne ka safar ek marathon hai, 100-meter race nahi. Stamina banaye rakho.",
-        "Jis din result aayega, ye saari raaton ki neend qurbaani safal ho jaayegi. Keep hustling.",
-        "Confidence is key. Aur confidence aata hai Mock Test dene se. Darr ke aage jeet hai.",
-        "Duniya 'turnover' dekhti hai, tum 'net profit' pe focus karo. Quality study matters.",
-        "Social media ka 'scroll' nahi, Bare Act ka 'scroll' karo. Zyada 'valuable' hai.",
-        "Har 'Standard on Auditing' tumhari professional life ka standard set karega. Dhyan se padho.",
-        "Procrastination is the thief of time... and attempts. Aaj ka kaam kal par mat daalo.",
-        "Result ke din 'party' karni hai ya 'pachtana' hai, choice aaj ki mehnat par depend karti hai.",
+        # --- On Hard Work & Success ---
+        "\"Success is the sum of small efforts, repeated day in and day out.\" - **Robert Collier**",
+        "\"The only place where success comes before work is in the dictionary.\" - **Vidal Sassoon**",
+        "\"I find that the harder I work, the more luck I seem to have.\" - **Thomas Jefferson**",
+        "\"Success is no accident. It is hard work, perseverance, learning, studying, sacrifice and most of all, love of what you are doing.\" - **Pelé**",
+        "\"The price of success is hard work, dedication to the job at hand, and the determination that whether we win or lose, we have applied the best of ourselves to the task at hand.\" - **Vince Lombardi**",
+        "\"There are no secrets to success. It is the result of preparation, hard work, and learning from failure.\" - **Colin Powell**",
 
-        # ===============================================
-        # --- Subject-Specific Motivation ---
-        # ===============================================
-        "⚖️ **Law:** Life is like a 'Bare Act'. Thoda complicated, but har 'section' ka ek matlab hai. Keep reading.",
-        "📊 **Accounts:** Zindagi ko balance sheet ki tarah balance karna seekho. Assets (Knowledge) badhao, Liabilities (Doubts) ghatao.",
-        "🧾 **Taxation:** Don't let 'due dates' scare you. Plan your studies like you plan your taxes - efficiently and on time.",
-        "🛡️ **Audit:** Har galti ek 'misstatement' hai. 'Verify' karo, 'rectify' karo, aur aage badho. That's the spirit of an auditor.",
-        "💰 **Costing:** Har minute ki 'cost' hai. Invest your time wisely for the best 'return' on your rank.",
-        "📈 **Financial Management:** Apne 'Portfolio' of knowledge ko diversify karo, risk kam hoga aur rank ka 'return' badhega.",
-        "📉 **Economics:** Demand for CAs is always high. Supply your best efforts to clear the exam.",
-        "🤝 **Ethics:** Your integrity is your biggest asset. Study with honesty, practice with honesty.",
-        "📝 **Advanced Accounting:** Har 'AS' aur 'Ind AS' ek puzzle hai. Solve karte jao, expert bante jao.",
-        "💼 **Corporate Law:** 'Memorandum' aur 'Articles' sirf companies ke nahi, apne study plan ke bhi banao. Clarity rahegi.",
-        "🔢 **GST:** Zindagi mein itne 'credits' kamao ki 'output tax liability' (failure) hamesha zero rahe.",
-        "🌍 **International Tax:** Sirf desh mein nahi, videsh mein bhi naam karna hai. Har 'DTAA' ek naya door open karta hai.",
-        "⚙️ **Strategic Management:** Sirf padhna nahi, 'strategize' karna bhi zaroori hai. Plan your chapters, win the exam.",
-        "📑 **Company Law:** Har 'resolution' jo tum pass karte ho, tumhe pass karne ke closer le jaata hai.",
-        "💹 **SFM:** Derivatives jitne complex lagte hain, utne hote nahi. Bas 'underlying asset' (concept) ko samajh lo.",
-        # ===============================================
-        # --- Quotes from Famous Personalities ---
-        # ===============================================
-        "\"The future belongs to those who believe in the beauty of their dreams.\" - **Eleanor Roosevelt**",
+        # --- On Perseverance & Overcoming Failure ---
         "\"Success is not final, failure is not fatal: it is the courage to continue that counts.\" - **Winston Churchill**",
+        "\"Our greatest weakness lies in giving up. The most certain way to succeed is always to try just one more time.\" - **Thomas A. Edison**",
+        "\"I have not failed. I've just found 10,000 ways that won't work.\" - **Thomas A. Edison**",
+        "\"It does not matter how slowly you go as long as you do not stop.\" - **Confucius**",
+        "\"The gem cannot be polished without friction, nor man perfected without trials.\" - **Seneca**",
+        "\"A winner is a dreamer who never gives up.\" - **Nelson Mandela**",
+        "\"I can accept failure, everyone fails at something. But I can't accept not trying.\" - **Michael Jordan**",
+
+        # --- On Knowledge & Learning ---
+        "\"An investment in knowledge pays the best interest.\" - **Benjamin Franklin**",
+        "\"The beautiful thing about learning is that nobody can take it away from you.\" - **B.B. King**",
+        "\"Live as if you were to die tomorrow. Learn as if you were to live forever.\" - **Mahatma Gandhi**",
+        "\"The expert in anything was once a beginner.\" - **Helen Hayes**",
+        "\"The only source of knowledge is experience.\" - **Albert Einstein**",
+
+        # --- On Mindset & Belief ---
+        "\"Believe you can and you're halfway there.\" - **Theodore Roosevelt**",
+        "\"The future belongs to those who believe in the beauty of their dreams.\" - **Eleanor Roosevelt**",
         "\"You have to dream before your dreams can come true.\" - **A. P. J. Abdul Kalam**",
         "\"Arise, awake, and stop not till the goal is reached.\" - **Swami Vivekananda**",
-        "\"The only way to do great work is to love what you do.\" - **Steve Jobs**",
-        "\"I find that the harder I work, the more luck I seem to have.\" - **Thomas Jefferson**",
-        "\"Our greatest weakness lies in giving up. The most certain way to succeed is always to try just one more time.\" - **Thomas A. Edison**",
-        "\"It does not matter how slowly you go as long as you do not stop.\" - **Confucius**",
-        "\"Believe you can and you're halfway there.\" - **Theodore Roosevelt**",
-        "\"An investment in knowledge pays the best interest.\" - **Benjamin Franklin**",
-        "\"The secret of getting ahead is getting started.\" - **Mark Twain**",
+        "\"The mind is everything. What you think you become.\" - **Buddha**",
         "\"I am not a product of my circumstances. I am a product of my decisions.\" - **Stephen Covey**",
-        "\"Strive for progress, not perfection.\" - **Unknown**",
-        "\"The expert in anything was once a beginner.\" - **Helen Hayes**",
-        "\"The journey of a thousand miles begins with a single step.\" - **Lao Tzu**"
+
+        # --- On Action & Strategy ---
+        "\"The secret of getting ahead is getting started.\" - **Mark Twain**",
+        "\"A goal without a plan is just a wish.\" - **Antoine de Saint-Exupéry**",
+        "\"Well done is better than well said.\" - **Benjamin Franklin**",
+        "\"The journey of a thousand miles begins with a single step.\" - **Lao Tzu**",
+        "\"Action is the foundational key to all success.\" - **Pablo Picasso**"
     ]
 
     # Send a random quote from the master list
     bot.send_message(GROUP_ID, random.choice(quotes), parse_mode="Markdown")
-    bot.send_message(msg.chat.id, "✅ Motivation sent to the group.")
-
+    bot.send_message(msg.chat.id, "✅ Professional motivation sent to the group.")
 
 @bot.message_handler(commands=['studytip'])
 @admin_required
 def handle_study_tip_command(msg: types.Message):
-    """Sends a useful, science-backed study tip or fact, tailored for CA Inter students."""
+    """Sends a professional, structured study strategy for CA Inter students."""
 
     tips = [
         # ===============================================
-        # --- Advanced Scientific Study Techniques ---
+        # --- 1. The Foundation: Deep Conceptual Clarity ---
         # ===============================================
-        ("🧠 **Technique: The Feynman Method for Law & Audit**\n\n"
-         "1. Isolate a Section/SA. 2. Explain it aloud to a non-commerce friend. 3. Pinpoint where you get stuck or use jargon—that's your weak spot. 4. Re-read and simplify your explanation. This builds true conceptual clarity, which is what ICAI tests."
-         ),
-        ("🔄 **Technique: Active Recall for Theory**\n\n"
-         "Instead of re-reading, close the book and actively retrieve the information. For example, ask yourself: 'What are the key provisions of Section 141(3)?' This mental struggle creates stronger neural pathways than passive reading."
-         ),
-        ("🗓️ **Technique: Spaced Repetition for Retention**\n\n"
-         "Review a concept at increasing intervals (e.g., Day 1, Day 3, Day 7, Day 21). This scientifically proven method moves information from your short-term to your long-term memory, crucial for retaining the vast CA syllabus."
-         ),
-        ("🧩 **Technique: Interleaving for Practical Subjects**\n\n"
-         "Instead of solving 10 problems of the same type, solve one problem each from different chapters (e.g., Amalgamation, Internal Reconstruction, Cash Flow). This forces your brain to learn *how* to identify the right method, not just *how* to apply it."
-         ),
-        ("🔗 **Technique: Chunking for Large Chapters**\n\n"
-         "Break down a large chapter like 'Capital Budgeting' into smaller, manageable 'chunks' (e.g., Payback Period, NPV, IRR). Master each chunk individually before connecting them. This prevents feeling overwhelmed and improves comprehension."
-         ),
-        ("📝 **Technique: Dual Coding**\n\n"
-         "Combine verbal materials with visual ones. When studying a complex provision in Law, draw a simple flowchart or diagram next to it. This creates two ways for your brain to recall the information, significantly boosting memory."
-         ),
-        ("🤔 **Technique: Elaborative Interrogation**\n\n"
-         "As you study, constantly ask yourself 'Why?' For example, 'Why is this accounting treatment required by Ind AS 115?' This forces you to find the underlying logic, leading to a deeper understanding beyond simple memorization."
-         ),
-        ("✍️ **Technique: Self-Explanation**\n\n"
-         "After reading a paragraph or solving a problem, explain to yourself, step-by-step, how the conclusion was reached. Vocalizing the process solidifies the concept and exposes any gaps in your logic."
-         ),
-        ("📖 **Technique: SQ3R Method for Textbooks**\n\n"
-         "**S**urvey (skim the chapter), **Q**uestion (turn headings into questions), **R**ead (read to answer the questions), **R**ecite (summarize what you read), **R**eview (go over it again). This structured approach improves reading comprehension and retention."
-         ),
-        ("💡 **Technique: Mind Palace (Method of Loci)**\n\n"
-         "For lists (like features of a partnership or steps in an audit), associate each item with a specific location in a familiar place (like your house). To recall the list, you mentally 'walk' through your house. It's a powerful mnemonic device."
-         ),
-        ("⏳ **Technique: Parkinson's Law for Productivity**\n\n"
-         "Parkinson's Law states that 'work expands to fill the time available for its completion.' Instead of saying 'I will study Accounts today,' say 'I will finish the Amalgamation chapter in the next 3 hours.' Setting aggressive deadlines increases focus."
-         ),
-        ("🎯 **Technique: The 5-Minute Rule**\n\n"
-         "To beat procrastination, commit to studying a difficult subject for just 5 minutes. Often, the hardest part is starting. After 5 minutes, you'll likely have the momentum to continue for much longer."
-         ),
+        ("🏛️ **Strategy: Master Concepts with the Feynman Technique.**\n\n"
+         "Pick a tough topic (e.g., a section in Law or an Ind AS). Teach it aloud in simple terms, as if to a 10th grader. If you struggle or use jargon, you've found your weak spot. Go back, simplify, and master it. *ICAI tests understanding, not memory.*"
+        ),
+        ("🤔 **Strategy: Ask 'Why' Before 'What'.**\n\n"
+         "For every provision or formula, ask: 'Why does this rule exist? What problem does it solve?' For instance, 'Why is deferred tax created?' Understanding the logic behind a concept makes it unforgettable and helps in case-study questions."
+        ),
+        ("🎨 **Strategy: Use Dual Coding for Theory.**\n\n"
+         "Our brains process images faster than text. For complex theory subjects like Audit and Law, create simple flowcharts, mind maps, or diagrams alongside your notes. This creates two recall pathways (visual and verbal), doubling your retention power."
+        ),
 
         # ===============================================
-        # --- Essential Health & Brain Facts ---
+        # --- 2. The Framework: Building Lasting Memory ---
         # ===============================================
-        ("😴 **Fact: Sleep Consolidates Memory**\n\n"
-         "During deep sleep (NREM stage 3), your brain transfers memories from the temporary hippocampus to the permanent neocortex. Sacrificing sleep for cramming is scientifically counterproductive."
-         ),
-        ("💧 **Fact: Dehydration Shrinks Your Brain**\n\n"
-         "Even mild dehydration can temporarily shrink brain tissue, impairing concentration and memory. Aim for 2-3 liters of water daily. A hydrated brain is a high-performing brain."
-         ),
-        ("🏃‍♂️ **Fact: Exercise Creates New Brain Cells**\n\n"
-         "Aerobic exercise promotes neurogenesis—the creation of new neurons—in the hippocampus, a brain region vital for learning. A 30-minute workout can be more beneficial than an extra hour of passive reading."
-         ),
-        ("🥜 **Fact: Omega-3s are Brain Building Blocks**\n\n"
-         "Your brain is nearly 60% fat. Omega-3 fatty acids (found in walnuts, flaxseeds) are essential for building brain and nerve cells. They are literally the raw materials for a smarter brain."
-         ),
-        ("☀️ **Fact: Sunlight Boosts Serotonin & Vitamin D**\n\n"
-         "A 15-minute walk in morning sunlight boosts serotonin (improves mood) and produces Vitamin D (linked to cognitive function). Don't be a cave-dweller during study leave."
-         ),
-        ("🧘 **Fact: Meditation Thickens the Prefrontal Cortex**\n\n"
-         "Regular mindfulness meditation has been shown to increase grey matter density in the prefrontal cortex, the area responsible for focus, planning, and impulse control. Just 10 minutes a day can make a difference."
-         ),
-        ("☕ **Fact: Strategic Use of Caffeine**\n\n"
-         "Caffeine blocks adenosine, a sleep-inducing chemical. It's most effective when used strategically for specific, high-focus tasks, not constantly. Avoid it 6-8 hours before bedtime as it disrupts sleep quality."
-         ),
-        ("🎶 **Fact: The 'Mozart Effect' is a Myth, But...**\n\n"
-         "Listening to classical music doesn't make you smarter. However, listening to instrumental music (without lyrics) can help block out distracting noises and improve focus for some individuals. Experiment to see if it works for you."
-         ),
-        ("🌿 **Fact: Nature Reduces Mental Fatigue**\n\n"
-         "Studies show that even looking at pictures of nature or having a plant on your desk can restore attention and reduce mental fatigue. Take short breaks to look out a window or walk in a park."
-         ),
-        ("😂 **Fact: Laughter Reduces Stress Hormones**\n\n"
-         "A good laugh reduces levels of cortisol and epinephrine (stress hormones) and releases endorphins. Taking a short break to watch a funny video can genuinely reset your brain for the next study session."
-         ),
-        ("📱 **Fact: Blue Light from Screens Disrupts Sleep**\n\n"
-         "The blue light emitted from phones and laptops suppresses the production of melatonin, the hormone that regulates sleep. Stop using screens at least 60-90 minutes before you plan to sleep."
-         ),
-        ("🥦 **Fact: Gut Health Affects Brain Health**\n\n"
-         "The gut-brain axis is a real thing. A healthy diet rich in fiber and probiotics (like yogurt) can reduce brain fog and improve mood and cognitive function. Junk food literally slows your brain down."
-         ),
+        ("🔄 **Strategy: Defeat the Forgetting Curve with Spaced Repetition.**\n\n"
+         "Instead of cramming, review topics at increasing intervals: Day 1, Day 3, Day 7, Day 21, Day 45. This scientifically proven method moves information to your long-term memory, which is essential for the vast CA syllabus."
+        ),
+        ("🧠 **Strategy: Prioritize Active Recall over Passive Re-reading.**\n\n"
+         "Re-reading creates an illusion of competence. Instead, close the book and actively retrieve information. Write down key points from memory, or answer questions from the back of the chapter. The mental struggle is what builds strong memory."
+        ),
+        ("🔀 **Strategy: Interleave Practical Subjects.**\n\n"
+         "Don't solve 10 problems of Amalgamation in a row. Instead, solve one from Amalgamation, one from Internal Reconstruction, and one from Cash Flow. This 'interleaving' trains your brain to identify *which* method to use, a key skill for the exam hall."
+        ),
 
         # ===============================================
-        # --- ICAI Exam & Strategy Insights ---
+        # --- 3. The Edge: Peak Productivity & Exam Strategy ---
         # ===============================================
-        ("✍️ **Strategy: The First 15 Minutes are Golden**\n\n"
-         "Use the reading time to select your 100 marks and sequence your answers. Prioritize questions you are 100% confident in. A strong start builds momentum and secures passing marks early."
-         ),
-        ("🤔 **Insight: ICAI Tests 'Why', Not Just 'What'**\n\n"
-         "For every provision, ask 'Why does this exist? What problem does it solve?' This conceptual clarity is the key to cracking case-study based questions, which are becoming more common."
-         ),
-        ("📝 **Strategy: Presentation is a Force Multiplier**\n\n"
-         "In Law and Audit, structure your answers: 1. Relevant Provision, 2. Facts of the Case, 3. Analysis, 4. Conclusion. Underline keywords. This can fetch you 2 extra marks per question."
-         ),
-        ("🧘 **Insight: Performance Under Pressure**\n\n"
-         "The CA exam is a test of mental toughness. Practice solving full 3-hour mock papers in a timed, exam-like environment. This trains your brain to handle pressure and manage time effectively on the final day."
-         ),
-        ("📜 **Fact: Quoting Section Numbers**\n\n"
-         "**Rule:** If you are 110% sure, quote it. If there is a 1% doubt, write 'As per the relevant provisions of the Companies Act, 2013...' and explain the provision correctly. You will still get full marks for the concept."
-         ),
-        ("📑 **Insight: Use ICAI's Language**\n\n"
-         "Try to incorporate keywords and phrases from the ICAI Study Material into your answers. Examiners are familiar with this language, and using it shows you have studied from the source material."
-         ),
-        ("⏰ **Strategy: The A-B-C Analysis**\n\n"
-         "Categorize all chapters into: **A** (Most Important, High Weightage), **B** (Important, Average Weightage), and **C** (Less Important, Low Weightage). Allocate your study time accordingly, ensuring 100% coverage of Category A."
-         ),
-        ("🧐 **Insight: Pay Attention to RTPs, MTPs, and Past Papers**\n\n"
-         "ICAI often repeats concepts or question patterns from these resources. Solving the last 5 attempts' papers is non-negotiable. It's the best way to understand the examiner's mindset."
-         ),
-        ("✒️ **Strategy: The Importance of Working Notes**\n\n"
-         "In practical subjects like Accounts and Costing, working notes carry marks. Make them neat, clear, and properly referenced in your main answer. They are not 'rough work'."
-         ),
-        ("❌ **Insight: Negative Marking in MCQs**\n\n"
-         "For the 30-mark MCQ papers, there is NO negative marking. This means you must attempt all 30 questions, even if you have to make an educated guess. Leaving an MCQ blank is a lost opportunity."
-         ),
-        ("🔚 **Strategy: The Last Month Revision**\n\n"
-         "The final month should be dedicated solely to revision and mock tests. Do not pick up any new topic in the last 30 days. Consolidating what you already know is far more important."
-         ),
-        ("🤝 **Insight: Group Study for Doubts Only**\n\n"
-         "Use study groups strategically. They are excellent for clearing specific doubts but terrible for learning a new chapter from scratch. Study alone, but discuss and solve doubts in a group."
-         )
+        ("⏳ **Strategy: Apply Parkinson's Law to Your Study Blocks.**\n\n"
+         "'Work expands to fill the time available.' Don't just 'study Accounts.' Instead, set an aggressive deadline: 'I will master the concepts and solve 5 problems of Chapter X in 3 hours.' This creates focus and urgency."
+        ),
+        ("🎯 **Strategy: Implement the ABC Analysis Ruthlessly.**\n\n"
+         "Categorize all chapters: **A** (Must-do, 70% marks), **B** (Good to do, 20% marks), **C** (If time permits, 10% marks). Ensure 100% coverage of 'A' category chapters, including multiple revisions. This is the smartest way to ensure you pass."
+        ),
+        ("✍️ **Strategy: Presentation is a Force Multiplier.**\n\n"
+         "Your knowledge is useless if you can't present it. For Law/Audit, use the 4-para structure: (1) Provision, (2) Facts, (3) Analysis, (4) Conclusion. Underline keywords and section numbers (only if 110% sure). This can add 10-15 marks to your total."
+        ),
+        ("🧘 **Strategy: Master the Exam Environment Beforehand.**\n\n"
+         "The CA exam is a test of performance under pressure. Solve at least 3-4 full-length mock papers in a strict, timed environment (e.g., 2 PM to 5 PM). This trains your mind and body for the final day, reducing anxiety and improving time management."
+        ),
+
+        # ===============================================
+        # --- 4. The Engine: Brain & Body Optimization ---
+        # ===============================================
+        ("😴 **Pro-Tip: Treat Sleep as a Non-Negotiable Study Tool.**\n\n"
+         "During deep sleep, your brain consolidates what you've learned, moving it to long-term memory. A 7-8 hour sleep is more productive for your rank than 2 hours of late-night cramming. Top performers prioritize sleep."
+        ),
+        ("💧 **Pro-Tip: A Hydrated Brain is a Fast Brain.**\n\n"
+         "Even 1-2% dehydration can significantly impair cognitive functions like concentration and short-term memory. Keep a water bottle on your desk at all times. Aim for 3 liters a day. This is the easiest performance boost you can get."
+        ),
+        ("🏃‍♂️ **Pro-Tip: Use Exercise to Grow Your Brain.**\n\n"
+         "Just 30 minutes of moderate exercise (like a brisk walk or jogging) increases blood flow to the brain and promotes the growth of new neurons in the hippocampus, the memory center. Think of it as investing in your brain's hardware."
+        )
     ]
 
     # Send a random tip from the master list
     tip = random.choice(tips)
     bot.send_message(GROUP_ID, tip, parse_mode="Markdown")
-    bot.send_message(msg.chat.id, "✅ Study tip sent to the group")
-
+    bot.send_message(msg.chat.id, "✅ Professional study strategy sent to the group.")
 
 # =============================================================================
 # 8.12. LAW LIBRARY FEATURE (/section) - FINAL & ROBUST VERSION
@@ -1837,376 +1670,6 @@ def handle_section_command(msg: types.Message):
             msg.chat.id,
             "❌ Oops Something went wrong while fetching the details.")
 
-
-# =============================================================================
-# 16 SUPER DOUBT HUB FEATURE (Interactive, AI-like, with Best Answer System)
-# =============================================================================
-
-
-def find_related_doubts(question_text):
-    """
-    Finds the single most relevant, high-quality doubt from the database.
-    """
-    keywords = [word for word in question_text.split() if len(word) > 4]
-    if not keywords:
-        return None
-    query_string = " | ".join(keywords)
-    try:
-        # Find the single best match from doubts that have a 'best_answer_text'
-        response = supabase.table('doubts') \
-            .select('id, question, best_answer_text') \
-            .not_.is_('best_answer_text', None) \
-            .text_search('question', query_string, config='english') \
-            .limit(1) \
-            .execute()
-        return response.data[0] if response.data else None
-    except Exception as e:
-        print(f"Note: Text search for related doubts failed: {e}")
-        return None
-
-
-def create_new_doubt(chat_id, user, question_text, priority):
-    """Helper function to create a new doubt entry and post it."""
-    try:
-        student_name = user.first_name
-        student_id = user.id
-
-        insert_response = supabase.table('doubts').insert({
-            'group_id': chat_id,
-            'student_name': student_name,
-            'student_id': student_id,
-            'question': question_text,
-            'status': 'unanswered',
-            'priority': priority,
-            'all_answer_message_ids': []
-        }).execute()
-
-        doubt_id = insert_response.data[0]['id']
-
-        status_icon = "❗" if priority == 'high' else "🔥" if priority == 'urgent' else "❓"
-        formatted_message = (
-            f"<b>#Doubt{doubt_id}: Unanswered {status_icon}</b>\n\n"
-            f"<b>Student:</b> {student_name}\n"
-            f"<b>Question:</b>\n<pre>{question_text}</pre>\n\n"
-            f"<i>You can help by replying with:</i>\n<code>/answer {doubt_id} [your answer]</code>"
-        )
-        sent_doubt_msg = bot.send_message(chat_id,
-                                          formatted_message,
-                                          parse_mode="HTML")
-
-        supabase.table('doubts').update({
-            'message_id': sent_doubt_msg.message_id
-        }).eq('id', doubt_id).execute()
-
-        if priority in ['high', 'urgent']:
-            bot.pin_chat_message(chat_id,
-                                 sent_doubt_msg.message_id,
-                                 disable_notification=True)
-
-    except Exception as e:
-        print(f"Error in create_new_doubt: {traceback.format_exc()}")
-        bot.send_message(
-            chat_id,
-            "❌ Oops Something went wrong while creating your doubt. Please try again."
-        )
-
-
-@bot.message_handler(commands=['askdoubt'])
-@membership_required
-def handle_askdoubt(msg: types.Message):
-    """Handles the /askdoubt command, now with an interactive confirmation flow."""
-    if not is_group_message(msg):
-        bot.reply_to(msg, "This command can only be used in the main group.")
-        return
-
-    command_text = msg.text.replace('/askdoubt', '').strip()
-
-    priority = 'normal'
-    if command_text.lower().startswith('[high]'):
-        priority = 'high'
-        question_text = command_text[6:].strip()
-    elif command_text.lower().startswith('[urgent]'):
-        priority = 'urgent'
-        question_text = command_text[8:].strip()
-    else:
-        question_text = command_text
-
-    if not question_text:
-        bot.reply_to(msg, (
-            "Please write your question after the command.\n\n"
-            "💡 **Tip:** Put clear and concise questions. Ensure keywords are spelled correctly for best results.\n"
-            "*Example:* `/askdoubt [High] What is the difference between AS 19 and Ind AS 116?`"
-        ),
-                     parse_mode="Markdown")
-        return
-
-    # --- Related Doubts Finder 2.0 in action ---
-    related_doubt = find_related_doubts(question_text)
-
-    if related_doubt:
-        # If a similar doubt is found, ask the user for confirmation
-        markup = types.InlineKeyboardMarkup()
-        # Pass necessary info in callback_data
-        yes_callback = f"show_ans_{related_doubt['id']}"
-        no_callback = f"ask_new_{hash(question_text)}"  # Use hash to keep it short
-        markup.add(
-            types.InlineKeyboardButton("Yes, Show Answer",
-                                       callback_data=yes_callback),
-            types.InlineKeyboardButton("No, It's Different",
-                                       callback_data=no_callback))
-
-        # Store the user's question temporarily for the 'No' option
-        user_states[f"doubt_{hash(question_text)}"] = {
-            'question': question_text,
-            'priority': priority
-        }
-
-        # Escape all variable content
-        safe_user_name = escape_markdown(msg.from_user.first_name)
-        safe_question_preview = escape_markdown(
-            related_doubt['question'][:150])
-
-        bot.send_message(
-            msg.chat.id,
-            f"Hold on, {safe_user_name} Is your question similar to this previously answered doubt?\n\n"
-            f"➡️ *#Doubt{related_doubt['id']}:* _{safe_question_preview}\.\.\._\n\n"
-            "Please confirm:",
-            reply_markup=markup,
-            parse_mode="Markdown")
-
-        # We don't delete the user's message yet, we wait for their choice.
-    else:
-        # If no related doubt is found, create a new one directly
-        create_new_doubt(msg.chat.id, msg.from_user, question_text, priority)
-        bot.delete_message(msg.chat.id, msg.message_id)
-
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('show_ans_')
-                            or call.data.startswith('ask_new_'))
-def handle_doubt_confirmation(call: types.CallbackQuery):
-    """Handles the 'Yes' or 'No' button press from the related doubt prompt."""
-    user_id = call.from_user.id
-
-    if call.data.startswith('show_ans_'):
-        doubt_id = int(call.data.split('_')[-1])
-
-        # Fetch the best answer for the related doubt
-        response = supabase.table('doubts').select('best_answer_text').eq(
-            'id', doubt_id).limit(1).execute()
-        if response.data and response.data[0]['best_answer_text']:
-            best_answer = response.data[0]['best_answer_text']
-            bot.edit_message_text(
-                f"Great Here is the best answer for a similar doubt (*#Doubt{doubt_id}*):\n\n"
-                f"```\n{best_answer}\n```",
-                call.message.chat.id,
-                call.message.message_id,
-                parse_mode="Markdown")
-        else:
-            bot.edit_message_text(
-                "Sorry, I couldn't find the answer for that doubt. Please ask as a new question.",
-                call.message.chat.id, call.message.message_id)
-
-    elif call.data.startswith('ask_new_'):
-        question_hash = call.data.split('_')[-1]
-
-        # Retrieve the user's original question from the state
-        original_doubt_data = user_states.get(f"doubt_{question_hash}")
-        if original_doubt_data:
-            bot.edit_message_text("Okay, posting it as a new doubt for you",
-                                  call.message.chat.id,
-                                  call.message.message_id)
-            create_new_doubt(call.message.chat.id, call.from_user,
-                             original_doubt_data['question'],
-                             original_doubt_data['priority'])
-            # Clean up the state
-            del user_states[f"doubt_{question_hash}"]
-        else:
-            bot.edit_message_text(
-                "Sorry, something went wrong. Please try asking your doubt again using /askdoubt.",
-                call.message.chat.id, call.message.message_id)
-
-
-# === REPLACE YOUR ENTIRE handle_answer FUNCTION WITH THIS ===
-
-
-@bot.message_handler(commands=['answer'])
-@membership_required
-def handle_answer(msg: types.Message):
-    """Handles the /answer command. Uses send_message for error feedback."""
-    if not is_group_message(msg):
-        bot.send_message(msg.chat.id,
-                         "This command can only be used in the main group.")
-        return
-
-    try:
-        parts = msg.text.split(' ', 2)
-        if len(parts) < 3:
-            bot.send_message(
-                msg.chat.id,
-                "Invalid format. Use: `/answer [Doubt_ID] [Your Answer]`\n*Example:* `/answer 101 The answer is...`",
-                parse_mode="Markdown")
-            return
-
-        doubt_id = int(parts[1])
-        answer_text = parts[2].strip()
-
-        fetch_response = supabase.table(
-            'doubts').select('message_id, all_answer_message_ids').eq(
-                'id', doubt_id).limit(1).execute()
-        if not fetch_response.data:
-            bot.send_message(msg.chat.id,
-                             f"❌ Doubt with ID #{doubt_id} not found.")
-            return
-
-        doubt_data = fetch_response.data[0]
-        original_message_id = doubt_data['message_id']
-        all_answers = doubt_data.get('all_answer_message_ids', [])
-
-        # This is the critical part: escaping the user's name and their answer text.
-        safe_answerer_name = escape_markdown(msg.from_user.first_name)
-        safe_answer_text = escape_markdown(answer_text)
-
-        # Sending the reply to the original doubt message
-        sent_answer_msg = bot.send_message(
-            chat_id=msg.chat.id,
-            text=f"↪️ *Answer by {safe_answerer_name}:*\n\n{safe_answer_text}",
-            reply_to_message_id=original_message_id,
-            parse_mode="Markdown")
-
-        all_answers.append(sent_answer_msg.message_id)
-        supabase.table('doubts').update({
-            'all_answer_message_ids': all_answers
-        }).eq('id', doubt_id).execute()
-
-        # Delete the user's command message `/answer ...`
-        bot.delete_message(msg.chat.id, msg.message_id)
-
-    except (ValueError, IndexError):
-        bot.send_message(msg.chat.id,
-                         "Invalid Doubt ID. Please use a number.",
-                         reply_to_message_id=msg.message_id)
-    except Exception as e:
-        print(f"Error in /answer: {traceback.format_exc()}")
-        bot.send_message(
-            msg.chat.id,
-            "❌ Oops Something went wrong while submitting your answer.",
-            reply_to_message_id=msg.message_id)
-
-@bot.message_handler(commands=['bestanswer'])
-@membership_required
-def handle_best_answer(msg: types.Message):
-    """Handles marking an answer as the best one. MUST be used in the group."""
-    # --- FIX: Ensure this command only works in the main group chat ---
-    if not is_group_message(msg):
-        bot.reply_to(msg, "This command can only be used in the main group chat.")
-        return
-
-    try:
-        parts = msg.text.split(' ', 1)
-        if len(parts) < 2 or not msg.reply_to_message:
-            bot.reply_to(
-                msg,
-                "Invalid format. Use: `/bestanswer [Doubt_ID]` by *replying* to the best answer message.",
-                parse_mode="Markdown")
-            return
-
-        doubt_id = int(parts[1])
-        best_answer_msg = msg.reply_to_message
-
-        # ... (rest of the function is the same) ...
-        fetch_response = supabase.table('doubts').select('*').eq('id', doubt_id).limit(1).execute()
-        if not fetch_response.data:
-            bot.reply_to(msg, f"❌ Doubt with ID #{doubt_id} not found.")
-            return
-
-        doubt_data = fetch_response.data[0]
-
-        if not (msg.from_user.id == doubt_data['student_id'] or is_admin(msg.from_user.id)):
-            bot.reply_to(msg, "❌ You can only mark the best answer for your own doubt.")
-            return
-
-        best_answer_text = best_answer_msg.text.split(':', 1)[-1].strip()
-        updated_message_text = (
-            f"<b>#Doubt{doubt_id}: Answered ✅</b>\n\n"
-            f"<b>Student:</b> {doubt_data['student_name']}\n"
-            f"<b>Question:</b>\n<pre>{doubt_data['question']}</pre>\n\n"
-            f"<i>🏆 Best answer chosen by {msg.from_user.first_name}:</i>\n<pre>{best_answer_text}</pre>"
-        )
-        bot.edit_message_text(updated_message_text,
-                              chat_id=msg.chat.id,
-                              message_id=doubt_data['message_id'],
-                              parse_mode="HTML")
-
-        if doubt_data['priority'] in ['high', 'urgent']:
-            try:
-                bot.unpin_chat_message(msg.chat.id, doubt_data['message_id'])
-            except Exception as e:
-                print(f"Could not unpin message for doubt {doubt_id}: {e}")
-
-        supabase.table('doubts').update({
-            'status': 'answered',
-            'best_answer_by_id': best_answer_msg.from_user.id,
-            'best_answer_text': best_answer_text
-        }).eq('id', doubt_id).execute()
-
-        all_answer_ids = doubt_data.get('all_answer_message_ids', [])
-        for answer_id in all_answer_ids:
-            try:
-                bot.delete_message(msg.chat.id, answer_id)
-            except Exception:
-                pass
-
-        bot.delete_message(msg.chat.id, msg.message_id)
-
-    except Exception as e:
-        print(f"Error in /bestanswer: {traceback.format_exc()}")
-        bot.reply_to(msg, "❌ Oops! Something went wrong.")
-@bot.message_handler(commands=['alldoubts'])
-@membership_required
-def handle_all_doubts(msg: types.Message):
-    """
-    Fetches and lists all unanswered doubts for any group member.
-    Includes instructions on how to reply and a tip for the original poster.
-    """
-    try:
-        # Fetch up to 15 unanswered doubts, newest first.
-        response = supabase.table('doubts').select('id', 'question').eq('status', 'unanswered').order('id', desc=True).limit(15).execute()
-        if not response.data:
-            bot.send_message(
-                msg.chat.id,
-                "✅ Great news! There are currently no unanswered doubts."
-            )
-            return
-
-        # Start building the message string
-        message_text = "📝 *Unanswered Doubts List* 📝\n\n"
-        
-        for doubt in response.data:
-            doubt_id = doubt.get('id')
-            # Truncate the question to keep the list clean
-            question_preview = doubt.get('question', '')[:70]
-            safe_question_preview = escape_markdown(question_preview)
-
-            message_text += f"*#Doubt{doubt_id}:* _{safe_question_preview}..._\n"
-            # NEW: Clearer, pre-formatted instruction on how to reply
-            message_text += f"_Reply with:_ `/answer {doubt_id} [Your Answer]`\n\n"
-        
-        # Add a horizontal line for separation
-        message_text += "---\n"
-        # NEW: Add the tip at the end of the message
-        message_text += (
-            "💡 *For those who asked a doubt:*\n"
-            "Once your question is resolved, please *reply* to the most helpful message and use the `/bestanswer [Doubt_ID]` command. "
-            "This saves the best solution for everyone's future reference! 🙏"
-        )
-
-        # Send the complete list to the user who asked
-        bot.send_message(msg.chat.id, message_text, parse_mode="Markdown")
-
-    except Exception as e:
-        print(f"Error in /alldoubts command: {traceback.format_exc()}")
-        report_error_to_admin(f"Failed to fetch doubt list:\n{traceback.format_exc()}")
-        bot.send_message(msg.chat.id, "😥 Oops! Something went wrong while fetching the doubt list.")
 # =============================================================================
 # 17 ADVANCED QUIZ MARATHON FEATURE (FULLY CORRECTED AND ROBUST)
 # =============================================================================
