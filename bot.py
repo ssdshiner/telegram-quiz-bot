@@ -670,18 +670,18 @@ Hello Admin! Here are your available tools.
 
 *🧠 Quiz & Marathon*
 `/quizmarathon` - Start a new marathon.
-`/randomquiz` - Post a single quiz.
+`/randomquiz` - Post a single random quiz.
 `/roko` - Force-stop a running marathon.
 
-*💬 Member interactions*
-`/dm` - Send a direct message.
-`/prunedms` - Clean the DM list.
+*📈 Ranking & Practice*
+`/rankers` - Post weekly marathon ranks.
+`/alltimerankers` - Post all-time marathon ranks.
+`/leaderboard` - Post random quiz leaderboard.
+`/practice` - Start daily written practice.
 
-
-*🛠️ Utilities & Leaderboards*
-`/leaderboard` - Show all-time random quiz scores.
-`/section` - Get details for a law section.
-`/bdhai` - Congrats winners (for QuizBot).
+*💬 Member Interactions*
+`/dm` - Send a direct message to a user.
+`/prunedms` - Clean the inactive DM list.
 """
     bot.send_message(msg.chat.id, help_text, parse_mode="Markdown")
 # === ADD THIS ENTIRE NEW FUNCTION ===
