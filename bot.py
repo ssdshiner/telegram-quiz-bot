@@ -1,5 +1,4 @@
-# === === === === === === === === === === === === === === === === === === === === === === === === === == #1. IMPORTS# === === === === === === === === === === === === === === === === === === === === === === === === === ==
-    import os
+import os
 import re
 import json
 import gspread
@@ -23,7 +22,8 @@ import create_client, Client
 from urllib.parse
 import quote
 from html
-import escape# === === === === === === === === === === === === === === === === === === === === === === === === === == #2. CONFIGURATION & INITIALIZATION# === === === === === === === === === === === === === === === === === === === === === === === === === ==
+import escape
+# === === === === === === === === === === === === === === === === === === === === === === === === === == #2. CONFIGURATION & INITIALIZATION# === === === === === === === === === === === === === === === === === === === === === === === === === ==
 
     #-- -Configuration-- -
     BOT_TOKEN = os.getenv('BOT_TOKEN')
@@ -50,7 +50,8 @@ except(ValueError, TypeError):
     print("FATAL ERROR: GROUP_ID and ADMIN_USER_ID must be valid integers.")
 exit()# -- -Bot and Flask App Initialization-- -
     bot = TeleBot(BOT_TOKEN, threaded = False)
-app = Flask(__name__)# === === === === === === === === === === === === === === === === === === === === === === === === === == #2.5.NETWORK STABILITY PATCH(MONKEY - PATCHING)# === === === === === === === === === === === === === === === === === === === === === === === === === == #This code makes the bot more resilient to temporary network errors.
+app = Flask(__name__)
+# === === === === === === === === === === === === === === === === === === === === === === === === === == #2.5.NETWORK STABILITY PATCH(MONKEY - PATCHING)# === === === === === === === === === === === === === === === === === === === === === === === === === == #This code makes the bot more resilient to temporary network errors.
 
 from telebot
 import apihelper
