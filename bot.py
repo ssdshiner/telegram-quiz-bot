@@ -651,6 +651,7 @@ def handle_quiz_start_button(msg: types.Message):
     # We send a simple confirmation message to make the experience smoother.
     bot.send_message(msg.chat.id, "🚀 Opening the weekly schedule...")
 
+# === REPLACE THE EXISTING handle_help_command WITH THIS ===
 @bot.message_handler(commands=['adminhelp'])
 @admin_required
 def handle_help_command(msg: types.Message):
@@ -665,8 +666,7 @@ Hello Admin! Here are your available tools.
 `/motivate` - Send a motivational quote.
 `/studytip` - Share a useful study tip.
 `/announce` - Broadcast & pin a message.
-`/message` - Send a simple group message.
-`/notify` - Send a timed quiz alert.
+`/message` - Send content to the group.
 
 *🧠 Quiz & Marathon*
 `/quizmarathon` - Start a new marathon.
@@ -679,8 +679,10 @@ Hello Admin! Here are your available tools.
 `/leaderboard` - Post random quiz leaderboard.
 `/practice` - Start daily written practice.
 
-*💬 Member Interactions*
+*👥 Member Management*
 `/dm` - Send a direct message to a user.
+`/activity_report` - Get a group activity report.
+`/sync_members` - Sync old members to tracker.
 `/prunedms` - Clean the inactive DM list.
 """
     bot.send_message(msg.chat.id, help_text, parse_mode="Markdown")
@@ -942,6 +944,7 @@ def handle_quoted_reply_content(msg: types.Message):
         # Clean up the state to end the conversation
         if admin_id in user_states:
             del user_states[admin_id]
+
 @bot.message_handler(commands=['todayquiz'])
 @membership_required
 def handle_today_quiz(msg: types.Message):
@@ -1065,95 +1068,131 @@ def handle_dm_command(msg: types.Message):
     
     bot.send_message(user_id, "💬 *Direct Message System*\n\nWho would you like to send a message to?", reply_markup=markup, parse_mode="Markdown")
 
-
 @bot.callback_query_handler(func=lambda call: call.data.startswith('dm_'))
 def handle_dm_callbacks(call: types.CallbackQuery):
-    """Handles the button presses during the /dm setup."""
+    """
+    Handles the button presses during the /dm setup.
+    This version adds the choice between searching by username or user ID.
+    """
     user_id = call.from_user.id
     message_id = call.message.message_id
     
+    # This is the first choice: Specific user or All users
     if call.data == 'dm_specific_user':
-        user_states[user_id]['step'] = 'awaiting_username'
-        user_states[user_id]['target'] = 'specific'
+        # NEW: Instead of asking for username, we ask HOW to find the user.
+        markup = types.InlineKeyboardMarkup()
+        markup.add(
+            types.InlineKeyboardButton("By Username", callback_data="dm_by_username"),
+            types.InlineKeyboardButton("By User ID", callback_data="dm_by_user_id"),
+            types.InlineKeyboardButton("Back", callback_data="dm_cancel")
+        )
         bot.edit_message_text(
-            "👤 Please provide the Telegram @username of the user you want to message (e.g., `@example_user`).",
+            "How would you like to find the user?",
+            chat_id=user_id,
+            message_id=message_id,
+            reply_markup=markup
+        )
+
+    # This is the new step if admin chooses 'By Username'
+    elif call.data == 'dm_by_username':
+        user_states[user_id] = {'step': 'awaiting_username', 'target': 'specific'}
+        bot.edit_message_text(
+            "👤 Please provide the Telegram @username of the user (e.g., `@example_user`).",
             chat_id=user_id,
             message_id=message_id
         )
-        # We don't use register_next_step_handler here, we'll catch the next text message.
+
+    # This is the new step if admin chooses 'By User ID'
+    elif call.data == 'dm_by_user_id':
+        user_states[user_id] = {'step': 'awaiting_user_id', 'target': 'specific'}
+        bot.edit_message_text(
+            "🆔 Please provide the numeric Telegram User ID.",
+            chat_id=user_id,
+            message_id=message_id
+        )
 
     elif call.data == 'dm_all_users':
-        user_states[user_id]['step'] = 'awaiting_message_content'
-        user_states[user_id]['target'] = 'all'
+        user_states[user_id] = {'step': 'awaiting_message_content', 'target': 'all'}
         bot.edit_message_text(
             "📣 *To All Users*\n\nOkay, what message would you like to send? You can send text, an image, a video, a document, or an audio file. Just send it to me now.",
             chat_id=user_id,
             message_id=message_id,
             parse_mode="Markdown"
         )
-        # The next step will be handled by the content handler.
 
     elif call.data == 'dm_cancel':
         if user_id in user_states:
             del user_states[user_id]
         bot.edit_message_text("❌ Operation cancelled.", chat_id=user_id, message_id=message_id)
-
-
-# This new handler catches ALL messages from an admin who is in the middle of a /dm conversation.
-# The `content_types` parameter is the key to handling any kind of message.
 @bot.message_handler(
-    func=lambda msg: user_states.get(msg.from_user.id, {}).get('step') in ['awaiting_username', 'awaiting_message_content'],
-    content_types=['text', 'photo', 'video', 'document', 'audio']
+    # THE FIX: Added 'awaiting_user_id' to the list of steps this function handles.
+    func=lambda msg: user_states.get(msg.from_user.id, {}).get('step') in ['awaiting_username', 'awaiting_user_id', 'awaiting_message_content'],
+    content_types=['text', 'photo', 'video', 'document', 'audio', 'sticker', 'animation']
 )
 def handle_dm_conversation_steps(msg: types.Message):
     """
-    Continues the /dm conversation, processing either the username or the message content.
+    Continues the /dm conversation, processing username, user ID, or the message content.
     """
     admin_id = msg.from_user.id
     current_step = user_states[admin_id]['step']
 
-    # --- Step 1: Admin provides the username ---
+    # --- Step 1A: Admin provides the username ---
     if current_step == 'awaiting_username':
         username_to_find = msg.text.strip()
         if not username_to_find.startswith('@'):
-            bot.send_message(admin_id, "⚠️ Please make sure the username starts with an `@` symbol.")
+            bot.send_message(admin_id, "⚠️ Please make sure the username starts with an `@` symbol. Or use /cancel to restart.")
             return
-
         try:
             # Find the user_id from our database
             response = supabase.table('group_members').select('user_id, first_name').eq('username', username_to_find.lstrip('@')).limit(1).single().execute()
             target_user = response.data
-            
             if not target_user:
-                bot.send_message(admin_id, f"❌ I couldn't find a user with the username `{username_to_find}` in my records. Please make sure they have talked in the group recently.")
+                bot.send_message(admin_id, f"❌ I couldn't find a user with the username `{username_to_find}` in my records.")
                 return
 
             user_states[admin_id]['target_user_id'] = target_user['user_id']
             user_states[admin_id]['target_user_name'] = target_user['first_name']
             user_states[admin_id]['step'] = 'awaiting_message_content'
-            
-            bot.send_message(admin_id, f"✅ Found user: *{target_user['first_name']}*.\n\nNow, what message would you like to send to them? You can send text, an image, a document, etc.", parse_mode="Markdown")
-
+            bot.send_message(admin_id, f"✅ Found user: *{target_user['first_name']}*.\n\nNow, what message would you like to send?", parse_mode="Markdown")
         except Exception as e:
-            bot.send_message(admin_id, f"❌ An error occurred while searching for the user. They may not be in the database.")
-            print(f"Error finding user for DM: {e}")
+            bot.send_message(admin_id, f"❌ An error occurred while searching for the user.")
+            print(f"Error finding user for DM by username: {e}")
+
+    # --- NEW: Step 1B: Admin provides the User ID ---
+    elif current_step == 'awaiting_user_id':
+        user_id_str = msg.text.strip()
+        if not user_id_str.isdigit():
+            bot.send_message(admin_id, "⚠️ That's not a valid number. Please enter a numeric Telegram User ID. Or use /cancel to restart.")
+            return
+        
+        user_id_to_find = int(user_id_str)
+        try:
+            # Find the user's name from our database for confirmation
+            response = supabase.table('group_members').select('user_id, first_name').eq('user_id', user_id_to_find).limit(1).single().execute()
+            target_user = response.data
+            if not target_user:
+                bot.send_message(admin_id, f"❌ I couldn't find a user with the ID `{user_id_to_find}` in my records.")
+                return
+
+            user_states[admin_id]['target_user_id'] = target_user['user_id']
+            user_states[admin_id]['target_user_name'] = target_user['first_name']
+            user_states[admin_id]['step'] = 'awaiting_message_content'
+            bot.send_message(admin_id, f"✅ Found user: *{target_user['first_name']}*.\n\nNow, what message would you like to send?", parse_mode="Markdown")
+        except Exception as e:
+            bot.send_message(admin_id, f"❌ An error occurred while searching for the user.")
+            print(f"Error finding user for DM by ID: {e}")
 
     # --- Step 2: Admin provides the content to send ---
     elif current_step == 'awaiting_message_content':
         target_type = user_states[admin_id]['target']
         
-        # This is a generic function that can forward any type of message.
         def send_message_to_user(target_id, name):
             try:
-                # Add a personalized header
-                header = f"👋 Hello {name},\n\nYou have a new message from the CA INTER Quiz Hub group:\n\n---\n"
+                header = f"👋 Hello {name},\n\nYou have a new message from the CA INTER Quiz Hub admin:\n\n---\n"
                 bot.send_message(target_id, header)
-                
-                # Forward the admin's message (text, photo, etc.)
                 bot.copy_message(chat_id=target_id, from_chat_id=admin_id, message_id=msg.message_id)
                 return True
             except Exception as e:
-                # This usually happens if the user has blocked the bot.
                 print(f"Failed to send DM to {target_id}. Reason: {e}")
                 return False
 
@@ -1164,15 +1203,13 @@ def handle_dm_conversation_steps(msg: types.Message):
                 bot.send_message(admin_id, f"✅ Message successfully sent to *{target_name}*!", parse_mode="Markdown")
             else:
                 bot.send_message(admin_id, f"❌ Failed to send message to *{target_name}*. They may have blocked the bot.", parse_mode="Markdown")
-            del user_states[admin_id] # End conversation
+            del user_states[admin_id]
 
         elif target_type == 'all':
-            bot.send_message(admin_id, "🚀 Starting to broadcast the message to all users. This may take a while...")
-            
+            bot.send_message(admin_id, "🚀 Starting to broadcast... This may take a while.")
             try:
                 response = supabase.table('group_members').select('user_id, first_name').execute()
                 all_users = response.data
-                
                 success_count = 0
                 fail_count = 0
                 
@@ -1181,15 +1218,13 @@ def handle_dm_conversation_steps(msg: types.Message):
                         success_count += 1
                     else:
                         fail_count += 1
-                    time.sleep(0.1) # Small delay to avoid flooding Telegram's API
+                    time.sleep(0.1)
 
-                bot.send_message(admin_id, f"✅ *Broadcast Complete!*\n\nSent to: *{success_count}* users.\nFailed for: *{fail_count}* users (likely blocked the bot).", parse_mode="Markdown")
-                
+                bot.send_message(admin_id, f"✅ *Broadcast Complete!*\n\nSent to: *{success_count}* users.\nFailed for: *{fail_count}* users.", parse_mode="Markdown")
             except Exception as e:
                 bot.send_message(admin_id, "❌ An error occurred during the broadcast.")
                 print(f"Error during DM broadcast: {e}")
-            
-            del user_states[admin_id] # End conversation
+            del user_states[admin_id]
 @bot.message_handler(
     func=lambda msg: msg.chat.id == msg.from_user.id and not is_admin(msg.from_user.id),
     content_types=['text', 'photo', 'video', 'document', 'audio', 'sticker']
@@ -1263,6 +1298,47 @@ def handle_prune_dms(msg: types.Message):
         print(f"Error during DM prune: {traceback.format_exc()}")
         report_error_to_admin(f"Error in /prunedms command: {traceback.format_exc()}")
         bot.send_message(msg.chat.id, "❌ An error occurred while pruning the user list.")
+# === ADD THIS ENTIRE NEW FUNCTION ===
+@bot.message_handler(
+    func=lambda msg: is_admin(msg.from_user.id) and msg.reply_to_message and msg.reply_to_message.forward_from,
+    content_types=['text', 'photo', 'video', 'document', 'audio', 'sticker', 'animation']
+)
+def handle_admin_reply_to_forward(msg: types.Message):
+    """
+    Handles when the admin replies to a user's forwarded message.
+    The bot then sends this reply back to the original user.
+    """
+    admin_id = msg.from_user.id
+    
+    try:
+        # Get the original user's ID from the message the admin is replying to
+        original_user = msg.reply_to_message.forward_from
+        original_user_id = original_user.id
+        
+        # Add a small header to let the user know this is a reply from the admin
+        header = "A reply from the admin:"
+        bot.send_message(original_user_id, header)
+        
+        # Copy the admin's message (text, sticker, photo, etc.) to the original user
+        bot.copy_message(
+            chat_id=original_user_id,
+            from_chat_id=admin_id,
+            message_id=msg.message_id
+        )
+        
+        # Give a subtle confirmation to the admin that the message was sent
+        # by reacting to their message with a check mark.
+        bot.set_message_reaction(
+            chat_id=admin_id,
+            message_id=msg.message_id,
+            reaction=[types.ReactionTypeEmoji(emoji="✅")]
+        )
+
+    except Exception as e:
+        print(f"Error handling admin reply: {traceback.format_exc()}")
+        report_error_to_admin(f"Could not deliver admin reply:\n{e}")
+        # Inform the admin if the reply could not be sent
+        bot.reply_to(msg, "❌ Could not send the reply. The user might have blocked the bot.")
 # =============================================================================
 # 12 GENERAL ADMIN COMMANDS (CLEANED UP)
 # =============================================================================
@@ -1283,7 +1359,7 @@ def handle_mystats_command(msg: types.Message):
 
         if not stats or not stats.get('user_name'):
             # Send a temporary error message if no stats are found
-            error_msg = bot.reply_to(msg, f"Sorry @{user_name}, I couldn't find any stats for you yet. Please participate in a quiz first!")
+            error_msg = bot.reply_to(msg, f"Sorry {user_name}, I couldn't find any stats for you yet. Please participate in a quiz first!")
             # Delete both the command and the error message after 15 seconds
             delete_message_in_thread(msg.chat.id, msg.message_id, 15)
             delete_message_in_thread(error_msg.chat.id, error_msg.message_id, 15)
@@ -2290,6 +2366,31 @@ def handle_weekly_rankers(msg: types.Message):
         print(f"Error in /rankers: {traceback.format_exc()}")
         report_error_to_admin(traceback.format_exc())
         bot.send_message(msg.chat.id, "❌ Could not fetch the weekly leaderboard. The error has been logged.")
+# === ADD THIS ENTIRE NEW FUNCTION ===
+@bot.message_handler(commands=['sync_members'])
+@admin_required
+def handle_sync_members(msg: types.Message):
+    """
+    An admin command to sync users from the group_members table
+    to the quiz_activity table.
+    """
+    if not msg.chat.type == 'private':
+        bot.reply_to(msg, "🤫 For safety, please use this command in a private chat with me.")
+        return
+
+    try:
+        bot.send_message(msg.chat.id, "🔍 Starting member sync... This might take a moment.")
+        
+        # Call the RPC function
+        response = supabase.rpc('sync_activity_table').execute()
+        newly_synced_count = response.data
+        
+        bot.send_message(msg.chat.id, f"✅ Sync complete! **{newly_synced_count}** new members were added to the activity tracking system.")
+
+    except Exception as e:
+        print(f"Error in /sync_members: {traceback.format_exc()}")
+        report_error_to_admin(f"Error during /sync_members:\n{e}")
+        bot.send_message(msg.chat.id, "❌ An error occurred during the sync process.")
 # === Al time rankers command ===
 @bot.message_handler(commands=['alltimerankers'])
 @admin_required
@@ -2742,18 +2843,84 @@ def handle_all_poll_answers(poll_answer: types.PollAnswer):
     except Exception as e:
         print(f"Error in the master poll answer handler: {traceback.format_exc()}")
         report_error_to_admin(f"Error in handle_all_poll_answers:\n{traceback.format_exc()}")
+# === ADD THIS ENTIRE NEW FUNCTION ===
+@bot.message_handler(content_types=['left_chat_member'])
+def handle_left_member(msg: types.Message):
+    """
+    Detects when a user leaves or is removed from the group and updates their
+    status in the quiz_activity table to 'left'.
+    """
+    if msg.chat.id != GROUP_ID:
+        return # Only act on events from the main group
 
+    try:
+        left_user = msg.left_chat_member
+        user_id = left_user.id
+        user_name = left_user.first_name
+
+        # Update the user's status to 'left' in the database
+        response = supabase.table('quiz_activity').update({
+            'status': 'left'
+        }).eq('user_id', user_id).execute()
+
+        # Check if a row was actually updated
+        if response.data:
+            print(f"ℹ️ Member left: {user_name} ({user_id}). Status updated to 'left'.")
+        else:
+            print(f"ℹ️ Member left: {user_name} ({user_id}), but they were not found in the quiz_activity table.")
+            
+    except Exception as e:
+        print(f"Error in handle_left_member: {traceback.format_exc()}")
+        report_error_to_admin(f"Could not update status for left member:\n{e}")
 @bot.message_handler(content_types=['new_chat_members'])
 def handle_new_member(msg: types.Message):
     """
-    Welcomes new members to the group, but ignores bots being added.
+    Welcomes new members with a dynamic message and robustly upserts their
+    data into the database.
     """
+    ist_tz = timezone(timedelta(hours=5, minutes=30))
+    
     for member in msg.new_chat_members:
         if not member.is_bot:
-            # We now use a direct string, not a variable.
-            welcome_text = f"Hey {member.first_name} 👋 Welcome to the group. Check quiz schedule of today by sending /todayquiz 🚀"
-            # IMPORTANT: We remove parse_mode="Markdown" to avoid errors with user names.
+            
+            # --- NEW: Dynamic Welcome Messages ---
+            member_name = member.first_name
+            
+            welcome_messages = [
+                f"Hey {member_name} 👋 Welcome to the CAVYA Quiz Hub! Get started by checking today's schedule with /todayquiz.",
+                f"Welcome aboard, {member_name}! 🚀 We're excited to have you. Type /info to see all the cool things our bot can do.",
+                f"A new challenger has appeared! Welcome, {member_name}. Let's get you ready for the next quiz. Use /todayquiz to see the lineup!",
+                f"Hello {member_name}, welcome to our community of dedicated learners! We're glad you're here. The daily quiz schedule is available via /todayquiz. 📚"
+            ]
+            
+            # Pick a random message from the list
+            welcome_text = random.choice(welcome_messages)
             bot.send_message(msg.chat.id, welcome_text)
+            # ------------------------------------
+
+            # --- Robustly add/update user in the database ---
+            try:
+                activity_data = {
+                    'user_id': member.id,
+                    'user_name': member.username or member_name,
+                    'status': 'active',
+                    'join_date': datetime.datetime.now(ist_tz).isoformat()
+                }
+                supabase.table('quiz_activity').upsert(activity_data).execute()
+                
+                member_data = {
+                    'user_id': member.id,
+                    'username': member.username,
+                    'first_name': member_name,
+                    'last_name': member.last_name
+                }
+                supabase.table('group_members').upsert(member_data).execute()
+                
+                print(f"✅ Successfully added/updated new member: {member_name} ({member.id})")
+                
+            except Exception as e:
+                print(f"Error in handle_new_member database update: {traceback.format_exc()}")
+                report_error_to_admin(f"Could not upsert new member {member.id}:\n{e}")
 # =============================================================================
 # 5. BACKGROUND USER TRACKING
 # =============================================================================
