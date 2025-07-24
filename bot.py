@@ -1673,6 +1673,113 @@ def handle_feedback_command(msg: types.Message):
 # =============================================================================
 # 15 CONGRATULATE WINNERS FEATURE (/bdhai) - SUPER BOT EDITION
 # =============================================================================
+# === ADD THIS HELPER FUNCTION FIRST ===
+def format_user_list(user_list):
+    """Takes a list of user objects and returns a formatted string of names."""
+    if not user_list:
+        return "None\n"
+    # Take only the top 15 names to avoid very long messages
+    return ", ".join([f"@{user['user_name']}" for user in user_list[:15]]) + "\n"
+# === ADD THE MAIN COMMAND HANDLER ===
+@bot.message_handler(commands=['activity_report'])
+@admin_required
+def handle_activity_report(msg: types.Message):
+    """
+    Generates a detailed activity report for the admin and asks if a
+    public summary should be posted.
+    """
+    if not msg.chat.type == 'private':
+        bot.reply_to(msg, "🤫 Please use this command in a private chat with me for a detailed report.")
+        return
+    
+    admin_id = msg.from_user.id
+    bot.send_message(admin_id, "📊 Generating group activity report... This might take a moment.")
+    
+    try:
+        response = supabase.rpc('get_activity_report').execute()
+        report_data = response.data
+        
+        # --- Build the Detailed Private Report for the Admin ---
+        admin_report = "🤫 **Admin's Detailed Activity Report** 🤫\n\n"
+        
+        core_active = report_data.get('core_active', [])
+        quiz_champions = report_data.get('quiz_champions', [])
+        silent_observers = report_data.get('silent_observers', [])
+        at_risk = report_data.get('at_risk', [])
+        ghosts = report_data.get('ghosts', [])
+        
+        admin_report += f"🔥 **Core Active (Last 3 Days):** ({len(core_active)} Members)\n"
+        admin_report += format_user_list(core_active) + "\n"
+        
+        admin_report += f"🏆 **Quiz Champions (Last 3 Days):** ({len(quiz_champions)} Members)\n"
+        admin_report += format_user_list(quiz_champions) + "\n"
+        
+        admin_report += f"👀 **Silent Observers (Last 3 Days):** ({len(silent_observers)} Members)\n"
+        admin_report += format_user_list(silent_observers) + "\n"
+        
+        admin_report += f"⚠️ **At Risk (Inactive 4-15 Days):** ({len(at_risk)} Members)\n"
+        admin_report += format_user_list(at_risk) + "\n"
+        
+        admin_report += f"👻 **Ghosts (Inactive > 15 Days):** ({len(ghosts)} Members)\n"
+        admin_report += format_user_list(ghosts)
+        
+        bot.send_message(admin_id, admin_report)
+        
+        # --- Ask the Admin for the next step ---
+        # Temporarily store the report data for the callback handler
+        user_states[admin_id] = {'last_report_data': report_data}
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.add(
+            types.InlineKeyboardButton("✅ Post Public Summary", callback_data="post_public_report_yes"),
+            types.InlineKeyboardButton("❌ No, Thanks", callback_data="post_public_report_no")
+        )
+        bot.send_message(admin_id, "Would you like to post a public summary (Wall of Fame) in the group?", reply_markup=markup)
+
+    except Exception as e:
+        print(f"Error in /activity_report: {traceback.format_exc()}")
+        report_error_to_admin(f"Error generating activity report:\n{e}")
+        bot.send_message(admin_id, "❌ An error occurred while generating the report.")
+# === ADD THE CALLBACK HANDLER FOR THE BUTTONS ===
+@bot.callback_query_handler(func=lambda call: call.data.startswith('post_public_report_'))
+def handle_public_report_confirmation(call: types.CallbackQuery):
+    """
+    Handles the admin's choice to post the public summary or not.
+    """
+    admin_id = call.from_user.id
+    bot.edit_message_text("Processing your choice...", admin_id, call.message.message_id)
+
+    if call.data == 'post_public_report_yes':
+        report_data = user_states.get(admin_id, {}).get('last_report_data')
+        if not report_data:
+            bot.send_message(admin_id, "❌ Sorry, the report data expired. Please run /activity_report again.")
+            return
+
+        # --- Build the Public "Wall of Fame" Message ---
+        public_report = "🏆 **Group Activity Wall of Fame!** 🏆\n\nA big shout-out to our most engaged members from the past week!\n\n"
+        
+        core_active = report_data.get('core_active', [])
+        quiz_champions = report_data.get('quiz_champions', [])
+        silent_observers = report_data.get('silent_observers', [])
+        
+        if core_active:
+            public_report += "🔥 **Core Active (Quiz + Chat):**\n" + format_user_list(core_active) + "\n"
+        if quiz_champions:
+            public_report += "🏆 **Quiz Champions (Quiz Only):**\n" + format_user_list(quiz_champions) + "\n"
+        if silent_observers:
+            public_report += "👀 **Silent Observers (Chat Only):**\n" + format_user_list(silent_observers) + "\n"
+        
+        public_report += "*Keep up the fantastic participation! Let's see your name here next week!* 💪"
+        
+        bot.send_message(GROUP_ID, public_report, parse_mode="Markdown")
+        bot.send_message(admin_id, "✅ Public summary has been posted to the group.")
+
+    else: # If the choice is 'no'
+        bot.send_message(admin_id, "👍 Okay, no public message will be sent.")
+
+    # Clean up the stored state
+    if admin_id in user_states and 'last_report_data' in user_states[admin_id]:
+        del user_states[admin_id]['last_report_data']
 def parse_time_to_seconds(time_str):
     """Converts time string like '4 min 37 sec' or '56.1 sec' to total seconds."""
     seconds = 0
