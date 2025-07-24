@@ -848,6 +848,100 @@ Here are the commands you can use to interact with the bot.
 # =============================================================================
 # 9. TELEGRAM BOT HANDLERS (UPDATED /todayquiz)
 # =============================================================================
+# === ADD THIS FUNCTION FOR THE /message COMMAND ===
+@bot.message_handler(commands=['message'])
+@admin_required
+def handle_message_command(msg: types.Message):
+    """
+    Starts the process for the admin to send any content to the group.
+    Works only in private chat.
+    """
+    if not msg.chat.type == 'private':
+        bot.reply_to(msg, "🤫 For privacy and to avoid mistakes, please use the `/message` command in a private chat with me.")
+        return
+
+    admin_id = msg.from_user.id
+    user_states[admin_id] = {'step': 'awaiting_group_message_content'}
+    
+    bot.send_message(admin_id, "✅ Understood. Please send me the content (text, image, sticker, file, etc.) that you want to post in the group. You can also add a caption to media. Use /cancel to stop.")
+# === ADD THIS SECOND FUNCTION TO HANDLE THE CONTENT ===
+@bot.message_handler(
+    func=lambda msg: user_states.get(msg.from_user.id, {}).get('step') == 'awaiting_group_message_content',
+    content_types=['text', 'photo', 'video', 'document', 'audio', 'sticker', 'animation']
+)
+def handle_group_message_content(msg: types.Message):
+    """
+    Receives the content from the admin and copies it to the main group.
+    """
+    admin_id = msg.from_user.id
+    
+    try:
+        # bot.copy_message sends an exact copy of your message to the group
+        bot.copy_message(
+            chat_id=GROUP_ID,
+            from_chat_id=admin_id,
+            message_id=msg.message_id
+        )
+        bot.send_message(admin_id, "✅ Message successfully sent to the group!")
+    except Exception as e:
+        print(f"Error sending content with /message: {traceback.format_exc()}")
+        report_error_to_admin(f"Failed to send content via /message:\n{e}")
+        bot.send_message(admin_id, "❌ An error occurred while sending the message to the group.")
+    finally:
+        # Clean up the state to end the conversation
+        if admin_id in user_states:
+            del user_states[admin_id]
+# === ADD THIS FUNCTION TO CATCH FORWARDED MESSAGES ===
+@bot.message_handler(func=lambda msg: msg.forward_from_chat and msg.chat.type == 'private' and is_admin(msg.from_user.id))
+def handle_forwarded_message(msg: types.Message):
+    """
+    Triggers when an admin forwards a message to the bot, initiating a quoted reply.
+    """
+    admin_id = msg.from_user.id
+    
+    # Check if the message is forwarded from the main group
+    if msg.forward_from_chat.id == GROUP_ID:
+        original_message_id = msg.forward_from_message_id
+        
+        # Save the context for the next step
+        user_states[admin_id] = {
+            'step': 'awaiting_quoted_reply',
+            'original_message_id': original_message_id
+        }
+        
+        bot.send_message(admin_id, "✅ Okay, I see you want to reply to this message. Please send me your reply now (text, image, sticker, etc.). Use /cancel to stop.")
+    else:
+        bot.send_message(admin_id, "ℹ️ You can only reply to messages that were originally posted in our main group.")
+# === ADD THIS SECOND FUNCTION TO HANDLE THE REPLY CONTENT ===
+@bot.message_handler(
+    func=lambda msg: user_states.get(msg.from_user.id, {}).get('step') == 'awaiting_quoted_reply',
+    content_types=['text', 'photo', 'video', 'document', 'audio', 'sticker', 'animation']
+)
+def handle_quoted_reply_content(msg: types.Message):
+    """
+    Receives the admin's reply content and sends it as a quoted reply in the group.
+    """
+    admin_id = msg.from_user.id
+    state_data = user_states[admin_id]
+    original_message_id = state_data['original_message_id']
+    
+    try:
+        # Use copy_message with the 'reply_to_message_id' parameter
+        bot.copy_message(
+            chat_id=GROUP_ID,
+            from_chat_id=admin_id,
+            message_id=msg.message_id,
+            reply_to_message_id=original_message_id
+        )
+        bot.send_message(admin_id, "✅ Your reply has been posted in the group successfully!")
+    except Exception as e:
+        print(f"Error sending quoted reply: {traceback.format_exc()}")
+        report_error_to_admin(f"Failed to send quoted reply:\n{e}")
+        bot.send_message(admin_id, "❌ An error occurred. It's possible the original message was deleted or I don't have permission to reply.")
+    finally:
+        # Clean up the state to end the conversation
+        if admin_id in user_states:
+            del user_states[admin_id]
 @bot.message_handler(commands=['todayquiz'])
 @membership_required
 def handle_today_quiz(msg: types.Message):
