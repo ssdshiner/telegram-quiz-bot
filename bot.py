@@ -1675,18 +1675,28 @@ def handle_feedback_command(msg: types.Message):
 # =============================================================================
 # === ADD THIS HELPER FUNCTION FIRST ===
 def format_user_list(user_list):
-    """Takes a list of user objects and returns a formatted string of names."""
+    """
+    Takes a list of user objects and returns a clean, numbered list of names
+    without the '@' symbol.
+    """
     if not user_list:
-        return "None\n"
-    # Take only the top 15 names to avoid very long messages
-    return ", ".join([f"@{user['user_name']}" for user in user_list[:15]]) + "\n"
+        return "_None_\n"  # Use italics for 'None'
+
+    formatted_list = ""
+    # We can show more names in a list format
+    for i, user in enumerate(user_list[:30]):
+        # Get the name and escape it for safety
+        user_name = escape_markdown(user.get('user_name', 'Unknown'))
+        # Create a numbered list: 1. Name
+        formatted_list += f"`{i + 1}.` {user_name}\n"
+        
+    return formatted_list
 # === ADD THE MAIN COMMAND HANDLER ===
 @bot.message_handler(commands=['activity_report'])
 @admin_required
 def handle_activity_report(msg: types.Message):
     """
-    Generates a detailed activity report for the admin and asks if a
-    public summary should be posted.
+    Generates a detailed activity report for the admin with improved formatting.
     """
     if not msg.chat.type == 'private':
         bot.reply_to(msg, "🤫 Please use this command in a private chat with me for a detailed report.")
@@ -1699,8 +1709,8 @@ def handle_activity_report(msg: types.Message):
         response = supabase.rpc('get_activity_report').execute()
         report_data = response.data
         
-        # --- Build the Detailed Private Report for the Admin ---
-        admin_report = "🤫 **Admin's Detailed Activity Report** 🤫\n\n"
+        # --- Build the Detailed Private Report with new formatting ---
+        admin_report = "🤫 ***Admin's Detailed Activity Report*** 🤫\n\n"
         
         core_active = report_data.get('core_active', [])
         quiz_champions = report_data.get('quiz_champions', [])
@@ -1708,27 +1718,25 @@ def handle_activity_report(msg: types.Message):
         at_risk = report_data.get('at_risk', [])
         ghosts = report_data.get('ghosts', [])
         
-        admin_report += f"🔥 **Core Active (Last 3 Days):** ({len(core_active)} Members)\n"
-        admin_report += format_user_list(core_active) + "\n"
+        admin_report += f"🔥 *Core Active (Last 3 Days):* ({len(core_active)} Members)\n"
+        admin_report += format_user_list(core_active)
         
-        admin_report += f"🏆 **Quiz Champions (Last 3 Days):** ({len(quiz_champions)} Members)\n"
-        admin_report += format_user_list(quiz_champions) + "\n"
+        admin_report += f"\n🏆 *Quiz Champions (Last 3 Days):* ({len(quiz_champions)} Members)\n"
+        admin_report += format_user_list(quiz_champions)
         
-        admin_report += f"👀 **Silent Observers (Last 3 Days):** ({len(silent_observers)} Members)\n"
-        admin_report += format_user_list(silent_observers) + "\n"
+        admin_report += f"\n👀 *Silent Observers (Last 3 Days):* ({len(silent_observers)} Members)\n"
+        admin_report += format_user_list(silent_observers)
         
-        admin_report += f"⚠️ **At Risk (Inactive 4-15 Days):** ({len(at_risk)} Members)\n"
-        admin_report += format_user_list(at_risk) + "\n"
+        admin_report += f"\n⚠️ *At Risk (Inactive 4-15 Days):* ({len(at_risk)} Members)\n"
+        admin_report += format_user_list(at_risk)
         
-        admin_report += f"👻 **Ghosts (Inactive > 15 Days):** ({len(ghosts)} Members)\n"
+        admin_report += f"\n👻 *Ghosts (Inactive > 15 Days):* ({len(ghosts)} Members)\n"
         admin_report += format_user_list(ghosts)
         
-        bot.send_message(admin_id, admin_report)
+        bot.send_message(admin_id, admin_report, parse_mode="Markdown")
         
         # --- Ask the Admin for the next step ---
-        # Temporarily store the report data for the callback handler
         user_states[admin_id] = {'last_report_data': report_data}
-        
         markup = types.InlineKeyboardMarkup()
         markup.add(
             types.InlineKeyboardButton("✅ Post Public Summary", callback_data="post_public_report_yes"),
