@@ -2546,86 +2546,114 @@ def handle_all_time_rankers(msg: types.Message):
         report_error_to_admin(traceback.format_exc())
         bot.send_message(msg.chat.id, "❌ Could not fetch the All-Time leaderboard. The error has been logged.")
 # === Question posted part ===
-
-def process_total_marks(message, session_id, expected_setter_id):
-    """
-    This function is called after the Question Setter replies with the marks.
-    It validates the marks and updates the database.
-    """
-    try:
-        # Security Check: Ensure the reply is from the correct Question Setter
-        if message.from_user.id != expected_setter_id:
-            # Silently ignore replies from other users
-            return
-
-        total_marks_str = message.text.strip()
-        if not total_marks_str.isdigit():
-            # Ask again if the input is not a number
-            prompt = bot.reply_to(message, "❌ That's not a number. Please enter a number between 3 and 20.")
-            bot.register_next_step_handler(prompt, process_total_marks, session_id, expected_setter_id)
-            return
-
-        total_marks = int(total_marks_str)
-        if not (3 <= total_marks <= 20):
-            # Ask again if the number is not in the valid range
-            prompt = bot.reply_to(message, f"❌ Invalid marks. '{total_marks}' is not between 3 and 20. Please try again.")
-            bot.register_next_step_handler(prompt, process_total_marks, session_id, expected_setter_id)
-            return
-
-        # If all checks pass, update the database
-        supabase.table('practice_sessions').update({
-            'total_marks': total_marks,
-            'status': 'Questions Posted'
-        }).eq('session_id', session_id).execute()
-
-        bot.reply_to(message, f"✅ Total marks set to **{total_marks}**. Members can now start submitting their answers using the `/submit` command.", parse_mode="Markdown")
-
-    except Exception as e:
-        print(f"Error in process_total_marks: {traceback.format_exc()}")
-        bot.send_message(message.chat.id, "❌ An error occurred while setting the marks.")
-
+# === ADD THESE 5 NEW FUNCTIONS FOR THE SETTER'S CONVERSATIONAL FLOW ===
 
 @bot.message_handler(commands=['questions_posted'])
 def handle_questions_posted(msg: types.Message):
     """
-    Handles the /questions_posted command from the assigned Question Setter.
+    STARTS the conversational flow for setting marks.
+    Asks the setter if they have posted two questions.
     """
-    if not is_group_message(msg):
-        bot.reply_to(msg, "This command can only be used in the main group chat.")
+    if not is_group_message(msg) or not msg.reply_to_message:
+        bot.reply_to(msg, "Please use this command by replying to your questions in the group.")
         return
-
-    if not msg.reply_to_message:
-        bot.reply_to(msg, "Please use this command by replying to the message containing the questions.")
-        return
-
     try:
-        # Get the latest active session from the database
-        session_response = supabase.table('practice_sessions').select('*').order('session_id', desc=True).limit(1).execute()
-        if not session_response.data:
-            return # No active session
-
-        latest_session = session_response.data[0]
-        session_id = latest_session['session_id']
-        question_setter_id = latest_session['question_setter_id']
-
-        # Check if the command is from the correct user
-        if msg.from_user.id != question_setter_id:
-            bot.reply_to(msg, "❌ Only the assigned Question Setter can use this command for the current session.")
+        session_response = supabase.table('practice_sessions').select('*').order('session_id', desc=True).limit(1).single().execute()
+        latest_session = session_response.data
+        if not latest_session or msg.from_user.id != latest_session['question_setter_id']:
+            bot.reply_to(msg, "❌ Only the assigned Question Setter can use this command.")
             return
-
-        # Check if marks have already been set
-        if latest_session.get('total_marks') is not None:
+        if latest_session.get('marks_distribution') is not None:
             bot.reply_to(msg, "Marks for this session have already been set.")
             return
 
-        # Ask for marks publicly and register the next step handler
-        prompt = bot.reply_to(msg, f"@{msg.from_user.first_name}, please reply to **this message** with the total marks for these questions (a number between 3 and 20).", parse_mode="Markdown")
-        bot.register_next_step_handler(prompt, process_total_marks, session_id, question_setter_id)
+        # Ask the first conversational question with buttons
+        markup = types.InlineKeyboardMarkup()
+        markup.add(
+            types.InlineKeyboardButton("✅ Yes", callback_data=f"setter_choice_yes_{latest_session['session_id']}"),
+            types.InlineKeyboardButton("❌ No", callback_data=f"setter_choice_no_{latest_session['session_id']}")
+        )
+        bot.reply_to(msg, "Have you posted 2 questions?", reply_markup=markup)
 
     except Exception as e:
-        print(f"Error in /questions_posted command: {traceback.format_exc()}")
-        report_error_to_admin(traceback.format_exc())
+        print(f"Error in /questions_posted: {traceback.format_exc()}")
         bot.send_message(msg.chat.id, "❌ An error occurred.")
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('setter_choice_'))
+def handle_setter_choice(call: types.CallbackQuery):
+    """
+    Handles the 'Yes'/'No' button press from the Question Setter.
+    """
+    bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+    session_id = int(call.data.split('_')[-1])
+    
+    if call.data.startswith('setter_choice_yes'):
+        prompt = bot.send_message(call.message.chat.id, "Okay, please provide the marks for *Question 1*.", parse_mode="Markdown")
+        bot.register_next_step_handler(prompt, process_q1_marks, session_id)
+    
+    elif call.data.startswith('setter_choice_no'):
+        prompt = bot.send_message(call.message.chat.id, "Okay, what are the *total marks* for the question(s) you posted?", parse_mode="Markdown")
+        bot.register_next_step_handler(prompt, process_simple_marks, session_id)
+
+
+def process_simple_marks(message, session_id):
+    """
+    Processes the total marks in 'Simple Mode'.
+    """
+    try:
+        marks = int(message.text.strip())
+        if not (1 <= marks <= 50): # Wider range for total marks
+            prompt = bot.reply_to(message, "❌ Invalid marks. Please enter a number between 1 and 50.")
+            bot.register_next_step_handler(prompt, process_simple_marks, session_id)
+            return
+            
+        marks_data = {"total": marks}
+        supabase.table('practice_sessions').update({'marks_distribution': marks_data, 'status': 'Questions Posted'}).eq('session_id', session_id).execute()
+        bot.reply_to(message, f"✅ Marks set to **{marks}**. Session is active.", parse_mode="Markdown")
+    except (ValueError, TypeError):
+        prompt = bot.reply_to(message, "❌ That's not a valid number. Please try again.")
+        bot.register_next_step_handler(prompt, process_simple_marks, session_id)
+
+
+def process_q1_marks(message, session_id):
+    """
+    Processes the marks for Question 1 in 'Detailed Mode'.
+    """
+    try:
+        marks_q1 = int(message.text.strip())
+        if not (1 <= marks_q1 <= 20):
+            prompt = bot.reply_to(message, "❌ Invalid marks. Please enter a number between 1 and 20 for Question 1.")
+            bot.register_next_step_handler(prompt, process_q1_marks, session_id)
+            return
+            
+        prompt = bot.send_message(message.chat.id, f"Got it. Q1 is worth **{marks_q1}** marks. Now, please provide the marks for *Question 2*.", parse_mode="Markdown")
+        bot.register_next_step_handler(prompt, process_q2_marks, session_id, marks_q1)
+        
+    except (ValueError, TypeError):
+        prompt = bot.reply_to(message, "❌ That's not a valid number. Please try again for Question 1.")
+        bot.register_next_step_handler(prompt, process_q1_marks, session_id)
+
+
+def process_q2_marks(message, session_id, marks_q1):
+    """
+    Processes the marks for Question 2 and finalizes the 'Detailed Mode' setup.
+    """
+    try:
+        marks_q2 = int(message.text.strip())
+        if not (1 <= marks_q2 <= 20):
+            prompt = bot.reply_to(message, "❌ Invalid marks. Please enter a number between 1 and 20 for Question 2.")
+            bot.register_next_step_handler(prompt, process_q2_marks, session_id, marks_q1)
+            return
+
+        marks_data = {"q1": marks_q1, "q2": marks_q2, "total": marks_q1 + marks_q2}
+        supabase.table('practice_sessions').update({'marks_distribution': marks_data, 'status': 'Questions Posted'}).eq('session_id', session_id).execute()
+        bot.reply_to(message, f"✅ Marks set! (Q1: {marks_q1}, Q2: {marks_q2}, Total: {marks_data['total']}). Session is now active.", parse_mode="Markdown")
+        
+    except (ValueError, TypeError):
+        prompt = bot.reply_to(message, "❌ That's not a valid number. Please try again for Question 2.")
+        bot.register_next_step_handler(prompt, process_q2_marks, session_id, marks_q1)
+
 # === Submit command ===
 @bot.message_handler(commands=['submit'])
 def handle_submission(msg: types.Message):
@@ -2693,94 +2721,185 @@ def handle_submission(msg: types.Message):
         bot.send_message(msg.chat.id, "❌ An error occurred while submitting.")
 
 # === ADD THESE NEXT TWO FUNCTIONS ===
-
-def process_awarded_marks(message, submission_id, total_marks, expected_checker_id):
-    """
-    This function is called after the Checker replies with the marks.
-    It validates the marks and completes the review process.
-    """
-    try:
-        # Security Check: Ensure the reply is from the correct Checker
-        if message.from_user.id != expected_checker_id:
-            return # Silently ignore replies from other users
-
-        marks_str = message.text.strip()
-        if not marks_str.isdigit():
-            prompt = bot.reply_to(message, "❌ That's not a number. Please enter the marks you want to award.")
-            bot.register_next_step_handler(prompt, process_awarded_marks, submission_id, total_marks, expected_checker_id)
-            return
-
-        marks_awarded = int(marks_str)
-        if not (0 <= marks_awarded <= total_marks):
-            prompt = bot.reply_to(message, f"❌ Invalid marks. Please enter a number between 0 and {total_marks}.")
-            bot.register_next_step_handler(prompt, process_awarded_marks, submission_id, total_marks, expected_checker_id)
-            return
-
-        # If all checks pass, update the submission in the database
-        update_response = supabase.table('practice_submissions').update({
-            'marks_awarded': marks_awarded,
-            'review_status': 'Completed'
-        }).eq('submission_id', submission_id).execute()
-        
-        # Get submitter's name to mention them
-        submission_data = supabase.table('practice_submissions').select('submitter_id').eq('submission_id', submission_id).single().execute().data
-        submitter_info = supabase.table('all_time_scores').select('user_name').eq('user_id', submission_data['submitter_id']).single().execute().data
-        submitter_name = submitter_info.get('user_name', 'the submitter')
-
-        bot.reply_to(message, f"✅ Marks awarded successfully! @{submitter_name} has scored **{marks_awarded}/{total_marks}**.", parse_mode="Markdown")
-
-    except Exception as e:
-        print(f"Error in process_awarded_marks: {traceback.format_exc()}")
-        bot.send_message(message.chat.id, "❌ An error occurred while awarding the marks.")
-
+# === ADD THESE 7 NEW FUNCTIONS FOR THE REVIEWER'S CONVERSATIONAL FLOW ===
 
 @bot.message_handler(commands=['review_done'])
 def handle_review_done(msg: types.Message):
     """
-    Handles the /review_done command from the assigned Checker.
+    STARTS the conversational flow for a reviewer to submit marks.
+    It intelligently routes to 'Simple' or 'Detailed' mode.
     """
-    if not is_group_message(msg):
-        bot.reply_to(msg, "This command can only be used in the main group chat.")
+    if not is_group_message(msg) or not (msg.reply_to_message and msg.reply_to_message.photo):
+        bot.reply_to(msg, "Please use this command by replying to the answer sheet photo you reviewed.")
         return
-
-    if not msg.reply_to_message or not msg.reply_to_message.photo:
-        bot.reply_to(msg, "Please use this command by replying to the photo of the answer sheet you have reviewed.")
-        return
-
     try:
-        checker_id = msg.from_user.id
-        submission_msg_id = msg.reply_to_message.message_id
-
-        # 1. Find the submission record based on the message ID
-        # We also join with sessions to get the total_marks
-        submission_response = supabase.table('practice_submissions').select('*, practice_sessions(*)').eq('submission_message_id', submission_msg_id).single().execute()
-
-        if not submission_response.data:
-            return # This message is not a registered submission
-
+        submission_response = supabase.table('practice_submissions').select('*, practice_sessions(*)').eq('submission_message_id', msg.reply_to_message.message_id).single().execute()
+        if not submission_response.data: return
         submission = submission_response.data
-        submission_id = submission['submission_id']
-        assigned_checker_id = submission['checker_id']
-        total_marks = submission['practice_sessions']['total_marks']
-
-        # 2. Verify the command is from the correct checker
-        if checker_id != assigned_checker_id:
+        if msg.from_user.id != submission.get('checker_id'):
             bot.reply_to(msg, "❌ You are not assigned to review this answer sheet.")
             return
-
-        # 3. Check if it's already reviewed
-        if submission['review_status'] == 'Completed':
-            bot.reply_to(msg, "This submission has already been marked and completed.")
+        if submission.get('review_status') == 'Completed':
+            bot.reply_to(msg, "This submission has already been marked.")
             return
 
-        # 4. Ask for marks and register the handler
-        prompt = bot.reply_to(msg, f"@{msg.from_user.first_name}, thank you for the review. Please reply to **this message** with the marks awarded out of **{total_marks}**.", parse_mode="Markdown")
-        bot.register_next_step_handler(prompt, process_awarded_marks, submission_id, total_marks, checker_id)
+        marks_dist = submission.get('practice_sessions', {}).get('marks_distribution', {})
+        
+        # --- SMART ROUTING: Check if it's Simple or Detailed Mode ---
+        if "q1" in marks_dist: # Detailed Mode
+            markup = types.InlineKeyboardMarkup()
+            markup.add(
+                types.InlineKeyboardButton("Both Questions", callback_data=f"review_type_both_{submission['submission_id']}"),
+                types.InlineKeyboardButton("A Single Question", callback_data=f"review_type_single_{submission['submission_id']}")
+            )
+            bot.reply_to(msg, "For which questions are you giving marks?", reply_markup=markup)
+        else: # Simple Mode
+            total_marks = marks_dist.get('total', 0)
+            prompt = bot.reply_to(msg, f"Please reply to this message with the marks awarded out of *{total_marks}*.", parse_mode="Markdown")
+            bot.register_next_step_handler(prompt, process_simple_review_marks, submission['submission_id'], total_marks)
 
     except Exception as e:
-        print(f"Error in /review_done command: {traceback.format_exc()}")
-        report_error_to_admin(traceback.format_exc())
+        print(f"Error in /review_done: {traceback.format_exc()}")
         bot.send_message(msg.chat.id, "❌ An error occurred.")
+
+
+def process_simple_review_marks(message, submission_id, total_marks):
+    """
+    Processes marks submitted by a reviewer in 'Simple Mode'.
+    """
+    try:
+        marks_input = message.text.strip()
+        match = re.search(r'(\d+\.?\d*)', marks_input)
+        if not match:
+            prompt = bot.reply_to(message, "❌ Invalid format. Please enter marks as a number (e.g., `7.5`).")
+            bot.register_next_step_handler(prompt, process_simple_review_marks, submission_id, total_marks)
+            return
+            
+        marks_awarded = float(match.group(1))
+        if not (0 <= marks_awarded <= total_marks):
+            prompt = bot.reply_to(message, f"❌ Invalid marks. Please enter a number between 0 and {total_marks}.")
+            bot.register_next_step_handler(prompt, process_simple_review_marks, submission_id, total_marks)
+            return
+
+        percentage = int((marks_awarded / total_marks) * 100)
+        
+        supabase.table('practice_submissions').update({
+            'marks_awarded_details': {'total': marks_awarded},
+            'performance_percentage': percentage,
+            'review_status': 'Completed'
+        }).eq('submission_id', submission_id).execute()
+
+        submission_data = supabase.table('practice_submissions').select('submitter_id').eq('submission_id', submission_id).single().execute().data
+        submitter_info = supabase.table('all_time_scores').select('user_name').eq('user_id', submission_data['submitter_id']).single().execute().data
+        submitter_name = submitter_info.get('user_name', 'the submitter')
+        bot.reply_to(message, f"✅ Marks awarded! @{submitter_name} scored **{marks_awarded}/{total_marks}** ({percentage}%).", parse_mode="Markdown")
+
+    except Exception as e:
+        print(f"Error in process_simple_review_marks: {traceback.format_exc()}")
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('review_type_'))
+def handle_review_type_choice(call: types.CallbackQuery):
+    """
+    Handles the 'Both Questions' / 'A Single Question' button press.
+    """
+    bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+    submission_id = int(call.data.split('_')[-1])
+    session_data = supabase.table('practice_submissions').select('practice_sessions(marks_distribution)').eq('submission_id', submission_id).single().execute().data
+    marks_dist = session_data.get('practice_sessions', {}).get('marks_distribution', {})
+
+    if call.data.startswith('review_type_both'):
+        prompt = bot.send_message(call.message.chat.id, f"Please provide marks for *Question 1 (out of {marks_dist.get('q1')})*.", parse_mode="Markdown")
+        bot.register_next_step_handler(prompt, process_both_q1_marks, submission_id, marks_dist)
+    
+    elif call.data.startswith('review_type_single'):
+        markup = types.InlineKeyboardMarkup()
+        markup.add(
+            types.InlineKeyboardButton(f"Question 1 ({marks_dist.get('q1')} marks)", callback_data=f"review_single_q1_{submission_id}"),
+            types.InlineKeyboardButton(f"Question 2 ({marks_dist.get('q2')} marks)", callback_data=f"review_single_q2_{submission_id}")
+        )
+        bot.send_message(call.message.chat.id, "Which question did the member attempt?", reply_markup=markup)
+
+
+def process_both_q1_marks(message, submission_id, marks_dist):
+    """Processes marks for Q1 when 'Both' is selected."""
+    try:
+        marks_q1 = float(message.text.strip())
+        if not (0 <= marks_q1 <= marks_dist.get('q1')):
+            prompt = bot.reply_to(message, f"❌ Invalid marks. Please enter a number between 0 and {marks_dist.get('q1')} for Question 1.")
+            bot.register_next_step_handler(prompt, process_both_q1_marks, submission_id, marks_dist)
+            return
+        
+        prompt = bot.send_message(message.chat.id, f"Got it. Now, please provide marks for *Question 2 (out of {marks_dist.get('q2')})*.", parse_mode="Markdown")
+        bot.register_next_step_handler(prompt, process_both_q2_marks, submission_id, marks_dist, marks_q1)
+    except (ValueError, TypeError):
+        prompt = bot.reply_to(message, "❌ That's not a valid number. Please try again for Question 1.")
+        bot.register_next_step_handler(prompt, process_both_q1_marks, submission_id, marks_dist)
+
+
+def process_both_q2_marks(message, submission_id, marks_dist, marks_q1):
+    """Processes marks for Q2 and finalizes for 'Both' questions."""
+    try:
+        marks_q2 = float(message.text.strip())
+        total_marks = marks_dist.get('total')
+        if not (0 <= marks_q2 <= marks_dist.get('q2')):
+            prompt = bot.reply_to(message, f"❌ Invalid marks. Please enter a number between 0 and {marks_dist.get('q2')} for Question 2.")
+            bot.register_next_step_handler(prompt, process_both_q2_marks, submission_id, marks_dist, marks_q1)
+            return
+        
+        total_awarded = marks_q1 + marks_q2
+        percentage = int((total_awarded / total_marks) * 100)
+        marks_details = {"q1": marks_q1, "q2": marks_q2}
+        
+        supabase.table('practice_submissions').update({'marks_awarded_details': marks_details, 'performance_percentage': percentage, 'review_status': 'Completed'}).eq('submission_id', submission_id).execute()
+        submission_data = supabase.table('practice_submissions').select('submitter_id').eq('submission_id', submission_id).single().execute().data
+        submitter_info = supabase.table('all_time_scores').select('user_name').eq('user_id', submission_data['submitter_id']).single().execute().data
+        bot.reply_to(message, f"✅ Marks awarded! @{submitter_info.get('user_name')} scored **{total_awarded}/{total_marks}** ({percentage}%).", parse_mode="Markdown")
+
+    except (ValueError, TypeError):
+        prompt = bot.reply_to(message, "❌ That's not a valid number. Please try again for Question 2.")
+        bot.register_next_step_handler(prompt, process_both_q2_marks, submission_id, marks_dist, marks_q1)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('review_single_'))
+def handle_single_question_choice(call: types.CallbackQuery):
+    """Handles the 'Question 1' / 'Question 2' button press."""
+    bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+    parts = call.data.split('_')
+    question_choice = parts[2] # 'q1' or 'q2'
+    submission_id = int(parts[3])
+    
+    session_data = supabase.table('practice_submissions').select('practice_sessions(marks_distribution)').eq('submission_id', submission_id).single().execute().data
+    marks_dist = session_data.get('practice_sessions', {}).get('marks_distribution', {})
+    marks_for_q = marks_dist.get(question_choice)
+    
+    prompt = bot.send_message(call.message.chat.id, f"How many marks for *{question_choice.upper()} (out of {marks_for_q})*?", parse_mode="Markdown")
+    bot.register_next_step_handler(prompt, process_single_question_marks, submission_id, question_choice, marks_for_q)
+
+
+def process_single_question_marks(message, submission_id, question_choice, marks_for_q):
+    """Processes marks for a single question and finalizes."""
+    try:
+        marks_awarded = float(message.text.strip())
+        if not (0 <= marks_awarded <= marks_for_q):
+            prompt = bot.reply_to(message, f"❌ Invalid marks. Please enter a number between 0 and {marks_for_q}.")
+            bot.register_next_step_handler(prompt, process_single_question_marks, submission_id, question_choice, marks_for_q)
+            return
+
+        percentage = int((marks_awarded / marks_for_q) * 100)
+        marks_details = {"q1": "NA", "q2": "NA"}
+        marks_details[question_choice] = marks_awarded
+        
+        supabase.table('practice_submissions').update({'marks_awarded_details': marks_details, 'performance_percentage': percentage, 'review_status': 'Completed'}).eq('submission_id', submission_id).execute()
+        submission_data = supabase.table('practice_submissions').select('submitter_id').eq('submission_id', submission_id).single().execute().data
+        submitter_info = supabase.table('all_time_scores').select('user_name').eq('user_id', submission_data['submitter_id']).single().execute().data
+        bot.reply_to(message, f"✅ Marks awarded! @{submitter_info.get('user_name')} scored **{marks_awarded}/{marks_for_q}** ({percentage}%) on the attempted question.", parse_mode="Markdown")
+        
+    except (ValueError, TypeError):
+        prompt = bot.reply_to(message, "❌ That's not a valid number. Please try again.")
+        bot.register_next_step_handler(prompt, process_single_question_marks, submission_id, question_choice, marks_for_q)
+
+
 # === Practice command setup ===
 @bot.message_handler(commands=['practice'])
 @admin_required
@@ -2819,8 +2938,8 @@ def start_new_practice_session(chat_id):
 
         announcement = (
             f"✍️ **Today's Written Practice Session!** ✍️\n\n"
-            f"Today's Question Setter is **@{setter_name}**!\n\n"
-            f"They will post 2 questions from **{question_source}** related to tomorrow's quiz topics.\n\n"
+            f"Today's Question Setter is **{setter_name}**!\n\n"
+            f"They will post 2 questions from **{question_source}** related to tomorrow's quiz topics (1 question from each chapter of tomorrow quiz , one from G1 and one from g2)\n\n"
             f"After posting the questions, please use the `/questions_posted` command by replying to your message."
         )
         bot.send_message(GROUP_ID, announcement)
