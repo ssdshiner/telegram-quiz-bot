@@ -2013,9 +2013,7 @@ def delete_message_in_thread(chat_id, message_id, delay):
     threading.Thread(target=task).start()
 def send_marathon_results(session_id):
     """
-    Generates and sends marathon results with advanced insights like
-    Personal Best, Streak Completion, and Participation Percentage.
-    Records ALL participants but displays only the top 10.
+    Generates and sends marathon results and then calls the performance analysis function.
     """
     session = QUIZ_SESSIONS.get(session_id)
     participants = QUIZ_PARTICIPANTS.get(session_id)
@@ -2023,7 +2021,6 @@ def send_marathon_results(session_id):
 
     total_questions_asked = session.get('current_question_index', 0)
 
-    # Mark used questions in the database
     if session.get('questions') and total_questions_asked > 0:
         try:
             used_question_ids = [q['id'] for q in session['questions'][:total_questions_asked]]
@@ -2035,71 +2032,131 @@ def send_marathon_results(session_id):
     if not participants:
         bot.send_message(GROUP_ID, f"🏁 The quiz *'{escape_markdown(session.get('title', ''))}'* has finished, but no one participated!")
     else:
-        # Sort participants by score and time
         sorted_items = sorted(participants.items(), key=lambda item: (item[1]['score'], -item[1]['total_time']), reverse=True)
         
-        # --- NEW LOGIC: Fetch pre-quiz stats for all participants ---
         participant_ids = list(participants.keys())
         pre_quiz_stats_response = supabase.rpc('get_pre_marathon_stats', {'p_user_ids': participant_ids}).execute()
         pre_quiz_stats_dict = {item['user_id']: item for item in pre_quiz_stats_response.data}
 
         total_active_members_response = supabase.rpc('get_total_active_members', {'days_interval': 7}).execute()
         total_active_members = total_active_members_response.data
-        # -----------------------------------------------------------
-
-        # --- Step 1: Record data and check for achievements for ALL participants ---
+        
         APPRECIATION_STREAK = 8
         for user_id, p in sorted_items:
-            # Record participation for everyone
             record_quiz_participation(user_id, p['name'], p['score'], p['total_time'])
-            
-            # Check for Personal Best and Streak Completion
             user_pre_stats = pre_quiz_stats_dict.get(user_id, {})
             highest_before = user_pre_stats.get('highest_marathon_score') or 0
             streak_before = user_pre_stats.get('current_streak') or 0
-            
             if p['score'] > highest_before:
                 p['pb_achieved'] = True
-            
             if (streak_before + 1) == APPRECIATION_STREAK:
                 p['streak_completed'] = True
-        # -------------------------------------------------------------------------
 
-        # --- Step 2: Prepare the display text for only the TOP 10 ---
         results_text = f"🏁 The quiz *'{escape_markdown(session['title'])}'* has finished!\n\n"
-        
-        # Add participation stat first
         if total_active_members > 0:
             participation_percentage = (len(participants) / total_active_members) * 100
             results_text += f"*{len(participants)}* members ({participation_percentage:.0f}% of active members) participated.\n\n"
         
         rank_emojis = ["🥇", "🥈", "🥉"]
-        
         for i, (user_id, p) in enumerate(sorted_items[:10]):
             rank = rank_emojis[i] if i < 3 else f"  *{i + 1}.*"
             name = escape_markdown(p['name'])
             percentage = (p['score'] / total_questions_asked * 100) if total_questions_asked > 0 else 0
             formatted_time = format_duration(p['total_time'])
-            
-            # Add name, score, and time
             results_text += f"{rank} *{name}* – {p['score']} correct ({percentage:.0f}%) in {formatted_time}"
-            
-            # Add icons for achievements
-            if p.get('pb_achieved'):
-                results_text += " 🏆 PB!"
-            if p.get('streak_completed'):
-                results_text += " 🔥 Streak!"
-            
-            results_text += "\n" # New line for the next entry
+            if p.get('pb_achieved'): results_text += " 🏆 PB!"
+            if p.get('streak_completed'): results_text += " 🔥 Streak!"
+            results_text += "\n"
             
         results_text += "\n🏆 Congratulations to the winners!"
         bot.send_message(GROUP_ID, results_text, parse_mode="Markdown")
-        time.sleep(2)
-        generate_quiz_insights(session_id)
         
-    # Cleanup session data
+        # --- THE FINAL CHANGE IS HERE ---
+        # We now call our new, powerful analysis function
+        time.sleep(2)
+        send_performance_analysis(session, participants)
+        # --------------------------------
+        
     if session_id in QUIZ_SESSIONS: del QUIZ_SESSIONS[session_id]
     if session_id in QUIZ_PARTICIPANTS: del QUIZ_PARTICIPANTS[session_id]
+# === ADD THIS ENTIRE NEW FUNCTION ===
+def send_performance_analysis(session, participants):
+    """
+    Analyzes topic-wise data for all participants and sends a detailed
+    performance insight report to the group.
+    """
+    try:
+        # --- 1. Aggregate Topic and Type Data ---
+        topic_performance = {}
+        type_performance = {'Theory': {'correct': 0, 'total': 0}, 'Practical': {'correct': 0, 'total': 0}, 'Case Study': {'correct': 0, 'total': 0}}
+        total_correct_answers = 0
+        total_questions_answered = 0
+
+        for p_data in participants.values():
+            total_correct_answers += p_data.get('score', 0)
+            total_questions_answered += p_data.get('questions_answered', 0)
+            for topic, scores in p_data.get('topic_scores', {}).items():
+                topic_performance.setdefault(topic, {'correct': 0, 'total': 0})
+                topic_performance[topic]['correct'] += scores.get('correct', 0)
+                topic_performance[topic]['total'] += scores.get('total', 0)
+
+        # Correlate topics with question types
+        for question in session.get('questions', []):
+            topic = question.get('topic')
+            q_type = question.get('question_type')
+            if topic in topic_performance and q_type in type_performance:
+                type_performance[q_type]['correct'] += topic_performance[topic]['correct']
+                type_performance[q_type]['total'] += topic_performance[topic]['total']
+
+        # --- 2. Calculate Insights ---
+        overall_accuracy = (total_correct_answers / total_questions_answered * 100) if total_questions_answered > 0 else 0
+        
+        topic_accuracy_list = []
+        for topic, data in topic_performance.items():
+            accuracy = (data['correct'] / data['total'] * 100) if data['total'] > 0 else 0
+            topic_accuracy_list.append({'topic': topic, 'accuracy': accuracy})
+        
+        sorted_topics = sorted(topic_accuracy_list, key=lambda x: x['accuracy'], reverse=True)
+        
+        # Individual Shout-Outs (from old insights logic)
+        most_accurate_person = max(participants.values(), key=lambda p: (p['score'] / p['questions_answered'] * 100) if p.get('questions_answered', 0) > 0 else 0)
+        fastest_finger = min([p for p in participants.values() if p.get('correct_answer_times')], key=lambda p: sum(p['correct_answer_times']) / len(p['correct_answer_times']))
+
+        # --- 3. Build the Final Message ---
+        analysis_message = f"📊 *Marathon Performance Analysis: {escape_markdown(session['title'])}* 📊\n\n"
+        
+        # Group Performance Section
+        analysis_message += "--- *Group Performance* ---\n"
+        analysis_message += f"• *Overall Accuracy:* {overall_accuracy:.0f}% rahi. Well done!\n"
+        for q_type, data in type_performance.items():
+            if data['total'] > 0:
+                accuracy = (data['correct'] / data['total'] * 100)
+                analysis_message += f"• *{q_type} Questions Accuracy:* {accuracy:.0f}%\n"
+
+        # Topic Analysis Section
+        if sorted_topics:
+            analysis_message += "\n--- *Topic Analysis* ---\n"
+            if len(sorted_topics) > 0:
+                analysis_message += f"• *Strongest Topic:* {sorted_topics[0]['topic']} ({sorted_topics[0]['accuracy']:.0f}%)\n"
+            if len(sorted_topics) > 1:
+                analysis_message += f"• *Weakest Topic:* {sorted_topics[-1]['topic']} ({sorted_topics[-1]['accuracy']:.0f}%) ⚠️\n"
+
+        # Individual Shout-Outs Section
+        analysis_message += "\n--- *Individual Shout-Outs* ---\n"
+        if most_accurate_person:
+             accuracy = (most_accurate_person['score'] / most_accurate_person['questions_answered'] * 100) if most_accurate_person.get('questions_answered', 0) > 0 else 0
+             analysis_message += f"• *🎯 Accuracy King/Queen:* @{escape_markdown(most_accurate_person['name'])} ({accuracy:.0f}% accuracy)\n"
+        if fastest_finger:
+            analysis_message += f"• *💨 Speed Demon:* @{escape_markdown(fastest_finger['name'])} (fastest on corrects)\n"
+
+        analysis_message += "\n*Weak topics ko revise karna na bhoolein. Keep up the great work!* ✨"
+
+        bot.send_message(GROUP_ID, analysis_message, parse_mode="Markdown")
+
+    except Exception as e:
+        print(f"Error in send_performance_analysis: {traceback.format_exc()}")
+        report_error_to_admin(f"Error generating performance analysis:\n{traceback.format_exc()}")
+
 # === Ranker command setup ===
 @bot.message_handler(commands=['rankers'])
 @admin_required
@@ -2517,6 +2574,7 @@ def handle_all_poll_answers(poll_answer: types.PollAnswer):
     """
     This is the single master handler for all poll answers. It correctly handles
     Marathon and Random/Daily quizzes without any conflicts.
+    NEW: It now also records topic-wise performance for marathons.
     """
     poll_id_str = poll_answer.poll_id
     user_info = poll_answer.user
@@ -2528,15 +2586,19 @@ def handle_all_poll_answers(poll_answer: types.PollAnswer):
     try:
         session_id = str(GROUP_ID)
         marathon_session = QUIZ_SESSIONS.get(session_id)
+        
+        # --- ROUTE 1: Marathon Quiz ---
         if marathon_session and marathon_session.get('is_active') and poll_id_str == marathon_session.get('current_poll_id'):
             ist_tz = timezone(timedelta(hours=5, minutes=30))
             current_time_ist = datetime.datetime.now(ist_tz)
             time_taken = (current_time_ist - marathon_session['question_start_time']).total_seconds()
 
+            # Initialize participant if they are answering for the first time
             if user_info.id not in QUIZ_PARTICIPANTS.get(session_id, {}):
                 QUIZ_PARTICIPANTS.setdefault(session_id, {})[user_info.id] = {
                     'name': user_info.first_name, 'score': 0, 'total_time': 0,
-                    'questions_answered': 0, 'correct_answer_times': []
+                    'questions_answered': 0, 'correct_answer_times': [],
+                    'topic_scores': {}  # NEW: Initialize dictionary for topic scores
                 }
 
             participant = QUIZ_PARTICIPANTS[session_id][user_info.id]
@@ -2547,22 +2609,37 @@ def handle_all_poll_answers(poll_answer: types.PollAnswer):
             question_data = marathon_session['questions'][question_idx]
             correct_option_index = ['A', 'B', 'C', 'D'].index(str(question_data.get('Correct Answer', 'A')).upper())
 
+            # --- NEW: TOPIC-WISE PERFORMANCE TRACKING ---
+            question_topic = question_data.get('topic', 'Unknown Topic')
+            # Ensure the topic exists in the participant's score dictionary
+            participant['topic_scores'].setdefault(question_topic, {'correct': 0, 'total': 0})
+            # Increment the total questions attempted for this topic
+            participant['topic_scores'][question_topic]['total'] += 1
+            # ---------------------------------------------
+
+            # Update overall stats
             q_stats = marathon_session['stats']['question_times'][question_idx]
             q_stats['total_time'] += time_taken
             q_stats['answer_count'] += 1
 
+            # Check if the answer is correct
             if selected_option == correct_option_index:
                 participant['score'] += 1
                 participant['correct_answer_times'].append(time_taken)
                 q_stats['correct_times'][user_info.id] = time_taken
-            return
+                # --- NEW: Increment the correct count for the topic ---
+                participant['topic_scores'][question_topic]['correct'] += 1
+                # ----------------------------------------------------
+            
+            return # End processing here for marathon answers
 
+        # --- ROUTE 2: Random Quiz ---
         else:
             active_poll_info = next((poll for poll in active_polls if poll['poll_id'] == poll_id_str), None)
             
             if active_poll_info and active_poll_info.get('type') == 'random_quiz':
                 if selected_option == active_poll_info['correct_option_id']:
-                    print(f"Correct answer for random/daily quiz from {user_info.first_name}. Incrementing score.")
+                    print(f"Correct answer for random quiz from {user_info.first_name}. Incrementing score.")
                     supabase.rpc('increment_score', {
                         'user_id_in': user_info.id,
                         'user_name_in': user_info.first_name
