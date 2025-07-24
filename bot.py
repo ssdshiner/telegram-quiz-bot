@@ -3076,50 +3076,84 @@ def handle_unknown_messages(msg: types.Message):
 
 
 # =============================================================================
-# 18 MAIN EXECUTION BLOCK
+# 18. MAIN EXECUTION BLOCK (ROBUST & DETAILED LOGGING)
 # =============================================================================
 
-# This setup logic now runs when Render starts the bot.
-print("🤖 Initializing bot...")
+# This setup logic runs once when your service on Render starts.
+print("\n" + "="*50)
+print("🤖 INITIALIZING BOT: Starting the setup sequence...")
+print("="*50)
 
+# --- STEP 1: CHECKING ENVIRONMENT VARIABLES ---
+print("STEP 1: Checking environment variables...")
 required_vars = [
     'BOT_TOKEN', 'SERVER_URL', 'GROUP_ID', 'ADMIN_USER_ID', 'SUPABASE_URL',
     'SUPABASE_KEY'
 ]
-
 missing_vars = [var for var in required_vars if not os.getenv(var)]
 if missing_vars:
     print("❌ FATAL: The following critical environment variables are missing:")
     for var in missing_vars:
         print(f"  - {var}")
-    print("\nPlease set these variables and restart the bot.")
+    print("\nPlease set these variables on Render and restart the bot.")
     exit()
-    
-print("✅ All required environment variables are loaded.")
+print("✅ STEP 1: All required environment variables are loaded successfully.\n")
 
-# Load persistent data from Supabase
-load_data()
-
-# Initialize the Google Sheet connection
-initialize_gsheet()
-
-# Start the background worker thread for scheduled tasks
-print("Starting background scheduler...")
-scheduler_thread = threading.Thread(target=background_worker, daemon=True)
-scheduler_thread.start()
-print("✅ Background scheduler is running.")
-
-# Set the webhook for Telegram to send updates
-print(f"Setting webhook for bot...")
-bot.remove_webhook()
-time.sleep(1) 
-webhook_url = f"{SERVER_URL.rstrip('/')}/{BOT_TOKEN}"
-bot.set_webhook(url=webhook_url)
-print(f"✅ Webhook is set to: {webhook_url}")
+# --- STEP 2: LOADING PERSISTENT DATA FROM SUPABASE ---
+print("STEP 2: Loading persistent data from Supabase...")
+try:
+    load_data()
+    # Assuming load_data() has its own internal print statements for success/failure
+except Exception as e:
+    print(f"❌ FAILED: Could not load data from Supabase. Error: {e}")
+    # We don't exit here, the bot can still run with a fresh state.
+print("✅ STEP 2: Data loading process completed.\n")
 
 
-# This part is only for running the bot on your own computer, not on Render.
-if __name__ == "__main__":
+# --- STEP 3: INITIALIZING GOOGLE SHEETS ---
+print("STEP 3: Initializing Google Sheets connection...")
+try:
+    initialize_gsheet()
+    # Assuming initialize_gsheet() has its own internal print statements
+except Exception as e:
+    print(f"❌ FAILED: Could not initialize Google Sheets. Error: {e}")
+    # This is not fatal, so we continue.
+print("✅ STEP 3: Google Sheets initialization completed.\n")
+
+# --- STEP 4: STARTING BACKGROUND SCHEDULER ---
+print("STEP 4: Starting background scheduler thread...")
+try:
+    scheduler_thread = threading.Thread(target=background_worker, daemon=True)
+    scheduler_thread.start()
+    print("✅ STEP 4: Background scheduler is now running in a separate thread.\n")
+except Exception as e:
+    print(f"❌ FATAL: Failed to start the background scheduler. Error: {e}")
+    report_error_to_admin(f"FATAL ERROR: The background worker thread could not be started:\n{e}")
+    exit()
+
+# --- STEP 5: SETTING TELEGRAM WEBHOOK ---
+print("STEP 5: Setting Telegram webhook...")
+try:
+    bot.remove_webhook()
+    time.sleep(1)
+    webhook_url = f"{SERVER_URL.rstrip('/')}/{BOT_TOKEN}"
+    bot.set_webhook(url=webhook_url)
+    print(f"✅ STEP 5: Webhook is set successfully to: {webhook_url}\n")
+except Exception as e:
+    print(f"❌ FATAL: Could not set the webhook. Telegram updates will not be received. Error: {e}")
+    report_error_to_admin(f"FATAL ERROR: Failed to set webhook. The bot will not work:\n{e}")
+    exit()
+
+# --- FINAL STATUS ---
+print("="*50)
+print("🚀 BOT IS LIVE AND READY FOR UPDATES 🚀")
+print("="*50 + "\n")
+
+
+# The following block is NOT executed by Gunicorn on Render.
+# It's only for running the bot directly on your own computer (e.g., `python bot.py`).
+if __name__ == '__main__':
     port = int(os.environ.get("PORT", 10000))
-    print(f"Starting Flask server for local testing on port {port}...")
+    print(f"Starting Flask development server for local testing on http://0.0.0.0:{port}")
+    # NOTE: This `app.run` is for local development only. On Render, Gunicorn is used to run the `app` object.
     app.run(host="0.0.0.0", port=port)
