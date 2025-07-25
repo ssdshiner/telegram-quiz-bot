@@ -451,7 +451,8 @@ def record_quiz_participation(user_id, user_name, score_achieved, time_taken_sec
 # === REPLACE THE OLD background_worker WITH THIS NEW VERSION ===
 
 # Add this new global variable at the top of your file with the others
-last_daily_check_day = -1 
+last_daily_check_day = -1
+last_schedule_announce_day = -1
 
 # === ADD THESE 2 NEW DATA-FETCHING FUNCTIONS ===
 
@@ -477,7 +478,71 @@ def find_users_to_appreciate():
     APPRECIATION_STREAK = 8
     users_to_appreciate = supabase.rpc('get_users_to_appreciate', {'streak_target': APPRECIATION_STREAK}).execute().data or []
     return users_to_appreciate
+# === ADD THIS NEW HELPER FUNCTION ===
+def fetch_and_announce_schedule(target_date):
+    """
+    Fetches the schedule for a specific date, formats it, and posts it to the group.
+    Returns True on success, False on failure.
+    """
+    try:
+        date_str = target_date.strftime('%Y-%m-%d')
+        response = supabase.table('quiz_schedule').select('*').eq('quiz_date', date_str).order('quiz_no').execute()
 
+        if not response.data:
+            print(f"No schedule found for {date_str} to announce.")
+            return False
+
+        # Format the date for the message header (e.g., "26th July 2025")
+        formatted_date = target_date.strftime(f"%d{('th' if 11<=target_date.day<=13 else {1:'st',2:'nd',3:'rd'}.get(target_date.day%10, 'th'))} %B %Y")
+        
+        message_text = f"📢 **Schedule Update for Tomorrow!** 📢\n\n"
+        message_text += f"Hello everyone,\nTomorrow's (**{formatted_date}**) quiz schedule has been updated. Here is the lineup to help you prepare in advance:\n\n"
+        
+        for quiz in response.data:
+            try:
+                time_obj = datetime.datetime.strptime(quiz['quiz_time'], '%H:%M:%S')
+                formatted_time = time_obj.strftime('%I:%M %p')
+            except (ValueError, TypeError):
+                formatted_time = "N/A"
+
+            message_text += (
+                f"<b>Quiz no. {quiz.get('quiz_no', 'N/A')}:</b>\n"
+                f"⏰ Time: {formatted_time}\n"
+                f"📝 Subject: {escape(str(quiz.get('subject', 'N/A')))}\n"
+                f"📖 Chapter: {escape(str(quiz.get('chapter_name', 'N/A')))}\n\n"
+            )
+        
+        message_text += "You can view this anytime using the `/kalkaquiz` command. All the best! 📖"
+        
+        bot.send_message(GROUP_ID, message_text, parse_mode="HTML")
+        return True
+
+    except Exception as e:
+        print(f"CRITICAL Error in fetch_and_announce_schedule: {traceback.format_exc()}")
+        report_error_to_admin(f"Failed to announce schedule for {target_date.strftime('%Y-%m-%d')}:\n{e}")
+        return False
+# === ADD THIS NEW ADMIN COMMAND HANDLER ===
+@bot.message_handler(commands=['update_schedule'])
+@admin_required
+def handle_update_schedule_command(msg: types.Message):
+    """
+    Manually triggers the announcement for TOMORROW's schedule.
+    """
+    if not msg.chat.type == 'private':
+        bot.reply_to(msg, "🤫 Please use this command in a private chat with me.")
+        return
+        
+    bot.send_message(msg.chat.id, "✅ Understood. I will now try to fetch and announce tomorrow's schedule in the group...")
+    
+    ist_tz = timezone(timedelta(hours=5, minutes=30))
+    tomorrow_date = datetime.datetime.now(ist_tz) + datetime.timedelta(days=1)
+    
+    success = fetch_and_announce_schedule(tomorrow_date)
+    
+    if success:
+        bot.send_message(msg.chat.id, "✅ Announcement for tomorrow's schedule has been posted successfully!")
+    else:
+        bot.send_message(msg.chat.id, "❌ Could not post the announcement. This usually means tomorrow's schedule has not been added to the database yet.")
 # === REPLACE THE OLD run_daily_checks WITH THIS NEW VERSION ===
 def run_daily_checks():
     """
@@ -520,7 +585,7 @@ def run_daily_checks():
 
 def background_worker():
     """Runs all scheduled tasks in a continuous loop."""
-    global last_daily_check_day
+    global last_daily_check_day, last_schedule_announce_day # Add the new variable here
 
     while True:
         try:
@@ -529,14 +594,22 @@ def background_worker():
             current_day = current_time_ist.day
             current_hour = current_time_ist.hour
 
-            # --- Daily Check at a specific time (e.g., 10:30 PM IST) ---
-            if current_hour == 22 and last_daily_check_day != current_day:
-                print(f"⏰ It's 10 PM, time for daily automated checks...")
+            # --- NEW: Daily Schedule Announcement at 10:00 PM ---
+            if current_hour == 22 and last_schedule_announce_day != current_day:
+                print("⏰ It's 10:00 PM, time to announce tomorrow's schedule...")
+                tomorrow_date = datetime.datetime.now(ist_tz) + datetime.timedelta(days=1)
+                fetch_and_announce_schedule(tomorrow_date)
+                last_schedule_announce_day = current_day # Mark as done for today
+            # ----------------------------------------------------
+
+            # --- Daily Inactivity/Appreciation Check (around 10:30 PM) ---
+            # We add a minute check to run this slightly after the announcement
+            if current_hour == 22 and current_time_ist.minute >= 30 and last_daily_check_day != current_day:
+                print(f"⏰ It's 10:30 PM, time for daily automated checks...")
                 run_daily_checks()
                 last_daily_check_day = current_day
 
-            # --- Process Scheduled Tasks (e.g., /notify follow-up) ---
-            # (This part remains the same)
+            # --- Process other scheduled tasks ---
             for task in scheduled_tasks[:]:
                 if current_time_ist >= task['run_at'].astimezone(ist_tz):
                     try:
@@ -773,6 +846,7 @@ Hello Admin! Here are your available tools.
 `/announce` - Broadcast & pin a message.
 `/message` - Send content to the group.
 `/add_resource` - Add a file to the Vault.
+`/update_schedule` - Announce tomorrow's schedule.
 
 *🧠 Quiz & Marathon*
 `/quizmarathon` - Start a new marathon.
@@ -3307,6 +3381,7 @@ def start_new_practice_session(chat_id):
 def handle_report_confirmation(call: types.CallbackQuery):
     """
     Handles the admin's 'Yes' or 'No' choice for posting the report.
+    This version is "bulletproof" and handles all edge cases gracefully.
     """
     admin_chat_id = call.message.chat.id
     bot.edit_message_text("Processing your request...", admin_chat_id, call.message.message_id)
@@ -3316,35 +3391,51 @@ def handle_report_confirmation(call: types.CallbackQuery):
             # Call the RPC to get the report data
             report_response = supabase.rpc('get_practice_report').execute()
             report_data = report_response.data
+            
+            # --- NEW: More robust checks for different data scenarios ---
+            ranked_performers = report_data.get('ranked_performers', [])
+            pending_reviews = report_data.get('pending_reviews', [])
 
-            if not report_data or not report_data.get('ranked_performers'):
-                 bot.send_message(GROUP_ID, "No completed practice submissions found for yesterday's session.")
+            if not report_data or (not ranked_performers and not pending_reviews):
+                 bot.send_message(GROUP_ID, "No practice activity (submissions or reviews) was found for yesterday's session.")
+                 bot.send_message(admin_chat_id, "✅ Report posted (No Activity). Now starting today's session...")
             else:
                 # Format the report
-                report_card_text = f"📋 **Written Practice Report Card: {datetime.date.today() - datetime.timedelta(days=1)}** 📋\n\n"
+                report_card_text = f"📋 **Written Practice Report Card: {datetime.date.today() - datetime.timedelta(days=1)}** 📋\n"
                 
-                # Part 1: Ranked Performers
-                report_card_text += "--- \n**🏆 Performance Ranking 🏆**\n\n"
-                rank_emojis = ["🥇", "🥈", "🥉"]
-                for i, performer in enumerate(report_data['ranked_performers']):
-                    emoji = rank_emojis[i] if i < 3 else f"*{i+1}.*"
-                    report_card_text += f"{emoji} **@{performer['submitter_name']}** - {performer['marks_awarded']}/{performer['total_marks']} ({performer['percentage']}%)\n    *(Checked by: @{performer['checker_name']})*\n\n"
-
-                # Part 2: Pending Reviews
-                if report_data.get('pending_reviews'):
-                    report_card_text += "--- \n**⚠️ Submissions Not Checked ⚠️**\n"
-                    for pending in report_data['pending_reviews']:
-                        report_card_text += f"• Answer sheet of **@{pending['submitter_name']}** is pending review by **@{pending['checker_name']}**.\n"
+                # Part 1: Ranked Performers (only if the list is not empty)
+                if ranked_performers:
+                    report_card_text += "\n--- **🏆 Performance Ranking** ---\n"
+                    rank_emojis = ["🥇", "🥈", "🥉"]
+                    for i, performer in enumerate(ranked_performers):
+                        emoji = rank_emojis[i] if i < 3 else f"*{i+1}.*"
+                        # Use .get() for safe access to all keys
+                        submitter_name = performer.get('submitter_name', 'N/A')
+                        marks_awarded = performer.get('marks_awarded', 0)
+                        total_marks = performer.get('total_marks', 0)
+                        percentage = performer.get('percentage', 0)
+                        checker_name = performer.get('checker_name', 'N/A')
+                        report_card_text += f"{emoji} **@{submitter_name}** - {marks_awarded}/{total_marks} ({percentage}%)\n  *(Checked by: @{checker_name})*\n"
                 
-                # TODO: Add 'Not Submitted' logic here if needed by enhancing the RPC
+                # Part 2: Pending Reviews (only if the list is not empty)
+                if pending_reviews:
+                    report_card_text += "\n--- **⚠️ Submissions Not Checked** ---\n"
+                    for pending in pending_reviews:
+                        submitter_name = pending.get('submitter_name', 'N/A')
+                        checker_name = pending.get('checker_name', 'N/A')
+                        report_card_text += f"• **@{submitter_name}**'s answer is pending review by **@{checker_name}**.\n"
+                
+                # TODO: Add 'Not Submitted' logic here in the future
                 
                 report_card_text += "\n--- \nGreat effort everyone! Keep practicing! ✨"
                 bot.send_message(GROUP_ID, report_card_text, parse_mode="Markdown")
-            
-            bot.send_message(admin_chat_id, "✅ Report posted. Now starting today's session...")
+                bot.send_message(admin_chat_id, "✅ Report posted successfully. Now starting today's session...")
+        
         except Exception as e:
+            # NEW: Add detailed error logging for future debugging
             print(f"Error generating report: {traceback.format_exc()}")
-            bot.send_message(admin_chat_id, "❌ Failed to generate the report. Starting session anyway.")
+            report_error_to_admin(f"Error in handle_report_confirmation:\n{traceback.format_exc()}")
+            bot.send_message(admin_chat_id, "❌ Failed to generate the report. An error occurred. Starting session anyway.")
 
     # Start the new session regardless of the choice
     start_new_practice_session(admin_chat_id)
