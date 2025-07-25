@@ -1278,11 +1278,70 @@ def handle_today_quiz(msg: types.Message):
         print(f"CRITICAL Error in /todayquiz: {traceback.format_exc()}")
         report_error_to_admin(f"Failed to fetch today's quiz schedule:\n{traceback.format_exc()}")
         bot.send_message(msg.chat.id, "😥 Oops! Something went wrong while fetching the schedule.")
+def format_kalkaquiz_message(quizzes):
+    """
+    Formats the quiz schedule for /kalkaquiz into the new mobile-first HTML format.
+    """
+    if not quizzes:
+        return ""
+
+    # --- Get Tomorrow's Date from the first quiz item ---
+    try:
+        tomorrow_date = datetime.datetime.strptime(quizzes[0]['quiz_date'], '%Y-%m-%d')
+        date_str = tomorrow_date.strftime('%A, %d %B %Y')
+    except (ValueError, TypeError):
+        date_str = "Tomorrow's Schedule"
+
+    # --- Build the message header ---
+    message_parts = [
+        f"<b>🗓️ Tomorrow's Quiz Plan</b>\n",
+        f"<i>{date_str}</i>",
+        "- - - - - - - - - - - - - - - - - -\n"
+    ]
+
+    # --- Group quizzes by subject ---
+    quizzes_by_subject = {}
+    for quiz in quizzes:
+        subject = quiz.get('subject', 'Uncategorized')
+        if subject not in quizzes_by_subject:
+            quizzes_by_subject[subject] = []
+        quizzes_by_subject[subject].append(quiz)
+
+    # --- Build the main content ---
+    for subject, quiz_list in quizzes_by_subject.items():
+        message_parts.append(f"<b>📚 {escape(subject)}</b>\n")
+        for quiz in quiz_list:
+            try:
+                time_obj = datetime.datetime.strptime(quiz['quiz_time'], '%H:%M:%S')
+                # Get the hour to select the correct emoji
+                hour = time_obj.hour
+                minute = time_obj.minute
+                
+                # Simple emoji logic
+                if hour < 12: clock_emoji = "🕗"
+                elif hour < 18: clock_emoji = "🕐"
+                else: clock_emoji = "🕗"
+
+                formatted_time = time_obj.strftime('%I:%M %p')
+            except (ValueError, TypeError):
+                formatted_time = "N/A"
+                clock_emoji = "⏰"
+
+            message_parts.append(
+                f"{clock_emoji} <b>{formatted_time}</b> - <u>Quiz {quiz.get('quiz_no', 'N/A')}</u>\n"
+                f"└─ <i>{escape(str(quiz.get('chapter_name', 'N/A')))}</i>\n"
+            )
+        message_parts.append("- - - - - - - - - - - - - - - - - -\n")
+    
+    # --- Add the footer ---
+    message_parts.append(f"<b><i>All the best, Saurabh!</i></b> 💪")
+
+    return "\n".join(message_parts)
 @bot.message_handler(commands=['kalkaquiz'])
 @membership_required
 def handle_tomorrow_quiz(msg: types.Message):
     """
-    Shows the quiz schedule for the next day with a prominent date heading.
+    Shows the quiz schedule for the next day using the new mobile-first format.
     """
     if not is_group_message(msg):
         bot.send_message(msg.chat.id, "ℹ️ The `/kalkaquiz` command is designed to be used in the main group chat.")
@@ -1296,34 +1355,11 @@ def handle_tomorrow_quiz(msg: types.Message):
         response = supabase.table('quiz_schedule').select('*').eq('quiz_date', tomorrow_date_str).order('quiz_no').execute()
 
         if not response.data:
-            bot.send_message(msg.chat.id, f"✅ Hey {msg.from_user.first_name}, tomorrow's schedule has not been updated yet. Please check back later!")
+            bot.send_message(msg.chat.id, f"✅ Hey {escape(msg.from_user.first_name)}, tomorrow's schedule has not been updated yet. Please check back later!")
             return
-            
-        user_name = msg.from_user.first_name
-        # Format the date for the message header (e.g., "26th July 2025")
-        formatted_date = tomorrow_date.strftime(f"%d{('th' if 11<=tomorrow_date.day<=13 else {1:'st',2:'nd',3:'rd'}.get(tomorrow_date.day%10, 'th'))} %B %Y")
         
-        # --- NEW: Improved Message Formatting ---
-        message_text = f"<b>Hello {user_name}!</b> Here is the quiz lineup for tomorrow:\n"
-        message_text += "———————————————\n\n"
-        # Add a prominent date heading
-        message_text += f"🗓️ <b>Schedule for: {formatted_date}</b> 🗓️\n\n"
-        
-        for quiz in response.data:
-            try:
-                time_obj = datetime.datetime.strptime(quiz['quiz_time'], '%H:%M:%S')
-                formatted_time = time_obj.strftime('%I:%M %p')
-            except (ValueError, TypeError):
-                formatted_time = "N/A"
-
-            message_text += (
-                f"<b>Quiz no. {quiz.get('quiz_no', 'N/A')}:</b>\n"
-                f"⏰ Time: {formatted_time}\n"
-                f"📝 Subject: {escape(str(quiz.get('subject', 'N/A')))}\n"
-                f"📖 Chapter: {escape(str(quiz.get('chapter_name', 'N/A')))}\n\n"
-            )
-        
-        message_text += "———————————————\nAll the best for your preparation! 👍"
+        # Use our new helper function to generate the message
+        message_text = format_kalkaquiz_message(response.data)
         
         bot.send_message(msg.chat.id, message_text, parse_mode="HTML")
 
