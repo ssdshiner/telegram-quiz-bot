@@ -902,13 +902,15 @@ def handle_group_message_content(msg: types.Message):
 def handle_forwarded_message(msg: types.Message):
     """
     Triggers when an admin forwards a message to the bot.
-    This version robustly checks if the forward is from the main group.
+    This version is simpler and more reliable. It assumes the admin is forwarding
+    from the main group and just extracts the original message ID.
     """
     admin_id = msg.from_user.id
     
-    # This is the crucial check: we can only reply if we know which chat it came from
-    # and what the original message ID was.
-    if msg.forward_from_chat and msg.forward_from_chat.id == GROUP_ID:
+    # THE NEW, SIMPLER LOGIC:
+    # We just need the original message ID. We don't need to check the origin chat.
+    # We will trust the admin to forward from the correct group.
+    if msg.forward_from_message_id:
         original_message_id = msg.forward_from_message_id
         
         # Save the context for the next step
@@ -917,11 +919,11 @@ def handle_forwarded_message(msg: types.Message):
             'original_message_id': original_message_id
         }
         
-        bot.send_message(admin_id, "✅ Okay, I see you want to reply to this message. Please send me your reply now (text, image, sticker, etc.). Use /cancel to stop.")
+        bot.send_message(admin_id, "✅ Forward received. Please send your reply now (text, image, sticker, etc.). Use /cancel to stop.")
     else:
-        # If forward_from_chat is missing, we can't reply. Guide the admin.
-        bot.send_message(admin_id, "❌ **Reply Failed.**\n\nI can't reply to this message because I don't know which group it came from.\n\n*Pro Tip:* Please ensure you are forwarding messages directly from the main group chat. Sometimes, forwarding from a 'topic' can cause issues.")
-
+        # This error can happen if the original message was sent by a user who
+        # disallows linking to their account when their messages are forwarded.
+        bot.send_message(admin_id, "❌ **Reply Failed.**\n\nI can't reply because the original message's ID is hidden, likely due to the original sender's privacy settings.")
 
 @bot.message_handler(
     func=lambda msg: user_states.get(msg.from_user.id, {}).get('step') == 'awaiting_quoted_reply',
