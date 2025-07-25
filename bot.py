@@ -31,7 +31,7 @@ WEBAPP_URL = os.getenv('WEBAPP_URL')
 ADMIN_USER_ID_STR = os.getenv('ADMIN_USER_ID')
 BOT_USERNAME = "CAVYA_bot"
 PUBLIC_GROUP_COMMANDS = [
-    'todayquiz', 'section', 'feedback', 'mystats', 'info'
+    'todayquiz', 'section', 'feedback', 'mystats', 'info', 'kalkaquiz'
 ]
 GOOGLE_SHEETS_CREDENTIALS_PATH = os.getenv('GOOGLE_SHEETS_CREDENTIALS_PATH')
 GOOGLE_SHEET_KEY = os.getenv('GOOGLE_SHEET_KEY')
@@ -679,10 +679,11 @@ Hello Admin! Here are your available tools.
 `/leaderboard` - Post random quiz leaderboard.
 `/practice` - Start daily written practice.
 
-*👥 Member Management*
+*👥 Member Management & Automation*
 `/dm` - Send a direct message to a user.
 `/activity_report` - Get a group activity report.
 `/sync_members` - Sync old members to tracker.
+`/run_checks` - Manually run daily checks.
 `/prunedms` - Clean the inactive DM list.
 """
     bot.send_message(msg.chat.id, help_text, parse_mode="Markdown")
@@ -819,7 +820,7 @@ def save_data():
 @membership_required
 def handle_info_command(msg: types.Message):
     """
-    Provides a list of all available commands for members with corrected Markdown formatting.
+    Provides a list of all available commands for members, including /kalkaquiz.
     """
     info_text = """
 *🤖 Bot Commands for Members 🤖*
@@ -829,8 +830,11 @@ Here are the commands you can use to interact with the bot.
 *📅 `/todayquiz`*
    ► Shows the quiz schedule for today.
 
+*⏩ `/kalkaquiz`*
+   ► Shows the quiz schedule for tomorrow.
+
 *📊 `/mystats`*
-   ► Get your personal performance stats (Quiz marathon-daily quizzes Ranks, Streaks, etc.).
+   ► Get your personal performance stats (Ranks, Streaks, etc.) sent to you in a private message.
 
 *📖 `/section` _<number>_*
    ► Get details for a specific Companies Act section.
@@ -909,15 +913,17 @@ def handle_group_message_content(msg: types.Message):
         if admin_id in user_states:
             del user_states[admin_id]
 # === ADD THIS FUNCTION TO CATCH FORWARDED MESSAGES ===
-@bot.message_handler(func=lambda msg: msg.forward_from_chat and msg.chat.type == 'private' and is_admin(msg.from_user.id))
+@bot.message_handler(func=lambda msg: (msg.forward_from or msg.forward_from_chat) and msg.chat.type == 'private' and is_admin(msg.from_user.id))
 def handle_forwarded_message(msg: types.Message):
     """
-    Triggers when an admin forwards a message to the bot, initiating a quoted reply.
+    Triggers when an admin forwards a message to the bot.
+    This version robustly checks if the forward is from the main group.
     """
     admin_id = msg.from_user.id
     
-    # Check if the message is forwarded from the main group
-    if msg.forward_from_chat.id == GROUP_ID:
+    # This is the crucial check: we can only reply if we know which chat it came from
+    # and what the original message ID was.
+    if msg.forward_from_chat and msg.forward_from_chat.id == GROUP_ID:
         original_message_id = msg.forward_from_message_id
         
         # Save the context for the next step
@@ -928,7 +934,8 @@ def handle_forwarded_message(msg: types.Message):
         
         bot.send_message(admin_id, "✅ Okay, I see you want to reply to this message. Please send me your reply now (text, image, sticker, etc.). Use /cancel to stop.")
     else:
-        bot.send_message(admin_id, "ℹ️ You can only reply to messages that were originally posted in our main group.")
+        # If forward_from_chat is missing, we can't reply. Guide the admin.
+        bot.send_message(admin_id, "❌ **Reply Failed.**\n\nI can't reply to this message because I don't know which group it came from.\n\n*Pro Tip:* Please ensure you are forwarding messages directly from the main group chat. Sometimes, forwarding from a 'topic' or 'linked channel' can cause issues.")
 # === ADD THIS SECOND FUNCTION TO HANDLE THE REPLY CONTENT ===
 @bot.message_handler(
     func=lambda msg: user_states.get(msg.from_user.id, {}).get('step') == 'awaiting_quoted_reply',
@@ -1028,6 +1035,59 @@ def handle_today_quiz(msg: types.Message):
     except Exception as e:
         print(f"CRITICAL Error in /todayquiz: {traceback.format_exc()}")
         report_error_to_admin(f"Failed to fetch today's quiz schedule:\n{traceback.format_exc()}")
+        bot.send_message(msg.chat.id, "😥 Oops! Something went wrong while fetching the schedule.")
+@bot.message_handler(commands=['kalkaquiz'])
+@membership_required
+def handle_tomorrow_quiz(msg: types.Message):
+    """
+    Shows the quiz schedule for the next day with a prominent date heading.
+    """
+    if not is_group_message(msg):
+        bot.send_message(msg.chat.id, "ℹ️ The `/kalkaquiz` command is designed to be used in the main group chat.")
+        return
+
+    try:
+        ist_tz = timezone(timedelta(hours=5, minutes=30))
+        tomorrow_date = datetime.datetime.now(ist_tz) + datetime.timedelta(days=1)
+        tomorrow_date_str = tomorrow_date.strftime('%Y-%m-%d')
+        
+        response = supabase.table('quiz_schedule').select('*').eq('quiz_date', tomorrow_date_str).order('quiz_no').execute()
+
+        if not response.data:
+            bot.send_message(msg.chat.id, f"✅ Hey {msg.from_user.first_name}, tomorrow's schedule has not been updated yet. Please check back later!")
+            return
+            
+        user_name = msg.from_user.first_name
+        # Format the date for the message header (e.g., "26th July 2025")
+        formatted_date = tomorrow_date.strftime(f"%d{('th' if 11<=tomorrow_date.day<=13 else {1:'st',2:'nd',3:'rd'}.get(tomorrow_date.day%10, 'th'))} %B %Y")
+        
+        # --- NEW: Improved Message Formatting ---
+        message_text = f"<b>Hello {user_name}!</b> Here is the quiz lineup for tomorrow:\n"
+        message_text += "———————————————\n\n"
+        # Add a prominent date heading
+        message_text += f"🗓️ <b>Schedule for: {formatted_date}</b> 🗓️\n\n"
+        
+        for quiz in response.data:
+            try:
+                time_obj = datetime.datetime.strptime(quiz['quiz_time'], '%H:%M:%S')
+                formatted_time = time_obj.strftime('%I:%M %p')
+            except (ValueError, TypeError):
+                formatted_time = "N/A"
+
+            message_text += (
+                f"<b>Quiz no. {quiz.get('quiz_no', 'N/A')}:</b>\n"
+                f"⏰ Time: {formatted_time}\n"
+                f"📝 Subject: {escape(str(quiz.get('subject', 'N/A')))}\n"
+                f"📖 Chapter: {escape(str(quiz.get('chapter_name', 'N/A')))}\n\n"
+            )
+        
+        message_text += "———————————————\nAll the best for your preparation! 👍"
+        
+        bot.send_message(msg.chat.id, message_text, parse_mode="HTML")
+
+    except Exception as e:
+        print(f"CRITICAL Error in /kalkaquiz: {traceback.format_exc()}")
+        report_error_to_admin(f"Failed to fetch tomorrow's quiz schedule:\n{traceback.format_exc()}")
         bot.send_message(msg.chat.id, "😥 Oops! Something went wrong while fetching the schedule.")
 # === ADD THIS FUNCTION IF IT DOESN'T EXIST ===
 @bot.callback_query_handler(func=lambda call: call.data.startswith('show_'))
@@ -2755,40 +2815,65 @@ def handle_submission(msg: types.Message):
 @bot.message_handler(commands=['review_done'])
 def handle_review_done(msg: types.Message):
     """
-    STARTS the conversational flow for a reviewer to submit marks.
-    It intelligently routes to 'Simple' or 'Detailed' mode.
+    Handles the /review_done command from the Checker.
+    This version is more robust and guides the user if they reply to the wrong message.
     """
-    if not is_group_message(msg) or not (msg.reply_to_message and msg.reply_to_message.photo):
+    if not is_group_message(msg) or not msg.reply_to_message:
+        # This check now also handles cases where reply is not to a photo,
+        # but the main check is below.
         bot.reply_to(msg, "Please use this command by replying to the answer sheet photo you reviewed.")
         return
+
     try:
-        submission_response = supabase.table('practice_submissions').select('*, practice_sessions(*)').eq('submission_message_id', msg.reply_to_message.message_id).single().execute()
-        if not submission_response.data: return
-        submission = submission_response.data
-        if msg.from_user.id != submission.get('checker_id'):
+        checker_id = msg.from_user.id
+        submission_msg_id = msg.reply_to_message.message_id
+
+        # --- THE FIX IS HERE: We remove .single() to handle 0 rows gracefully ---
+        submission_response = supabase.table('practice_submissions').select('*, practice_sessions(*)').eq('submission_message_id', submission_msg_id).execute()
+
+        # --- NEW: Check if any submission was found ---
+        if not submission_response.data:
+            # Guide the user on what to do if no submission is found for that message
+            bot.reply_to(msg, "❌ **Action failed.**\n\nPlease make sure you are replying directly to the **student's original answer sheet photo** when using the `/review_done` command.")
+            return
+
+        submission = submission_response.data[0] # Get the first (and only) result
+        submission_id = submission['submission_id']
+        assigned_checker_id = submission['checker_id']
+        
+        # Check if the session data and marks distribution exist
+        if not submission.get('practice_sessions') or not submission['practice_sessions'].get('marks_distribution'):
+            bot.reply_to(msg, "❌ Error: Cannot find the marks details for this session. Please contact the admin.")
+            return
+
+        # Verify the command is from the correct checker
+        if checker_id != assigned_checker_id:
             bot.reply_to(msg, "❌ You are not assigned to review this answer sheet.")
             return
-        if submission.get('review_status') == 'Completed':
+
+        # Check if it's already reviewed
+        if submission['review_status'] == 'Completed':
             bot.reply_to(msg, "This submission has already been marked.")
             return
 
-        marks_dist = submission.get('practice_sessions', {}).get('marks_distribution', {})
+        # --- SMART ROUTING: Decide which marking flow to use ---
+        marks_dist = submission['practice_sessions']['marks_distribution']
         
-        # --- SMART ROUTING: Check if it's Simple or Detailed Mode ---
         if "q1" in marks_dist: # Detailed Mode
             markup = types.InlineKeyboardMarkup()
             markup.add(
-                types.InlineKeyboardButton("Both Questions", callback_data=f"review_type_both_{submission['submission_id']}"),
-                types.InlineKeyboardButton("A Single Question", callback_data=f"review_type_single_{submission['submission_id']}")
+                types.InlineKeyboardButton("Both Questions", callback_data=f"review_type_both_{submission_id}"),
+                types.InlineKeyboardButton("A Single Question", callback_data=f"review_type_single_{submission_id}")
             )
             bot.reply_to(msg, "For which questions are you giving marks?", reply_markup=markup)
         else: # Simple Mode
             total_marks = marks_dist.get('total', 0)
             prompt = bot.reply_to(msg, f"Please reply to this message with the marks awarded out of *{total_marks}*.", parse_mode="Markdown")
-            bot.register_next_step_handler(prompt, process_simple_review_marks, submission['submission_id'], total_marks)
+            bot.register_next_step_handler(prompt, process_simple_review_marks, submission_id, total_marks)
 
     except Exception as e:
         print(f"Error in /review_done: {traceback.format_exc()}")
+        report_error_to_admin(traceback.format_exc())
         bot.send_message(msg.chat.id, "❌ An error occurred.")
 
 
@@ -3135,6 +3220,38 @@ def handle_left_member(msg: types.Message):
     except Exception as e:
         print(f"Error in handle_left_member: {traceback.format_exc()}")
         report_error_to_admin(f"Could not update status for left member:\n{e}")
+# === ADD THIS ENTIRE NEW FUNCTION ===
+@bot.message_handler(commands=['run_checks'])
+@admin_required
+def handle_run_checks_command(msg: types.Message):
+    """
+    Manually triggers the daily checks for inactivity and appreciation.
+    This will also prevent the automatic check for the same day from running.
+    """
+    if not msg.chat.type == 'private':
+        bot.reply_to(msg, "🤫 Please use this command in a private chat with me.")
+        return
+
+    global last_daily_check_day
+    admin_id = msg.from_user.id
+    
+    try:
+        bot.send_message(admin_id, "✅ Understood. Manually starting the daily checks now. This might take a moment...")
+        
+        # Run the same function the scheduler uses
+        run_daily_checks()
+        
+        # Update the global variable to prevent the scheduler from running it again today
+        ist_tz = timezone(timedelta(hours=5, minutes=30))
+        current_day = datetime.datetime.now(ist_tz).day
+        last_daily_check_day = current_day
+        
+        bot.send_message(admin_id, "✅ Manual checks completed. Any necessary warnings or appreciation messages have been sent to the group.")
+
+    except Exception as e:
+        print(f"Error in /run_checks: {traceback.format_exc()}")
+        report_error_to_admin(f"Error during manual /run_checks:\n{e}")
+        bot.send_message(admin_id, "❌ An error occurred during the manual check.")
 @bot.message_handler(content_types=['new_chat_members'])
 def handle_new_member(msg: types.Message):
     """
