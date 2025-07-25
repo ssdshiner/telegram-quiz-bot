@@ -452,69 +452,66 @@ def record_quiz_participation(user_id, user_name, score_achieved, time_taken_sec
 # Add this new global variable at the top of your file with the others
 last_daily_check_day = -1 
 
-# === REPLACE THE OLD run_daily_checks AND ADD THE TWO NEW FUNCTIONS BENEATH IT ===
+# === ADD THESE 2 NEW DATA-FETCHING FUNCTIONS ===
 
-def run_inactivity_checks():
-    """Finds and warns inactive users."""
-    print("Running inactivity checks...")
-    
-    # 1. Handle Final Warnings (Level 2)
-    final_warning_users = supabase.rpc('get_users_for_final_warning').execute().data
-    if final_warning_users:
-        user_list = [f"@{user['user_name']}" for user in final_warning_users]
-        user_ids_to_update = [user['user_id'] for user in final_warning_users]
-        
-        message = f"Admins, please take action. The following members did not participate even after a final warning:\n" + ", ".join(user_list)
-        bot.send_message(GROUP_ID, message)
-        
-        # Update their warning level to 2
-        supabase.table('quiz_activity').update({'warning_level': 2}).in_('user_id', user_ids_to_update).execute()
+def find_inactive_users():
+    """
+    Finds users who need warnings but does NOT send any messages.
+    Returns two lists: (final_warning_users, first_warning_users)
+    """
+    print("Finding inactive users...")
+    final_warning_users = supabase.rpc('get_users_for_final_warning').execute().data or []
+    first_warning_users = supabase.rpc('get_users_to_warn').execute().data or []
+    return final_warning_users, first_warning_users
 
-    # 2. Handle First Warnings (Level 1)
-    first_warning_users = supabase.rpc('get_users_to_warn').execute().data
-    if first_warning_users:
-        user_list = [f"@{user['user_name']}" for user in first_warning_users]
-        user_ids_to_update = [user['user_id'] for user in first_warning_users]
-
-        message = (
-            f"⚠️ **Quiz Activity Warning!** ⚠️\n"
-            f"The following members have not participated in any quiz for the last 3 days: {', '.join(user_list)}.\n"
-            f"This is your final 24-hour notice. Please participate in at least one quiz tomorrow to remain in the group."
-        )
-        bot.send_message(GROUP_ID, message)
-        
-        # Update their warning level to 1
-        supabase.table('quiz_activity').update({'warning_level': 1}).in_('user_id', user_ids_to_update).execute()
-
-
-def run_appreciation_checks():
-    """Finds and appreciates consistent users."""
-    print("Running appreciation checks...")
-    
-    # 1. Reset streaks for users who missed today's quizzes
+def find_users_to_appreciate():
+    """
+    Resets streaks and finds users who have earned appreciation.
+    Returns a list of users to appreciate.
+    """
+    print("Finding users to appreciate...")
+    # This first part is a data operation, so it stays here.
     supabase.rpc('reset_missed_streaks').execute()
     
-    # 2. Find users who have hit the appreciation target (e.g., 8 quizzes)
     APPRECIATION_STREAK = 8
-    users_to_appreciate = supabase.rpc('get_users_to_appreciate', {'streak_target': APPRECIATION_STREAK}).execute().data
-    
-    if users_to_appreciate:
-        for user in users_to_appreciate:
-            message = (
-                f"🏆 **Star Performer Alert!** 🏆\n\n"
-                f"Hats off to **@{user['user_name']}** for showing incredible consistency by participating in the last {APPRECIATION_STREAK} quizzes straight! Your dedication is what makes this community awesome. Keep it up! 👏"
-            )
-            bot.send_message(GROUP_ID, message)
+    users_to_appreciate = supabase.rpc('get_users_to_appreciate', {'streak_target': APPRECIATION_STREAK}).execute().data or []
+    return users_to_appreciate
 
+# === REPLACE THE OLD run_daily_checks WITH THIS NEW VERSION ===
 def run_daily_checks():
     """
-    Runs all daily automated tasks like inactivity checks and appreciation.
+    Runs all daily automated tasks. This version is fully automatic and
+    does not require admin approval.
     """
     try:
-        print("Starting daily checks...")
-        run_inactivity_checks()
-        run_appreciation_checks()
-        print("✅ Daily checks completed.")
+        print("Starting daily automated checks...")
+        
+        # --- Run Inactivity Checks Automatically ---
+        final_warnings, first_warnings = find_inactive_users()
+        if first_warnings:
+            user_list = [f"@{user['user_name']}" for user in first_warnings]
+            message = (f"⚠️ **Quiz Activity Warning!** ⚠️\n"
+                       f"The following members have not participated in any quiz for the last 3 days: {', '.join(user_list)}.\n"
+                       f"This is your final 24-hour notice.")
+            bot.send_message(GROUP_ID, message)
+            user_ids_to_update = [user['user_id'] for user in first_warnings]
+            supabase.table('quiz_activity').update({'warning_level': 1}).in_('user_id', user_ids_to_update).execute()
+        if final_warnings:
+            user_list = [f"@{user['user_name']}" for user in final_warnings]
+            message = f"Admins, please take action. The following members did not participate even after a final warning:\n" + ", ".join(user_list)
+            bot.send_message(GROUP_ID, message)
+            user_ids_to_update = [user['user_id'] for user in final_warnings]
+            supabase.table('quiz_activity').update({'warning_level': 2}).in_('user_id', user_ids_to_update).execute()
+
+        # --- Run Appreciation Checks Automatically ---
+        appreciations = find_users_to_appreciate()
+        if appreciations:
+            for user in appreciations:
+                message = (f"🏆 **Star Performer Alert!** 🏆\n\n"
+                           f"Hats off to **@{user['user_name']}** for showing incredible consistency! Your dedication is what makes this community awesome. Keep it up! 👏")
+                bot.send_message(GROUP_ID, message)
+
+        print("✅ Daily automated checks completed.")
     except Exception as e:
         print(f"❌ Error during daily checks: {e}")
         report_error_to_admin(f"Error in run_daily_checks:\n{traceback.format_exc()}")
@@ -924,7 +921,6 @@ def handle_forwarded_message(msg: types.Message):
         # This error can happen if the original message was sent by a user who
         # disallows linking to their account when their messages are forwarded.
         bot.send_message(admin_id, "❌ **Reply Failed.**\n\nI can't reply because the original message's ID is hidden, likely due to the original sender's privacy settings.")
-
 @bot.message_handler(
     func=lambda msg: user_states.get(msg.from_user.id, {}).get('step') == 'awaiting_quoted_reply',
     content_types=['text', 'photo', 'video', 'document', 'audio', 'sticker', 'animation']
@@ -3208,38 +3204,119 @@ def handle_left_member(msg: types.Message):
     except Exception as e:
         print(f"Error in handle_left_member: {traceback.format_exc()}")
         report_error_to_admin(f"Could not update status for left member:\n{e}")
-# === ADD THIS ENTIRE NEW FUNCTION ===
+# === ADD THESE 2 NEW FUNCTIONS FOR THE ADMIN COMMAND ===
+
 @bot.message_handler(commands=['run_checks'])
 @admin_required
 def handle_run_checks_command(msg: types.Message):
     """
-    Manually triggers the daily checks for inactivity and appreciation.
-    This will also prevent the automatic check for the same day from running.
+    Manually triggers the daily checks with an interactive preview for the admin.
     """
     if not msg.chat.type == 'private':
         bot.reply_to(msg, "🤫 Please use this command in a private chat with me.")
         return
 
-    global last_daily_check_day
     admin_id = msg.from_user.id
-    
+    bot.send_message(admin_id, "🔍 Running a 'Dry Run' of the daily checks... Please wait.")
+
     try:
-        bot.send_message(admin_id, "✅ Understood. Manually starting the daily checks now. This might take a moment...")
+        final_warnings, first_warnings = find_inactive_users()
+        appreciations = find_users_to_appreciate()
+
+        # Build the preview report
+        preview_report = "📋 **Manual Check Preview**\n\n"
+        has_actions = False
+
+        if first_warnings:
+            has_actions = True
+            preview_report += "--- ⚠️ *Warnings to be Sent* ---\n"
+            preview_report += "The following members will receive a 3-day inactivity warning:\n"
+            preview_report += format_user_list(first_warnings) + "\n"
         
-        # Run the same function the scheduler uses
-        run_daily_checks()
-        
-        # Update the global variable to prevent the scheduler from running it again today
-        ist_tz = timezone(timedelta(hours=5, minutes=30))
-        current_day = datetime.datetime.now(ist_tz).day
-        last_daily_check_day = current_day
-        
-        bot.send_message(admin_id, "✅ Manual checks completed. Any necessary warnings or appreciation messages have been sent to the group.")
+        if final_warnings:
+            has_actions = True
+            preview_report += "--- 🚨 *Final Warnings to be Sent* ---\n"
+            preview_report += "The following members will receive a final warning for admin action:\n"
+            preview_report += format_user_list(final_warnings) + "\n"
+
+        if appreciations:
+            has_actions = True
+            preview_report += "--- 🔥 *Appreciations to be Sent* ---\n"
+            preview_report += "The following members have completed their streak and will be appreciated:\n"
+            preview_report += format_user_list(appreciations) + "\n"
+
+        if not has_actions:
+            bot.send_message(admin_id, "✅ Dry run complete. No users found for any warnings or appreciations today.")
+            return
+
+        # Store the pending actions for the callback handler
+        user_states[admin_id] = {'pending_actions': {
+            'final_warnings': final_warnings,
+            'first_warnings': first_warnings,
+            'appreciations': appreciations
+        }}
+
+        markup = types.InlineKeyboardMarkup()
+        markup.add(
+            types.InlineKeyboardButton("✅ Send Messages to Group", callback_data="send_actions_yes"),
+            types.InlineKeyboardButton("❌ Cancel", callback_data="send_actions_no")
+        )
+        bot.send_message(admin_id, preview_report, reply_markup=markup, parse_mode="Markdown")
 
     except Exception as e:
         print(f"Error in /run_checks: {traceback.format_exc()}")
-        report_error_to_admin(f"Error during manual /run_checks:\n{e}")
-        bot.send_message(admin_id, "❌ An error occurred during the manual check.")
+        bot.send_message(admin_id, "❌ An error occurred during the check.")
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('send_actions_'))
+def handle_run_checks_confirmation(call: types.CallbackQuery):
+    """Handles the admin's confirmation to send the messages."""
+    admin_id = call.from_user.id
+    bot.edit_message_text("Processing your choice...", admin_id, call.message.message_id, reply_markup=None)
+
+    if call.data == 'send_actions_no':
+        bot.send_message(admin_id, "❌ Operation cancelled. No messages were sent to the group.")
+        if admin_id in user_states and 'pending_actions' in user_states[admin_id]:
+            del user_states[admin_id]['pending_actions']
+        return
+
+    try:
+        actions = user_states.get(admin_id, {}).get('pending_actions')
+        if not actions:
+            bot.send_message(admin_id, "❌ Action expired or data not found. Please run /run_checks again.")
+            return
+
+        # --- Take Actions ---
+        if actions['first_warnings']:
+            user_list = [f"@{user['user_name']}" for user in actions['first_warnings']]
+            message = (f"⚠️ **Quiz Activity Warning!** ⚠️\n"
+                       f"The following members have not participated in any quiz for the last 3 days: {', '.join(user_list)}.\n"
+                       f"This is your final 24-hour notice.")
+            bot.send_message(GROUP_ID, message)
+            user_ids_to_update = [user['user_id'] for user in actions['first_warnings']]
+            supabase.table('quiz_activity').update({'warning_level': 1}).in_('user_id', user_ids_to_update).execute()
+        
+        if actions['final_warnings']:
+            user_list = [f"@{user['user_name']}" for user in actions['final_warnings']]
+            message = f"Admins, please take action. The following members did not participate even after a final warning:\n" + ", ".join(user_list)
+            bot.send_message(GROUP_ID, message)
+            user_ids_to_update = [user['user_id'] for user in actions['final_warnings']]
+            supabase.table('quiz_activity').update({'warning_level': 2}).in_('user_id', user_ids_to_update).execute()
+
+        if actions['appreciations']:
+            for user in actions['appreciations']:
+                message = (f"🏆 **Star Performer Alert!** 🏆\n\n"
+                           f"Hats off to **@{user['user_name']}** for showing incredible consistency! Your dedication is what makes this community awesome. Keep it up! 👏")
+                bot.send_message(GROUP_ID, message)
+
+        bot.send_message(admin_id, "✅ All approved messages have been sent to the group.")
+    
+    except Exception as e:
+        print(f"Error in handle_run_checks_confirmation: {traceback.format_exc()}")
+        bot.send_message(admin_id, "❌ An error occurred while sending messages.")
+    finally:
+        if admin_id in user_states and 'pending_actions' in user_states[admin_id]:
+            del user_states[admin_id]['pending_actions']
 @bot.message_handler(content_types=['new_chat_members'])
 def handle_new_member(msg: types.Message):
     """
