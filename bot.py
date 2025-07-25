@@ -585,7 +585,7 @@ def run_daily_checks():
 
 def background_worker():
     """Runs all scheduled tasks in a continuous loop."""
-    global last_daily_check_day, last_schedule_announce_day # Add the new variable here
+    global last_daily_check_day, last_schedule_announce_day
 
     while True:
         try:
@@ -594,16 +594,7 @@ def background_worker():
             current_day = current_time_ist.day
             current_hour = current_time_ist.hour
 
-            # --- NEW: Daily Schedule Announcement at 10:00 PM ---
-            if current_hour == 22 and last_schedule_announce_day != current_day:
-                print("⏰ It's 10:00 PM, time to announce tomorrow's schedule...")
-                tomorrow_date = datetime.datetime.now(ist_tz) + datetime.timedelta(days=1)
-                fetch_and_announce_schedule(tomorrow_date)
-                last_schedule_announce_day = current_day # Mark as done for today
-            # ----------------------------------------------------
-
             # --- Daily Inactivity/Appreciation Check (around 10:30 PM) ---
-            # We add a minute check to run this slightly after the announcement
             if current_hour == 22 and current_time_ist.minute >= 30 and last_daily_check_day != current_day:
                 print(f"⏰ It's 10:30 PM, time for daily automated checks...")
                 run_daily_checks()
@@ -1281,25 +1272,24 @@ def handle_today_quiz(msg: types.Message):
 def format_kalkaquiz_message(quizzes):
     """
     Formats the quiz schedule for /kalkaquiz into the new mobile-first HTML format.
+    NOW INCLUDES Part (quiz_type) and Topics (topics_covered).
     """
     if not quizzes:
         return ""
 
-    # --- Get Tomorrow's Date from the first quiz item ---
     try:
         tomorrow_date = datetime.datetime.strptime(quizzes[0]['quiz_date'], '%Y-%m-%d')
+        # This creates a nice format like "Saturday, 26 July 2025"
         date_str = tomorrow_date.strftime('%A, %d %B %Y')
     except (ValueError, TypeError):
         date_str = "Tomorrow's Schedule"
 
-    # --- Build the message header ---
     message_parts = [
         f"<b>🗓️ Tomorrow's Quiz Plan</b>\n",
         f"<i>{date_str}</i>",
         "- - - - - - - - - - - - - - - - - -\n"
     ]
 
-    # --- Group quizzes by subject ---
     quizzes_by_subject = {}
     for quiz in quizzes:
         subject = quiz.get('subject', 'Uncategorized')
@@ -1307,34 +1297,41 @@ def format_kalkaquiz_message(quizzes):
             quizzes_by_subject[subject] = []
         quizzes_by_subject[subject].append(quiz)
 
-    # --- Build the main content ---
-    for subject, quiz_list in quizzes_by_subject.items():
+    for i, (subject, quiz_list) in enumerate(quizzes_by_subject.items()):
         message_parts.append(f"<b>📚 {escape(subject)}</b>\n")
         for quiz in quiz_list:
             try:
                 time_obj = datetime.datetime.strptime(quiz['quiz_time'], '%H:%M:%S')
-                # Get the hour to select the correct emoji
                 hour = time_obj.hour
-                minute = time_obj.minute
-                
-                # Simple emoji logic
-                if hour < 12: clock_emoji = "🕗"
-                elif hour < 18: clock_emoji = "🕐"
-                else: clock_emoji = "🕗"
-
+                clock_emoji = "🕗" if hour < 12 else "🕐" if hour < 18 else "🕗"
                 formatted_time = time_obj.strftime('%I:%M %p')
             except (ValueError, TypeError):
-                formatted_time = "N/A"
-                clock_emoji = "⏰"
+                formatted_time, clock_emoji = "N/A", "⏰"
 
-            message_parts.append(
-                f"{clock_emoji} <b>{formatted_time}</b> - <u>Quiz {quiz.get('quiz_no', 'N/A')}</u>\n"
-                f"└─ <i>{escape(str(quiz.get('chapter_name', 'N/A')))}</i>\n"
-            )
-        message_parts.append("- - - - - - - - - - - - - - - - - -\n")
-    
+            # ---- THE MAIN CHANGE IS HERE ----
+            # Get the new data fields safely
+            quiz_type = escape(str(quiz.get('quiz_type', '')))
+            topics_covered = escape(str(quiz.get('topics_covered', '')))
+
+            # Build the main line
+            message_parts.append(f"{clock_emoji} <b>{formatted_time}</b> - <u>Quiz {quiz.get('quiz_no', 'N/A')}</u>")
+            # Add Chapter
+            message_parts.append(f"└─ 📖 <i>{escape(str(quiz.get('chapter_name', 'N/A')))}</i>")
+            # Conditionally add Part if it exists
+            if quiz_type:
+                message_parts.append(f"   └─ 📝 <i>Part: {quiz_type}</i>")
+            # Conditionally add Topics if it exists
+            if topics_covered:
+                 message_parts.append(f"      └─ 💡 <i>Topics: {topics_covered}</i>")
+            
+            # Add a blank line for spacing after each quiz entry
+            message_parts.append("") 
+        
+        # Add a separator only if it's not the last subject
+        if i < len(quizzes_by_subject) - 1:
+            message_parts.append("- - - - - - - - - - - - - - - - - -\n")
     # --- Add the footer ---
-    message_parts.append(f"<b><i>All the best, Saurabh!</i></b> 💪")
+    message_parts.append(f"<b><i>For detailed format use /todayquiz command tomorrow!</i></b> 💪")
 
     return "\n".join(message_parts)
 @bot.message_handler(commands=['kalkaquiz'])
