@@ -920,8 +920,9 @@ def handle_forwarded_message(msg: types.Message):
         bot.send_message(admin_id, "✅ Okay, I see you want to reply to this message. Please send me your reply now (text, image, sticker, etc.). Use /cancel to stop.")
     else:
         # If forward_from_chat is missing, we can't reply. Guide the admin.
-        bot.send_message(admin_id, "❌ **Reply Failed.**\n\nI can't reply to this message because I don't know which group it came from.\n\n*Pro Tip:* Please ensure you are forwarding messages directly from the main group chat. Sometimes, forwarding from a 'topic' or 'linked channel' can cause issues.")
-# === ADD THIS SECOND FUNCTION TO HANDLE THE REPLY CONTENT ===
+        bot.send_message(admin_id, "❌ **Reply Failed.**\n\nI can't reply to this message because I don't know which group it came from.\n\n*Pro Tip:* Please ensure you are forwarding messages directly from the main group chat. Sometimes, forwarding from a 'topic' can cause issues.")
+
+
 @bot.message_handler(
     func=lambda msg: user_states.get(msg.from_user.id, {}).get('step') == 'awaiting_quoted_reply',
     content_types=['text', 'photo', 'video', 'document', 'audio', 'sticker', 'animation']
