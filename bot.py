@@ -858,6 +858,7 @@ Hello Admin! Here are your available tools.
 `/alltimerankers` - Post all-time marathon ranks.
 `/leaderboard` - Post random quiz leaderboard.
 `/practice` - Start daily written practice.
+`/remind_checkers` - Remind for pending reviews.
 
 *👥 Member & Role Management*
 `/promote` - Make a member a Contributor for resource.
@@ -3442,6 +3443,47 @@ def handle_report_confirmation(call: types.CallbackQuery):
 # =============================================================================
 # 8.Y. UNIFIED POLL ANSWER HANDLER (SIMPLIFIED & FINAL VERSION)
 # =============================================================================
+# === ADD THIS ENTIRE NEW FUNCTION ===
+@bot.message_handler(commands=['remind_checkers'])
+@admin_required
+def handle_remind_checkers_command(msg: types.Message):
+    """
+    Sends a reminder to the group for all pending reviews for the current day.
+    """
+    if not msg.chat.type == 'private':
+        bot.reply_to(msg, "🤫 Please use this command in a private chat with me.")
+        return
+
+    try:
+        bot.send_message(msg.chat.id, "🔍 Checking for today's pending reviews...")
+        
+        # Call the RPC function
+        response = supabase.rpc('get_pending_reviews_for_today').execute()
+        
+        if not response.data:
+            bot.send_message(msg.chat.id, "✅ Great news! There are no pending reviews for today's session.")
+            return
+
+        pending_reviews = response.data
+        
+        # --- Build the Reminder Message ---
+        reminder_message = "📢 **Gentle Reminder for Pending Reviews** 📢\n\n"
+        reminder_message += "The following submissions from today's session are still awaiting review. Checkers, please provide your valuable feedback soon!\n\n"
+        
+        for review in pending_reviews:
+            submitter = review.get('submitter_name', 'N/A')
+            checker = review.get('checker_name', 'N/A')
+            reminder_message += f"• **@{submitter}**'s answer sheet is waiting for **@{checker}**.\n"
+            
+        reminder_message += "\nThank you for your cooperation! 🙏"
+        
+        bot.send_message(GROUP_ID, reminder_message, parse_mode="Markdown")
+        bot.send_message(msg.chat.id, f"✅ Reminder for **{len(pending_reviews)}** pending review(s) has been posted in the group.")
+
+    except Exception as e:
+        print(f"Error in /remind_checkers: {traceback.format_exc()}")
+        report_error_to_admin(f"Error during /remind_checkers:\n{e}")
+        bot.send_message(msg.chat.id, "❌ An error occurred while sending the reminder.")
 @bot.poll_answer_handler()
 def handle_all_poll_answers(poll_answer: types.PollAnswer):
     """
