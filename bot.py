@@ -31,7 +31,8 @@ WEBAPP_URL = os.getenv('WEBAPP_URL')
 ADMIN_USER_ID_STR = os.getenv('ADMIN_USER_ID')
 BOT_USERNAME = "CAVYA_bot"
 PUBLIC_GROUP_COMMANDS = [
-    'todayquiz', 'section', 'feedback', 'mystats', 'info', 'kalkaquiz'
+    'todayquiz', 'section', 'feedback', 'mystats', 'info', 'kalkaquiz',
+    'listfile', 'need' 
 ]
 GOOGLE_SHEETS_CREDENTIALS_PATH = os.getenv('GOOGLE_SHEETS_CREDENTIALS_PATH')
 GOOGLE_SHEET_KEY = os.getenv('GOOGLE_SHEET_KEY')
@@ -574,7 +575,115 @@ def get_message():
 def health_check():
     """Health check endpoint for Render to monitor service status."""
     return "<h1>Telegram Bot is alive and running</h1>", 200
+# === ADD THESE 5 NEW FUNCTIONS FOR THE VAULT UPLOAD FLOW ===
 
+def check_uploader_role(user_id):
+    """Helper function to check if a user is an admin or a contributor."""
+    if is_admin(user_id):
+        return True
+    try:
+        user_response = supabase.table('quiz_activity').select('user_role').eq('user_id', user_id).single().execute()
+        if user_response.data and user_response.data.get('user_role') == 'contributor':
+            return True
+    except Exception as e:
+        print(f"Error checking user role for {user_id}: {e}")
+    return False
+
+
+@bot.message_handler(commands=['add_resource'])
+def handle_add_resource(msg: types.Message):
+    """
+    Starts the conversational flow for adding a new resource to the Vault.
+    Accessible only by admins and contributors in private chat.
+    """
+    if not msg.chat.type == 'private':
+        bot.reply_to(msg, "🤫 Please use this command in a private chat with me.")
+        return
+
+    user_id = msg.from_user.id
+    if not check_uploader_role(user_id):
+        bot.send_message(user_id, "❌ Access Denied. You are not authorized to add resources.")
+        return
+
+    user_states[user_id] = {} # Clear any previous state
+    prompt = bot.send_message(user_id, "Okay, let's add a new resource to the Vault.\n\n*Step 1 of 3:* Please upload the document/file now.", parse_mode="Markdown")
+    bot.register_next_step_handler(prompt, process_resource_file)
+
+
+def process_resource_file(msg: types.Message):
+    """Step 2: Receives the file and asks for keywords."""
+    user_id = msg.from_user.id
+    file_id = None
+    file_name = "N/A"
+    file_type = "N/A"
+
+    if msg.document:
+        file_id = msg.document.file_id
+        file_name = msg.document.file_name
+        file_type = msg.document.mime_type
+    elif msg.photo:
+        file_id = msg.photo[-1].file_id
+        file_type = "image/jpeg"
+    elif msg.video:
+        file_id = msg.video.file_id
+        file_name = msg.video.file_name
+        file_type = msg.video.mime_type
+    else:
+        prompt = bot.reply_to(msg, "That doesn't seem to be a valid file. Please upload a document, photo, or video.\n\nOr type /cancel to stop.")
+        bot.register_next_step_handler(prompt, process_resource_file)
+        return
+
+    user_states[user_id] = {'file_id': file_id, 'file_name': file_name, 'file_type': file_type}
+    prompt = bot.send_message(user_id, f"✅ File received: `{file_name}`\n\n*Step 2 of 3:* Now, please provide search keywords for this file, separated by commas.\n\n*Example:* `accounts, as19, leases, notes`", parse_mode="Markdown")
+    bot.register_next_step_handler(prompt, process_resource_keywords)
+
+
+def process_resource_keywords(msg: types.Message):
+    """Step 3: Receives keywords and asks for a description."""
+    user_id = msg.from_user.id
+    if not msg.text or msg.text.startswith('/'):
+        prompt = bot.reply_to(msg, "Invalid input. Please provide at least one keyword.\n\nOr type /cancel to stop.")
+        bot.register_next_step_handler(prompt, process_resource_keywords)
+        return
+        
+    keywords = [keyword.strip().lower() for keyword in msg.text.split(',')]
+    user_states[user_id]['keywords'] = keywords
+    
+    prompt = bot.send_message(user_id, f"✅ Keywords saved: `{', '.join(keywords)}`\n\n*Step 3 of 3:* Now, please provide a short, one-line description for this file.", parse_mode="Markdown")
+    bot.register_next_step_handler(prompt, process_resource_description)
+
+
+def process_resource_description(msg: types.Message):
+    """Step 4: Receives description and saves everything to the database."""
+    user_id = msg.from_user.id
+    if not msg.text or msg.text.startswith('/'):
+        prompt = bot.reply_to(msg, "Invalid input. Please provide a description.\n\nOr type /cancel to stop.")
+        bot.register_next_step_handler(prompt, process_resource_description)
+        return
+        
+    user_data = user_states.get(user_id, {})
+    user_data['description'] = msg.text.strip()
+    
+    try:
+        supabase.table('resources').insert({
+            'file_id': user_data['file_id'],
+            'file_name': user_data['file_name'],
+            'file_type': user_data['file_type'],
+            'keywords': user_data['keywords'],
+            'description': user_data['description'],
+            'added_by_id': user_id,
+            'added_by_name': msg.from_user.first_name
+        }).execute()
+        
+        bot.send_message(user_id, f"✅ **Resource Saved!**\n\n`{user_data['file_name']}` has been successfully added to the Vault and is now available for all members.")
+        
+    except Exception as e:
+        print(f"Error saving resource to DB: {traceback.format_exc()}")
+        report_error_to_admin(f"Could not save resource to Vault:\n{e}")
+        bot.send_message(user_id, "❌ A critical error occurred while saving the resource to the database.")
+    finally:
+        if user_id in user_states:
+            del user_states[user_id]
 
 # =============================================================================
 # 8. TELEGRAM BOT HANDLERS
@@ -647,7 +756,6 @@ def handle_quiz_start_button(msg: types.Message):
     # When clicked, the Mini App opens automatically.
     # We send a simple confirmation message to make the experience smoother.
     bot.send_message(msg.chat.id, "🚀 Opening the weekly schedule...")
-
 # === REPLACE THE EXISTING handle_help_command WITH THIS ===
 @bot.message_handler(commands=['adminhelp'])
 @admin_required
@@ -664,6 +772,7 @@ Hello Admin! Here are your available tools.
 `/studytip` - Share a useful study tip.
 `/announce` - Broadcast & pin a message.
 `/message` - Send content to the group.
+`/add_resource` - Add a file to the Vault.
 
 *🧠 Quiz & Marathon*
 `/quizmarathon` - Start a new marathon.
@@ -676,11 +785,12 @@ Hello Admin! Here are your available tools.
 `/leaderboard` - Post random quiz leaderboard.
 `/practice` - Start daily written practice.
 
-*👥 Member Management & Automation*
+*👥 Member & Role Management*
+`/promote` - Make a member a Contributor for resource.
+`/demote` - Remove Contributor role for resource.
 `/dm` - Send a direct message to a user.
 `/activity_report` - Get a group activity report.
 `/sync_members` - Sync old members to tracker.
-`/run_checks` - Manually run daily checks.
 `/prunedms` - Clean the inactive DM list.
 """
     bot.send_message(msg.chat.id, help_text, parse_mode="Markdown")
@@ -812,17 +922,15 @@ def save_data():
         # If saving fails, print an error and notify the admin.
         print(f"❌ CRITICAL: Failed to save bot state to Supabase. Error: {e}")
         report_error_to_admin(f"Failed to save bot state to Supabase:\n{traceback.format_exc()}")
-# === ADD THIS ENTIRE NEW FUNCTION ===
+# === REPLACE THE EXISTING handle_info_command WITH THIS ===
 @bot.message_handler(commands=['info'])
 @membership_required
 def handle_info_command(msg: types.Message):
     """
-    Provides a list of all available commands for members, including /kalkaquiz.
+    Provides a list of all available commands for members, including Vault commands.
     """
     info_text = """
 *🤖 Bot Commands for Members 🤖*
-
-Here are the commands you can use to interact with the bot.
 
 *📅 `/todayquiz`*
    ► Shows the quiz schedule for today.
@@ -831,21 +939,22 @@ Here are the commands you can use to interact with the bot.
    ► Shows the quiz schedule for tomorrow.
 
 *📊 `/mystats`*
-   ► Get your personal performance stats (Ranks, Streaks, etc.) sent to you in a private message.
+   ► Get your personal performance stats.
 
 *📖 `/section` _<number>_*
-   ► Get details for a specific Companies Act section.
-   ► _Example:_ `/section 141`
+   ► Get details for a specific Law section.
 
-*✍️ `/feedback` _<your message>_*
-   ► Send your valuable feedback or report an issue directly to the admin.
-   ► _Example:_ `/feedback The new features are great!`
+*✍️ `/feedback` _<message>_*
+   ► Send private feedback to the admin.
 
-*📝 `/submit`*
-   ► *(During Written Practice)* Reply to your answer sheet photo with this command to submit it for review.
+*📚 `/listfile`*
+   ► Lists all available study materials from the Vault.
 
-*✅ `/review_done`*
-   ► *(For Checkers)* Reply to the answer sheet photo with this command after you have finished checking it.
+*📥 `/need` _<file_name>_*
+   ► Get a specific file from the Vault. Use `/listfile` to see names.
+
+*📝 `/submit`* & *✅ `/review_done`*
+   ► Used during Written Practice sessions.
 """
     bot.send_message(msg.chat.id, info_text, parse_mode="Markdown")
 # =============================================================================
@@ -894,6 +1003,80 @@ def handle_group_message_content(msg: types.Message):
         # Clean up the state to end the conversation
         if admin_id in user_states:
             del user_states[admin_id]
+# === ADD THIS FUNCTION FOR THE /promote COMMAND ===
+@bot.message_handler(commands=['promote'])
+@admin_required
+def handle_promote_command(msg: types.Message):
+    """
+    Promotes a user to the 'contributor' role.
+    Usage: /promote @username
+    """
+    try:
+        parts = msg.text.split(' ')
+        if len(parts) < 2 or not parts[1].startswith('@'):
+            bot.reply_to(msg, "Please provide a username. \n*Usage:* `/promote @username`", parse_mode="Markdown")
+            return
+
+        username_to_promote = parts[1].lstrip('@')
+        
+        # Find the user in the database
+        user_response = supabase.table('group_members').select('user_id, first_name').eq('username', username_to_promote).single().execute()
+        
+        if not user_response.data:
+            bot.reply_to(msg, f"❌ User `@{username_to_promote}` not found in my records. Please make sure they have sent a message in the group before.")
+            return
+            
+        target_user = user_response.data
+        target_user_id = target_user['user_id']
+
+        # Update their role in the quiz_activity table
+        supabase.table('quiz_activity').update({'user_role': 'contributor'}).eq('user_id', target_user_id).execute()
+        
+        bot.reply_to(msg, f"✅ Success! **@{username_to_promote}** has been promoted to a **Contributor** role.")
+        
+        # Notify the user via DM
+        try:
+            notification_text = "🎉 Congratulations! You have been promoted to a 'Contributor'.\nYou can now add new files to the CA Vault using the `/add_resource` command in a private chat with me."
+            bot.send_message(target_user_id, notification_text)
+        except Exception as dm_error:
+            print(f"Could not send promotion DM to {target_user_id}: {dm_error}")
+
+    except Exception as e:
+        print(f"Error in /promote command: {traceback.format_exc()}")
+        bot.reply_to(msg, "❌ An error occurred while promoting the user.")
+# === ADD THIS FUNCTION FOR THE /demote COMMAND ===
+@bot.message_handler(commands=['demote'])
+@admin_required
+def handle_demote_command(msg: types.Message):
+    """
+    Demotes a user from 'contributor' back to 'member'.
+    Usage: /demote @username
+    """
+    try:
+        parts = msg.text.split(' ')
+        if len(parts) < 2 or not parts[1].startswith('@'):
+            bot.reply_to(msg, "Please provide a username. \n*Usage:* `/demote @username`", parse_mode="Markdown")
+            return
+
+        username_to_demote = parts[1].lstrip('@')
+
+        user_response = supabase.table('group_members').select('user_id, first_name').eq('username', username_to_demote).single().execute()
+        
+        if not user_response.data:
+            bot.reply_to(msg, f"❌ User `@{username_to_demote}` not found in my records.")
+            return
+            
+        target_user = user_response.data
+        target_user_id = target_user['user_id']
+
+        # Update their role back to 'member'
+        supabase.table('quiz_activity').update({'user_role': 'member'}).eq('user_id', target_user_id).execute()
+        
+        bot.reply_to(msg, f"✅ Success! **@{username_to_demote}** has been returned to a **Member** role.")
+
+    except Exception as e:
+        print(f"Error in /demote command: {traceback.format_exc()}")
+        bot.reply_to(msg, "❌ An error occurred while demoting the user.")
 # === ADD THIS FUNCTION TO CATCH FORWARDED MESSAGES ===
 @bot.message_handler(func=lambda msg: (msg.forward_from or msg.forward_from_chat) and msg.chat.type == 'private' and is_admin(msg.from_user.id))
 def handle_forwarded_message(msg: types.Message):
@@ -1095,6 +1278,78 @@ def handle_interlink_callbacks(call: types.CallbackQuery):
     elif call.data == 'show_info':
         bot.answer_callback_query(call.id)
         handle_info_command(call.message)
+# === ADD THIS FUNCTION FOR THE /listfile COMMAND ===
+@bot.message_handler(commands=['listfile'])
+@membership_required
+def handle_listfile_command(msg: types.Message):
+    """
+    Lists all available resources from the Vault.
+    """
+    try:
+        response = supabase.table('resources').select('file_name, description').order('file_name').execute()
+        
+        if not response.data:
+            bot.reply_to(msg, "📚 The CA Vault is currently empty. Resources will be added soon!")
+            return
+
+        list_message = "📚 **The CA Vault - Resource Library** 📚\n\n"
+        list_message += "Here are all the available notes. Use `/need <file_name>` to get one.\n\n"
+
+        for i, resource in enumerate(response.data):
+            file_name = escape_markdown(resource.get('file_name', 'N/A'))
+            description = escape_markdown(resource.get('description', 'No description.'))
+            list_message += f"*{i + 1}.* `{file_name}`\n   ► _{description}_\n"
+            
+        bot.reply_to(msg, list_message, parse_mode="Markdown")
+
+    except Exception as e:
+        print(f"Error in /listfile: {traceback.format_exc()}")
+        bot.reply_to(msg, "❌ An error occurred while fetching the file list.")
+# === ADD THIS FUNCTION FOR THE /need COMMAND ===
+@bot.message_handler(commands=['need'])
+@membership_required
+def handle_need_command(msg: types.Message):
+    """
+    Fetches a specific resource from the Vault by its filename.
+    Includes smart error handling if the file is not found.
+    """
+    try:
+        parts = msg.text.split(' ', 1)
+        if len(parts) < 2:
+            bot.reply_to(msg, "Please provide the exact file name after the command.\n*Example:* `/need AS-19_notes.pdf`\n\nUse `/listfile` to see all available files.", parse_mode="Markdown")
+            return
+
+        file_name_to_find = parts[1].strip()
+        
+        # Find the resource by its exact name (case-insensitive)
+        response = supabase.table('resources').select('file_id, file_name, description').ilike('file_name', file_name_to_find).limit(1).single().execute()
+        
+        if response.data:
+            resource = response.data
+            file_id = resource['file_id']
+            caption = f"Here is the resource you requested:\n\n**File:** {resource['file_name']}\n**Description:** {resource['description']}"
+            
+            bot.send_document(msg.chat.id, file_id, caption=caption, reply_to_message_id=msg.message_id)
+        else:
+            # --- Smart Error Handling ---
+            all_files_response = supabase.table('resources').select('file_name').order('file_name').execute()
+            
+            error_message = f"❌ Sorry, I couldn't find a file named `{escape_markdown(file_name_to_find)}`.\n\n"
+            error_message += "Here is a list of all available files. Please **copy the exact file name** and use the command again.\n\n"
+            error_message += "*Available Files:*\n"
+            
+            if all_files_response.data:
+                for resource in all_files_response.data:
+                    error_message += f"• `{escape_markdown(resource['file_name'])}`\n"
+            else:
+                error_message += "_The Vault is currently empty._\n"
+            
+            error_message += "\n*Example:* `/need AS-19_notes.pdf`"
+            bot.reply_to(msg, error_message, parse_mode="Markdown")
+
+    except Exception as e:
+        print(f"Error in /need command: {traceback.format_exc()}")
+        bot.reply_to(msg, "❌ An error occurred while fetching the file.")
 # =============================================================================
 # 11. DIRECT MESSAGING SYSTEM (/dm)
 # =============================================================================
@@ -2426,7 +2681,7 @@ def send_marathon_results(session_id):
             if p.get('streak_completed'): results_text += " 🔥 Streak!"
             results_text += "\n"
             
-        results_text += "\n🏆 Congratulations to the winners!"
+        results_text += "\n🏆 Congratulations to the winners! (Here the PB tag given for personal best of the members from all previous quizzes.)"
         bot.send_message(GROUP_ID, results_text, parse_mode="Markdown")
         
         # --- THE FINAL CHANGE IS HERE ---
