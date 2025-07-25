@@ -854,21 +854,6 @@ Here are the commands you can use to interact with the bot.
 # =============================================================================
 # 9. TELEGRAM BOT HANDLERS (UPDATED /todayquiz)
 # =============================================================================
-# === ADD THIS TEMPORARY DEBUGGER FUNCTION AT THE TOP ===
-@bot.message_handler(func=lambda msg: is_admin(msg.from_user.id) and msg.chat.type == 'private')
-def admin_message_debugger(msg: types.Message):
-    """
-    A temporary function to debug any message sent by the admin in private chat.
-    """
-    print("\n--- ADMIN MESSAGE DEBUGGER ---")
-    print(f"Message Text: {msg.text}")
-    print(f"Is it a forward? {msg.forward_from_chat is not None or msg.forward_from is not None}")
-    print(f"Forwarded from Chat: {msg.forward_from_chat}")
-    print(f"Forwarded from User: {msg.forward_from}")
-    print("------------------------------\n")
-    # This function is just for printing, it doesn't stop other functions from running.
-    # Note: pyTelegramBotAPI will stop after the first matching handler. 
-    # For a full debug, temporarily comment out other conflicting handlers if needed.
 # === ADD THIS FUNCTION FOR THE /message COMMAND ===
 @bot.message_handler(commands=['message'])
 @admin_required
