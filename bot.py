@@ -2538,7 +2538,7 @@ def handle_motivation_command(msg: types.Message):
         message_to_send = f"\"{content}\" - **{author}**"
         
         # Send the quote to the group
-        bot.send_message(GROUP_ID, message_to_send, parse_mode="Markdown", message_thread_id=UPDATES_TOPIC_ID)
+        bot.send_message(GROUP_ID, message_to_send, parse_mode="Markdown", message_thread_id=CHATTING_TOPIC_ID)
         
         # Mark the quote as used in the database
         supabase.table('motivational_quotes').update({'used': True}).eq('id', quote_id).execute()
@@ -2571,7 +2571,7 @@ def handle_study_tip_command(msg: types.Message):
         message_to_send = f"💡 **Study Strategy: {category}**\n\n{content}"
         
         # Send the tip to the group
-        bot.send_message(GROUP_ID, message_to_send, parse_mode="Markdown", message_thread_id=UPDATES_TOPIC_ID)
+        bot.send_message(GROUP_ID, message_to_send, parse_mode="Markdown", message_thread_id=CHATTING_TOPIC_ID)
         
         # Mark the tip as used in the database
         supabase.table('study_tips').update({'used': True}).eq('id', tip_id).execute()
