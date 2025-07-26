@@ -852,6 +852,7 @@ Hello Admin! Here are your available tools.
 *🧠 Quiz & Marathon*
 `/quizmarathon` - Start a new marathon.
 `/randomquiz` - Post a single random quiz.
+`/fileid` - Get file_id for marathon images.
 `/roko` - Force-stop a running marathon.
 
 *📈 Ranking & Practice*
@@ -1016,6 +1017,9 @@ def handle_info_command(msg: types.Message):
 
 *📊 `/mystats`*
    ► Get your personal performance stats.
+   
+*🧠 `/my_analysis`*
+   ► Get a deep analysis of your weaknesses.
 
 *📖 `/section` _<number>_*
    ► Get details for a specific Law section.
@@ -1080,7 +1084,84 @@ def handle_group_message_content(msg: types.Message):
         # Clean up the state to end the conversation
         if admin_id in user_states:
             del user_states[admin_id]
+# === File ID Helper Conversational Flow ===
+
+@bot.message_handler(commands=['fileid'])
+@admin_required
+def handle_fileid_command(msg: types.Message):
+    """Starts the conversational flow to get a file_id and add it to a quiz question."""
+    if not msg.chat.type == 'private':
+        bot.reply_to(msg, "🤫 Please use this command in a private chat with me.")
+        return
+
+    admin_id = msg.from_user.id
+    user_states[admin_id] = {} # Clear any previous state
+    prompt = bot.send_message(admin_id, "Please send me the image you want to use for a quiz question.")
+    bot.register_next_step_handler(prompt, process_fileid_image)
+
+def process_fileid_image(msg: types.Message):
+    """Receives the image, shows the file_id, and asks for confirmation."""
+    admin_id = msg.from_user.id
+    if not msg.photo:
+        prompt = bot.reply_to(msg, "That doesn't seem to be an image. Please send a photo, or type /cancel.")
+        bot.register_next_step_handler(prompt, process_fileid_image)
+        return
+
+    # Get the file_id of the highest resolution photo
+    file_id = msg.photo[-1].file_id
+    user_states[admin_id] = {'image_file_id': file_id}
+    
+    markup = types.InlineKeyboardMarkup()
+    markup.add(
+        types.InlineKeyboardButton("✅ Yes, Add It", callback_data="add_fileid_yes"),
+        types.InlineKeyboardButton("❌ No, Thanks", callback_data="add_fileid_no")
+    )
+    
+    bot.send_message(admin_id, f"✅ Image received!\n\nIts File ID is:\n`{file_id}`\n\nWould you like to add this ID to a question in the `quiz_questions` table?", reply_markup=markup, parse_mode="Markdown")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('add_fileid_'))
+def handle_fileid_confirmation(call: types.CallbackQuery):
+    """Handles the Yes/No confirmation for adding the file_id."""
+    admin_id = call.from_user.id
+    bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id) # Remove buttons
+
+    if call.data == 'add_fileid_yes':
+        prompt = bot.send_message(admin_id, "Great. Please tell me the numeric *Question ID* (from the `quiz_questions` table) where you want to add this image.")
+        bot.register_next_step_handler(prompt, process_fileid_question_id)
+    else: # 'add_fileid_no'
+        if admin_id in user_states:
+            del user_states[admin_id]
+        bot.send_message(admin_id, "👍 Okay, operation cancelled. You can copy the File ID above for manual use.")
+
+def process_fileid_question_id(msg: types.Message):
+    """Receives the Question ID and updates the database."""
+    admin_id = msg.from_user.id
+    
+    try:
+        question_id = int(msg.text.strip())
+        file_id_to_add = user_states.get(admin_id, {}).get('image_file_id')
+
+        if not file_id_to_add:
+            bot.send_message(admin_id, "❌ Sorry, something went wrong. The file ID was lost. Please start over with /fileid.")
+            return
+
+        # Update the specific question in the database
+        supabase.table('quiz_questions').update({'image_file_id': file_id_to_add}).eq('id', question_id).execute()
+        
+        bot.send_message(admin_id, f"✅ Success! The image has been linked to Question ID: *{question_id}*.", parse_mode="Markdown")
+
+    except ValueError:
+        prompt = bot.reply_to(msg, "That's not a valid number. Please provide the numeric Question ID, or type /cancel.")
+        bot.register_next_step_handler(prompt, process_fileid_question_id)
+    except Exception as e:
+        report_error_to_admin(f"Failed to add file_id to question:\n{e}")
+        bot.send_message(admin_id, "❌ An error occurred while updating the database.")
+    finally:
+        # Clean up the state to end the conversation
+        if admin_id in user_states:
+            del user_states[admin_id]
 # === ADD THIS FUNCTION FOR THE /promote COMMAND ===
+
 @bot.message_handler(commands=['promote'])
 @admin_required
 def handle_promote_command(msg: types.Message):
@@ -1793,6 +1874,52 @@ def handle_admin_reply_to_forward(msg: types.Message):
 # 12 GENERAL ADMIN COMMANDS (CLEANED UP)
 # =============================================================================
 # === REPLACE WITH THIS NEW VERSION ===
+@bot.message_handler(commands=['my_analysis'])
+@membership_required
+def handle_my_analysis_command(msg: types.Message):
+    """Provides a detailed analysis of a user's strengths and weaknesses."""
+    user_id = msg.from_user.id
+    user_name = msg.from_user.first_name
+    
+    # We need to fetch data from past quizzes. This requires a more complex setup.
+    # For now, we will create a placeholder message.
+    # To implement this fully, we would need to store every single answer in a Supabase table.
+    
+    # Placeholder implementation:
+    # A real implementation would query a 'poll_answers' table.
+    # Let's assume we have some dummy data for demonstration.
+    
+    # Dummy data structure (a real one would be fetched from Supabase)
+    analysis_data = {
+        'Leases': {'Theory': 90, 'Practical': 45},
+        'Taxation': {'Theory': 70, 'Case Study': 85, 'Practical': 60}
+    }
+    
+    if not analysis_data:
+        bot.reply_to(msg, f"Sorry {user_name}, I don't have enough data to create your analysis yet. Please participate in more quizzes!")
+        return
+        
+    analysis_text = f"🧠 *Performance Analysis for {user_name}* 🧠\n\n"
+    analysis_text += "Here's a breakdown of your accuracy by topic and question type:\n\n"
+    
+    for topic, types in analysis_data.items():
+        analysis_text += f"*{topic}:*\n"
+        weak_points = []
+        strong_points = []
+        for q_type, accuracy in types.items():
+            line = f"  - {q_type}: {accuracy}%\n"
+            if accuracy < 60:
+                weak_points.append(f"*{q_type} questions*")
+                analysis_text += f"  - {q_type}: {accuracy}% ⚠️\n"
+            else:
+                strong_points.append(f"*{q_type} questions*")
+                analysis_text += f"  - {q_type}: {accuracy}% ✅\n"
+        
+        if weak_points:
+            analysis_text += f"  💡 *Suggestion:* You should focus more on {', '.join(weak_points)} in the *{topic}* chapter.\n"
+        analysis_text += "\n"
+        
+    bot.send_message(msg.chat.id, analysis_text, parse_mode="Markdown")
 @bot.message_handler(commands=['mystats'])
 @membership_required
 def handle_mystats_command(msg: types.Message):
@@ -2393,120 +2520,68 @@ def handle_congratulate_command(msg: types.Message):
 @bot.message_handler(commands=['motivate'])
 @admin_required
 def handle_motivation_command(msg: types.Message):
-    """Sends a professional and effective motivational quote from a famous personality."""
+    """Sends a motivational quote from the Supabase database."""
+    try:
+        # Fetch one unused quote
+        response = supabase.table('motivational_quotes').select('id, content, author').eq('used', False).limit(1).execute()
+        
+        if not response.data:
+            bot.send_message(msg.chat.id, "⚠️ All motivational quotes have been used. Please use `/reset_content` to use them again.")
+            return
 
-    quotes = [
-        # --- On Hard Work & Success ---
-        "\"Success is the sum of small efforts, repeated day in and day out.\" - **Robert Collier**",
-        "\"The only place where success comes before work is in the dictionary.\" - **Vidal Sassoon**",
-        "\"I find that the harder I work, the more luck I seem to have.\" - **Thomas Jefferson**",
-        "\"Success is no accident. It is hard work, perseverance, learning, studying, sacrifice and most of all, love of what you are doing.\" - **Pelé**",
-        "\"The price of success is hard work, dedication to the job at hand, and the determination that whether we win or lose, we have applied the best of ourselves to the task at hand.\" - **Vince Lombardi**",
-        "\"There are no secrets to success. It is the result of preparation, hard work, and learning from failure.\" - **Colin Powell**",
+        quote = response.data[0]
+        quote_id = quote['id']
+        content = quote['content']
+        author = quote.get('author', 'Unknown')
+        
+        message_to_send = f"\"{content}\" - **{author}**"
+        
+        # Send the quote to the group
+        bot.send_message(GROUP_ID, message_to_send, parse_mode="Markdown", message_thread_id=UPDATES_TOPIC_ID)
+        
+        # Mark the quote as used in the database
+        supabase.table('motivational_quotes').update({'used': True}).eq('id', quote_id).execute()
+        
+        # Confirm to admin
+        bot.send_message(msg.chat.id, "✅ Motivation sent to the group from the database.")
 
-        # --- On Perseverance & Overcoming Failure ---
-        "\"Success is not final, failure is not fatal: it is the courage to continue that counts.\" - **Winston Churchill**",
-        "\"Our greatest weakness lies in giving up. The most certain way to succeed is always to try just one more time.\" - **Thomas A. Edison**",
-        "\"I have not failed. I've just found 10,000 ways that won't work.\" - **Thomas A. Edison**",
-        "\"It does not matter how slowly you go as long as you do not stop.\" - **Confucius**",
-        "\"The gem cannot be polished without friction, nor man perfected without trials.\" - **Seneca**",
-        "\"A winner is a dreamer who never gives up.\" - **Nelson Mandela**",
-        "\"I can accept failure, everyone fails at something. But I can't accept not trying.\" - **Michael Jordan**",
-
-        # --- On Knowledge & Learning ---
-        "\"An investment in knowledge pays the best interest.\" - **Benjamin Franklin**",
-        "\"The beautiful thing about learning is that nobody can take it away from you.\" - **B.B. King**",
-        "\"Live as if you were to die tomorrow. Learn as if you were to live forever.\" - **Mahatma Gandhi**",
-        "\"The expert in anything was once a beginner.\" - **Helen Hayes**",
-        "\"The only source of knowledge is experience.\" - **Albert Einstein**",
-
-        # --- On Mindset & Belief ---
-        "\"Believe you can and you're halfway there.\" - **Theodore Roosevelt**",
-        "\"The future belongs to those who believe in the beauty of their dreams.\" - **Eleanor Roosevelt**",
-        "\"You have to dream before your dreams can come true.\" - **A. P. J. Abdul Kalam**",
-        "\"Arise, awake, and stop not till the goal is reached.\" - **Swami Vivekananda**",
-        "\"The mind is everything. What you think you become.\" - **Buddha**",
-        "\"I am not a product of my circumstances. I am a product of my decisions.\" - **Stephen Covey**",
-
-        # --- On Action & Strategy ---
-        "\"The secret of getting ahead is getting started.\" - **Mark Twain**",
-        "\"A goal without a plan is just a wish.\" - **Antoine de Saint-Exupéry**",
-        "\"Well done is better than well said.\" - **Benjamin Franklin**",
-        "\"The journey of a thousand miles begins with a single step.\" - **Lao Tzu**",
-        "\"Action is the foundational key to all success.\" - **Pablo Picasso**"
-    ]
-
-    # Send a random quote from the master list
-    bot.send_message(GROUP_ID, random.choice(quotes), parse_mode="Markdown", message_thread_id=UPDATES_TOPIC_ID)
-    bot.send_message(msg.chat.id, "✅ Professional motivation sent to the group.")
+    except Exception as e:
+        print(f"Error in /motivate command: {traceback.format_exc()}")
+        report_error_to_admin(f"Could not fetch/send motivation:\n{e}")
+        bot.send_message(msg.chat.id, "❌ An error occurred while fetching the quote from the database.")
 
 @bot.message_handler(commands=['studytip'])
 @admin_required
 def handle_study_tip_command(msg: types.Message):
-    """Sends a professional, structured study strategy for CA Inter students."""
+    """Sends a study tip from the Supabase database."""
+    try:
+        # Fetch one unused tip
+        response = supabase.table('study_tips').select('id, content, category').eq('used', False).limit(1).execute()
+        
+        if not response.data:
+            bot.send_message(msg.chat.id, "⚠️ All study tips have been used. Please use `/reset_content` to use them again.")
+            return
 
-    tips = [
-        # ===============================================
-        # --- 1. The Foundation: Deep Conceptual Clarity ---
-        # ===============================================
-        ("🏛️ **Strategy: Master Concepts with the Feynman Technique.**\n\n"
-         "Pick a tough topic (e.g., a section in Law or an Ind AS). Teach it aloud in simple terms, as if to a 10th grader. If you struggle or use jargon, you've found your weak spot. Go back, simplify, and master it. *ICAI tests understanding, not memory.*"
-        ),
-        ("🤔 **Strategy: Ask 'Why' Before 'What'.**\n\n"
-         "For every provision or formula, ask: 'Why does this rule exist? What problem does it solve?' For instance, 'Why is deferred tax created?' Understanding the logic behind a concept makes it unforgettable and helps in case-study questions."
-        ),
-        ("🎨 **Strategy: Use Dual Coding for Theory.**\n\n"
-         "Our brains process images faster than text. For complex theory subjects like Audit and Law, create simple flowcharts, mind maps, or diagrams alongside your notes. This creates two recall pathways (visual and verbal), doubling your retention power."
-        ),
+        tip = response.data[0]
+        tip_id = tip['id']
+        content = tip['content']
+        category = tip.get('category', 'General Tip')
+        
+        message_to_send = f"💡 **Study Strategy: {category}**\n\n{content}"
+        
+        # Send the tip to the group
+        bot.send_message(GROUP_ID, message_to_send, parse_mode="Markdown", message_thread_id=UPDATES_TOPIC_ID)
+        
+        # Mark the tip as used in the database
+        supabase.table('study_tips').update({'used': True}).eq('id', tip_id).execute()
+        
+        # Confirm to admin
+        bot.send_message(msg.chat.id, "✅ Study tip sent to the group from the database.")
 
-        # ===============================================
-        # --- 2. The Framework: Building Lasting Memory ---
-        # ===============================================
-        ("🔄 **Strategy: Defeat the Forgetting Curve with Spaced Repetition.**\n\n"
-         "Instead of cramming, review topics at increasing intervals: Day 1, Day 3, Day 7, Day 21, Day 45. This scientifically proven method moves information to your long-term memory, which is essential for the vast CA syllabus."
-        ),
-        ("🧠 **Strategy: Prioritize Active Recall over Passive Re-reading.**\n\n"
-         "Re-reading creates an illusion of competence. Instead, close the book and actively retrieve information. Write down key points from memory, or answer questions from the back of the chapter. The mental struggle is what builds strong memory."
-        ),
-        ("🔀 **Strategy: Interleave Practical Subjects.**\n\n"
-         "Don't solve 10 problems of Amalgamation in a row. Instead, solve one from Amalgamation, one from Internal Reconstruction, and one from Cash Flow. This 'interleaving' trains your brain to identify *which* method to use, a key skill for the exam hall."
-        ),
-
-        # ===============================================
-        # --- 3. The Edge: Peak Productivity & Exam Strategy ---
-        # ===============================================
-        ("⏳ **Strategy: Apply Parkinson's Law to Your Study Blocks.**\n\n"
-         "'Work expands to fill the time available.' Don't just 'study Accounts.' Instead, set an aggressive deadline: 'I will master the concepts and solve 5 problems of Chapter X in 3 hours.' This creates focus and urgency."
-        ),
-        ("🎯 **Strategy: Implement the ABC Analysis Ruthlessly.**\n\n"
-         "Categorize all chapters: **A** (Must-do, 70% marks), **B** (Good to do, 20% marks), **C** (If time permits, 10% marks). Ensure 100% coverage of 'A' category chapters, including multiple revisions. This is the smartest way to ensure you pass."
-        ),
-        ("✍️ **Strategy: Presentation is a Force Multiplier.**\n\n"
-         "Your knowledge is useless if you can't present it. For Law/Audit, use the 4-para structure: (1) Provision, (2) Facts, (3) Analysis, (4) Conclusion. Underline keywords and section numbers (only if 110% sure). This can add 10-15 marks to your total."
-        ),
-        ("🧘 **Strategy: Master the Exam Environment Beforehand.**\n\n"
-         "The CA exam is a test of performance under pressure. Solve at least 3-4 full-length mock papers in a strict, timed environment (e.g., 2 PM to 5 PM). This trains your mind and body for the final day, reducing anxiety and improving time management."
-        ),
-
-        # ===============================================
-        # --- 4. The Engine: Brain & Body Optimization ---
-        # ===============================================
-        ("😴 **Pro-Tip: Treat Sleep as a Non-Negotiable Study Tool.**\n\n"
-         "During deep sleep, your brain consolidates what you've learned, moving it to long-term memory. A 7-8 hour sleep is more productive for your rank than 2 hours of late-night cramming. Top performers prioritize sleep."
-        ),
-        ("💧 **Pro-Tip: A Hydrated Brain is a Fast Brain.**\n\n"
-         "Even 1-2% dehydration can significantly impair cognitive functions like concentration and short-term memory. Keep a water bottle on your desk at all times. Aim for 3 liters a day. This is the easiest performance boost you can get."
-        ),
-        ("🏃‍♂️ **Pro-Tip: Use Exercise to Grow Your Brain.**\n\n"
-         "Just 30 minutes of moderate exercise (like a brisk walk or jogging) increases blood flow to the brain and promotes the growth of new neurons in the hippocampus, the memory center. Think of it as investing in your brain's hardware."
-        )
-    ]
-
-    # Send a random tip from the master list
-    tip = random.choice(tips)
-    bot.send_message(GROUP_ID, tip, parse_mode="Markdown", message_thread_id=UPDATES_TOPIC_ID)
-    bot.send_message(msg.chat.id, "✅ Professional study strategy sent to the group.")
-
+    except Exception as e:
+        print(f"Error in /studytip command: {traceback.format_exc()}")
+        report_error_to_admin(f"Could not fetch/send study tip:\n{e}")
+        bot.send_message(msg.chat.id, "❌ An error occurred while fetching the tip from the database.")
 # =============================================================================
 # 8.12. LAW LIBRARY FEATURE (/section) - FINAL & ROBUST VERSION
 # =============================================================================
@@ -2540,7 +2615,48 @@ def format_section_message(section_data, user_name):
 
     return message_text
 
+@bot.message_handler(commands=['reset_content'])
+@admin_required
+def handle_reset_content(msg: types.Message):
+    """
+    Asks the admin which content type they want to reset.
+    """
+    markup = types.InlineKeyboardMarkup()
+    markup.add(
+        types.InlineKeyboardButton("🔄 Reset Motivational Quotes", callback_data="reset_quotes"),
+        types.InlineKeyboardButton("🔄 Reset Study Tips", callback_data="reset_tips"),
+        types.InlineKeyboardButton("❌ Cancel", callback_data="reset_cancel")
+    )
+    bot.send_message(msg.chat.id, "Which content do you want to mark as 'unused' again?", reply_markup=markup)
 
+@bot.callback_query_handler(func=lambda call: call.data.startswith('reset_'))
+def handle_reset_confirmation(call: types.CallbackQuery):
+    """
+    Handles the reset action based on admin's choice.
+    """
+    bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id) # Remove buttons
+    
+    table_to_reset = None
+    content_type = ""
+
+    if call.data == 'reset_quotes':
+        table_to_reset = 'motivational_quotes'
+        content_type = "Motivational Quotes"
+    elif call.data == 'reset_tips':
+        table_to_reset = 'study_tips'
+        content_type = "Study Tips"
+    elif call.data == 'reset_cancel':
+        bot.send_message(call.message.chat.id, "Operation cancelled.")
+        return
+
+    try:
+        if table_to_reset:
+            # Call the Supabase function to reset the 'used' flags
+            supabase.rpc('reset_content_usage', {'table_name': table_to_reset}).execute()
+            bot.send_message(call.message.chat.id, f"✅ Success! All *{content_type}* have been reset and can be used again.", parse_mode="Markdown")
+    except Exception as e:
+        print(f"Error resetting content: {e}")
+        bot.send_message(call.message.chat.id, "❌ An error occurred while resetting the content.")
 @bot.message_handler(commands=['section'])
 @membership_required
 def handle_section_command(msg: types.Message):
@@ -2677,9 +2793,12 @@ def process_marathon_question_count(msg: types.Message):
         bot.send_message(user_id, "❌ An error occurred while starting the marathon.")
 
 def send_marathon_question(session_id):
-    """Sends the next question in the marathon with its specific timer."""
+    """
+    Sends the next question in the marathon, sending an image first if available.
+    """
     session = QUIZ_SESSIONS.get(session_id)
-    if not session or not session.get('is_active'): return
+    if not session or not session.get('is_active'):
+        return
 
     idx = session['current_question_index']
     if idx >= len(session['questions']):
@@ -2690,8 +2809,16 @@ def send_marathon_question(session_id):
     question_data = session['questions'][idx]
     
     try:
+        # --- NEW: Check for an associated image file_id ---
+        image_id = question_data.get('image_file_id')
+        if image_id:
+            bot.send_photo(GROUP_ID, image_id, message_thread_id=QUIZ_TOPIC_ID)
+            time.sleep(2) # Wait for 2 seconds after sending the image
+        # --------------------------------------------------
+
         timer_seconds = int(question_data.get('time_allotted', 60))
-        if not (5 <= timer_seconds <= 300): timer_seconds = 60
+        if not (5 <= timer_seconds <= 300):
+            timer_seconds = 60
     except (ValueError, TypeError):
         timer_seconds = 60
 
@@ -2712,7 +2839,6 @@ def send_marathon_question(session_id):
         explanation_parse_mode="Markdown"
     )
 
-    # THE TIMEZONE FIX: Record the start time with the correct timezone.
     ist_tz = timezone(timedelta(hours=5, minutes=30))
     session['current_poll_id'] = poll_message.poll.id
     session['question_start_time'] = datetime.datetime.now(ist_tz)
@@ -2720,7 +2846,6 @@ def send_marathon_question(session_id):
     session['current_question_index'] += 1
 
     threading.Timer(timer_seconds + 3, send_marathon_question, args=[session_id]).start()
-
 @bot.message_handler(commands=['roko'])
 @admin_required
 def handle_stop_marathon_command(msg: types.Message):
@@ -3561,9 +3686,8 @@ def handle_remind_checkers_command(msg: types.Message):
 @bot.poll_answer_handler()
 def handle_all_poll_answers(poll_answer: types.PollAnswer):
     """
-    This is the single master handler for all poll answers. It correctly handles
-    Marathon and Random/Daily quizzes without any conflicts.
-    NEW: It now also records topic-wise performance for marathons.
+    This is the single master handler for all poll answers.
+    NEW: It now also records topic and question_type for marathons.
     """
     poll_id_str = poll_answer.poll_id
     user_info = poll_answer.user
@@ -3587,7 +3711,8 @@ def handle_all_poll_answers(poll_answer: types.PollAnswer):
                 QUIZ_PARTICIPANTS.setdefault(session_id, {})[user_info.id] = {
                     'name': user_info.first_name, 'score': 0, 'total_time': 0,
                     'questions_answered': 0, 'correct_answer_times': [],
-                    'topic_scores': {}  # NEW: Initialize dictionary for topic scores
+                    'topic_scores': {},
+                    'type_scores': {} # NEW: For tracking Theory/Practical etc.
                 }
 
             participant = QUIZ_PARTICIPANTS[session_id][user_info.id]
@@ -3598,12 +3723,15 @@ def handle_all_poll_answers(poll_answer: types.PollAnswer):
             question_data = marathon_session['questions'][question_idx]
             correct_option_index = ['A', 'B', 'C', 'D'].index(str(question_data.get('Correct Answer', 'A')).upper())
 
-            # --- NEW: TOPIC-WISE PERFORMANCE TRACKING ---
+            # --- NEW: TOPIC AND TYPE PERFORMANCE TRACKING ---
             question_topic = question_data.get('topic', 'Unknown Topic')
-            # Ensure the topic exists in the participant's score dictionary
+            question_type = question_data.get('question_type', 'Unknown Type')
+            
             participant['topic_scores'].setdefault(question_topic, {'correct': 0, 'total': 0})
-            # Increment the total questions attempted for this topic
             participant['topic_scores'][question_topic]['total'] += 1
+            
+            participant['type_scores'].setdefault(question_type, {'correct': 0, 'total': 0})
+            participant['type_scores'][question_type]['total'] += 1
             # ---------------------------------------------
 
             # Update overall stats
@@ -3616,8 +3744,9 @@ def handle_all_poll_answers(poll_answer: types.PollAnswer):
                 participant['score'] += 1
                 participant['correct_answer_times'].append(time_taken)
                 q_stats['correct_times'][user_info.id] = time_taken
-                # --- NEW: Increment the correct count for the topic ---
+                # --- NEW: Increment correct counts for topic and type ---
                 participant['topic_scores'][question_topic]['correct'] += 1
+                participant['type_scores'][question_type]['correct'] += 1
                 # ----------------------------------------------------
             
             return # End processing here for marathon answers
