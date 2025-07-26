@@ -3903,13 +3903,21 @@ def handle_new_member(msg: types.Message):
 def track_users(msg: types.Message):
     """
     A background handler that captures HUMAN user info from any message sent
-    in the group and upserts it into the 'group_members' table.
+    in the group and updates both their member info and chat activity timestamp.
     """
     try:
         user = msg.from_user
         if user.is_bot:
             return
+
+        # --- THE FIX: Call the new RPC to update last_chat_timestamp ---
+        supabase.rpc('update_chat_activity', {
+            'p_user_id': user.id,
+            'p_user_name': user.username or user.first_name
+        }).execute()
+        # -----------------------------------------------------------
         
+        # This part is for general member info, it can remain.
         supabase.rpc('upsert_group_member', {
             'p_user_id': user.id,
             'p_username': user.username,
