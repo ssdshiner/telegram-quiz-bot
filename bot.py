@@ -2577,7 +2577,7 @@ def handle_section_command(msg: types.Message):
         else:
             bot.send_message(
                 msg.chat.id,
-                f"Sorry, I couldn't find any details for Section '{section_number_to_find}'. Please check the section number."
+                f"Sorry, I couldn't find any details for Section '{section_number_to_find}'. Please check the section number.",
                 message_thread_id=msg.message_thread_id
             )
 
