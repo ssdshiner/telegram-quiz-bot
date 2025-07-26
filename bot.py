@@ -551,37 +551,36 @@ def handle_update_schedule_command(msg: types.Message):
 # === REPLACE THE OLD run_daily_checks WITH THIS NEW VERSION ===
 def run_daily_checks():
     """
-    Runs all daily automated tasks. This version is fully automatic and
-    does not require admin approval.
+    Runs all daily automated tasks. This version uses robust HTML parsing
+    to prevent errors with special characters in usernames.
     """
     try:
         print("Starting daily automated checks...")
         
-        # --- Run Inactivity Checks Automatically ---
         final_warnings, first_warnings = find_inactive_users()
         if first_warnings:
-            user_list = [f"*{user['user_name']}*" for user in first_warnings]
-            message = (f"⚠️ *Quiz Activity Warning!* ⚠️\n\n"
-                       f"The following members have not participated in any quiz for the last 3 days: {', '.join(user_list)}.\n\n"
+            user_list = [f"@{escape(user['user_name'])}" for user in first_warnings]
+            message = (f"⚠️ <b>Quiz Activity Warning!</b> ⚠️\n"
+                       f"The following members have not participated in any quiz for the last 3 days: {', '.join(user_list)}.\n"
                        f"This is your final 24-hour notice.")
-            bot.send_message(GROUP_ID, message, parse_mode="Markdown", message_thread_id=UPDATES_TOPIC_ID)
+            bot.send_message(GROUP_ID, message, parse_mode="HTML", message_thread_id=UPDATES_TOPIC_ID)
             user_ids_to_update = [user['user_id'] for user in first_warnings]
             supabase.table('quiz_activity').update({'warning_level': 1}).in_('user_id', user_ids_to_update).execute()
-        
+
         if final_warnings:
-            user_list = [f"*{user['user_name']}*" for user in final_warnings]
+            user_list = [f"@{escape(user['user_name'])}" for user in final_warnings]
             message = f"Admins, please take action. The following members did not participate even after a final warning:\n" + ", ".join(user_list)
-            bot.send_message(GROUP_ID, message, parse_mode="Markdown", message_thread_id=UPDATES_TOPIC_ID)
+            bot.send_message(GROUP_ID, message, parse_mode="HTML", message_thread_id=UPDATES_TOPIC_ID)
             user_ids_to_update = [user['user_id'] for user in final_warnings]
             supabase.table('quiz_activity').update({'warning_level': 2}).in_('user_id', user_ids_to_update).execute()
 
-        # --- Run Appreciation Checks Automatically ---
         appreciations = find_users_to_appreciate()
         if appreciations:
             for user in appreciations:
-                message = (f"🏆 *Star Performer Alert!* 🏆\n\n"
-                           f"Hats off to *{user['user_name']}* for showing incredible consistency! Your dedication is what makes this community awesome. Keep it up! 👏")
-                bot.send_message(GROUP_ID, message, parse_mode="Markdown", message_thread_id=UPDATES_TOPIC_ID)
+                safe_user_name = escape(user['user_name'])
+                message = (f"🏆 <b>Star Performer Alert!</b> 🏆\n\n"
+                           f"Hats off to <b>@{safe_user_name}</b> for showing incredible consistency! Your dedication is what makes this community awesome. Keep it up! 👏")
+                bot.send_message(GROUP_ID, message, parse_mode="HTML", message_thread_id=UPDATES_TOPIC_ID)
 
         print("✅ Daily automated checks completed.")
     except Exception as e:
@@ -875,45 +874,32 @@ Hello Admin! Here are your available tools.
 @bot.message_handler(commands=['leaderboard'])
 @membership_required
 def handle_leaderboard(msg: types.Message):
-    """
-    Fetches and displays the top 10 random quiz scorers.
-    This version ALWAYS posts the leaderboard to the main group chat.
-    """
+    """ Fetches and displays the top 10 random quiz scorers using HTML. """
     try:
-        response = supabase.table('leaderboard').select(
-            'user_name, score').order(
-                'score', desc=True).limit(10).execute()
+        response = supabase.table('leaderboard').select('user_name, score').order('score', desc=True).limit(10).execute()
 
-        # If the leaderboard is empty, post the message in the main group.
         if not response.data:
-            bot.send_message(
-                GROUP_ID, "🏆 The leaderboard is empty right now. Let's play some quizzes to fill it up!"
-            )
-            # Also inform the user who requested it.
+            bot.send_message(GROUP_ID, "🏆 The leaderboard is empty right now. Let's play some quizzes to fill it up!", message_thread_id=QUIZ_TOPIC_ID)
             if msg.chat.id != GROUP_ID:
-                bot.send_message(msg.chat.id, "The leaderboard is currently empty, but I've posted a message in the group encouraging members to play!")
+                bot.send_message(msg.chat.id, "The leaderboard is currently empty, but I've posted a message in the group!")
             return
 
-        leaderboard_text = "🏆 *All-Time Random Quiz Leaderboard*\n\n"
+        leaderboard_text = "🏆 <b>All-Time Random Quiz Leaderboard</b>\n\n"
         rank_emojis = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
 
         for i, item in enumerate(response.data):
-            rank_emoji = rank_emojis[i] if i < len(rank_emojis) else f"*{i+1}*."
-            user_name = item.get('user_name', 'Unknown User')
-            safe_name = escape_markdown(user_name)
-            leaderboard_text += f"{rank_emoji} *{safe_name}* - {item.get('score', 0)} points\n"
+            rank_emoji = rank_emojis[i] if i < len(rank_emojis) else f"<b>{i+1}</b>."
+            user_name = escape(item.get('user_name', 'Unknown User'))
+            leaderboard_text += f"{rank_emoji} <b>{user_name}</b> - {item.get('score', 0)} points\n"
 
-        # THE FIX: Always send the leaderboard to the main group using GROUP_ID.
-        bot.send_message(GROUP_ID, leaderboard_text, parse_mode="Markdown", message_thread_id=QUIZ_TOPIC_ID)
-        
-        # THE IMPROVEMENT: If the command was used in a private chat, send a confirmation.
+        bot.send_message(GROUP_ID, leaderboard_text, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
+
         if msg.chat.id != GROUP_ID:
             bot.send_message(msg.chat.id, "✅ Leaderboard has been sent to the group successfully.")
 
     except Exception as e:
         print(f"Error in /leaderboard: {traceback.format_exc()}")
         report_error_to_admin(traceback.format_exc())
-        # Inform the user who sent the command that there was an error.
         bot.send_message(msg.chat.id, "❌ Could not fetch the leaderboard. The error has been logged.")
 def load_data():
     """
@@ -1003,40 +989,35 @@ def save_data():
 @bot.message_handler(commands=['info'])
 @membership_required
 def handle_info_command(msg: types.Message):
-    """
-    Provides a list of all available commands for members, including Vault commands.
-    """
+    """ Provides a list of all available commands for members using HTML. """
     info_text = """
-*🤖 Bot Commands for Members 🤖*
+🤖 <b>Bot Commands for Members</b> 🤖
 
-*📅 `/todayquiz`*
+📅 <code>/todayquiz</code>
    ► Shows the quiz schedule for today.
 
-*⏩ `/kalkaquiz`*
+⏩ <code>/kalkaquiz</code>
    ► Shows the quiz schedule for tomorrow.
 
-*📊 `/mystats`*
+📊 <code>/mystats</code>
    ► Get your personal performance stats.
-   
-*🧠 `/my_analysis`*
-   ► Get a deep analysis of your weaknesses.
 
-*📖 `/section` _<number>_*
+📖 <code>/section &lt;number&gt;</code>
    ► Get details for a specific Law section.
 
-*✍️ `/feedback` _<message>_*
+✍️ <code>/feedback &lt;message&gt;</code>
    ► Send private feedback to the admin.
 
-*📚 `/listfile`*
+📚 <code>/listfile</code>
    ► Lists all available study materials from the Vault.
 
-*📥 `/need` _<file_name>_*
-   ► Get a specific file from the Vault. Use `/listfile` to see names.
+📥 <code>/need &lt;file_name&gt;</code>
+   ► Get a specific file from the Vault.
 
-*📝 `/submit`* & *✅ `/review_done`*
+📝 <code>/submit</code> &amp; ✅ <code>/review_done</code>
    ► Used during Written Practice sessions.
 """
-    bot.send_message(msg.chat.id, info_text, parse_mode="Markdown", message_thread_id=msg.message_thread_id)
+    bot.send_message(msg.chat.id, info_text, parse_mode="HTML", message_thread_id=msg.message_thread_id)
 # =============================================================================
 # 9. TELEGRAM BOT HANDLERS (UPDATED /todayquiz)
 # =============================================================================
@@ -2150,58 +2131,23 @@ def handle_random_quiz(msg: types.Message):
 @bot.message_handler(commands=['announce'])
 @admin_required
 def handle_announce_command(msg: types.Message):
-    """
-    Broadcasts a message to the group and automatically pins it with a notification.
-    """
-    # Extract the announcement text after the command
+    """ Broadcasts and pins a message using HTML. """
     announcement_text = msg.text.replace('/announce', '', 1).strip()
 
     if not announcement_text:
-        # Send usage instructions to the admin who used the command
-        bot.reply_to(
-            msg,
-            "⚠️ Please provide a message to announce.\nUsage: `/announce Your message here`"
-        )
+        bot.reply_to(msg, "⚠️ Please provide a message to announce.\nUsage: <code>/announce Your message here</code>", parse_mode="HTML")
         return
 
-    # THE FIX IS HERE: We now escape the admin's text to prevent formatting errors.
-    safe_announcement_text = escape_markdown(announcement_text)
-    
-    # Format the announcement using the now-safe text
-    final_message = f"📣 *Announcement*\n\n{safe_announcement_text}"
+    final_message = f"📣 <b>Announcement</b>\n\n{escape(announcement_text)}"
 
     try:
-        # Step 1: Send the announcement message to the main group chat.
-        # We capture the returned message object to get its ID.
-        sent_message = bot.send_message(
-            GROUP_ID,
-            final_message,
-            parse_mode="Markdown",
-            message_thread_id=UPDATES_TOPIC_ID
-        )
-
-        # Step 2: Pin the message we just sent.
-        # `disable_notification=False` ensures all members are notified of the pin.
-        bot.pin_chat_message(
-            chat_id=GROUP_ID,
-            message_id=sent_message.message_id,
-            disable_notification=False
-        )
-
-        # Step 3 (Optional but good): Confirm success to the admin who sent the command.
-        # This message will be sent to the admin's private chat if used there, or as a reply.
+        sent_message = bot.send_message(GROUP_ID, final_message, parse_mode="HTML", message_thread_id=UPDATES_TOPIC_ID)
+        bot.pin_chat_message(chat_id=GROUP_ID, message_id=sent_message.message_id, disable_notification=False)
         bot.reply_to(msg, "✅ Announcement sent and pinned successfully!")
-
     except Exception as e:
-        # Step 4: Handle errors gracefully, especially permission errors.
         print(f"Error in /announce command: {traceback.format_exc()}")
         report_error_to_admin(f"Failed to announce and pin message. Error: {e}")
-        # Inform the admin who sent the command about the likely cause.
-        bot.reply_to(
-            msg,
-            "❌ **Error: Could not pin the message.**\n\n"
-            "Please ensure the bot is an **admin** in the group and has the **'Pin Messages'** permission."
-        )
+        bot.reply_to(msg, "❌ <b>Error: Could not pin the message.</b>\n\nPlease ensure the bot is an <b>admin</b> in the group and has the <b>'Pin Messages'</b> permission.", parse_mode="HTML")
 @bot.message_handler(commands=['cancel'])
 @admin_required
 def handle_cancel_command(msg: types.Message):
