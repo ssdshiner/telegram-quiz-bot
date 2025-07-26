@@ -2103,7 +2103,8 @@ def handle_feedback_command(msg: types.Message):
     if not feedback_text:
         bot.send_message(
             msg.chat.id,
-            "✍️ Please provide your feedback after the command.\nExample: `/feedback The quizzes are helpful.`"
+            "✍️ Please provide your feedback after the command.\n*Example:* `/feedback The quizzes are helpful.`",
+            parse_mode="Markdown"
         )
         return
 
@@ -2740,10 +2741,10 @@ def handle_stop_marathon_command(msg: types.Message):
         parse_mode="Markdown",
         message_thread_id=QUIZ_TOPIC_ID
     )
-
+    
     # 3. THE FIX: Immediately call the function to send the results.
     send_marathon_results(session_id)
-
+    
     # 4. Cleanly delete the admin's /roko command message.
     try:
         bot.delete_message(msg.chat.id, msg.message_id)
@@ -3310,7 +3311,7 @@ def handle_review_type_choice(call: types.CallbackQuery):
             types.InlineKeyboardButton(f"Question 1 ({marks_dist.get('q1')} marks)", callback_data=f"review_single_q1_{submission_id}"),
             types.InlineKeyboardButton(f"Question 2 ({marks_dist.get('q2')} marks)", callback_data=f"review_single_q2_{submission_id}")
         )
-        bot.send_message(call.message.chat.id, "Which question did the member attempt?", reply_markup=markup, message_thread_id=call.message.message_thread_id
+        bot.send_message(call.message.chat.id, "Which question did the member attempt?", reply_markup=markup, message_thread_id=call.message.message_thread_id)
 
 
 def process_both_q1_marks(message, submission_id, marks_dist):
@@ -3462,11 +3463,11 @@ def handle_report_confirmation(call: types.CallbackQuery):
             pending_reviews = report_data.get('pending_reviews', [])
 
             if not report_data or (not ranked_performers and not pending_reviews):
-                 bot.send_message(GROUP_ID, "No practice activity (submissions or reviews) was found for yesterday's session.", message_thread_id=QNA_TOPIC_ID
+                 bot.send_message(GROUP_ID, "No practice activity (submissions or reviews) was found for yesterday's session.", message_thread_id=QNA_TOPIC_ID)
                  bot.send_message(admin_chat_id, "✅ Report posted (No Activity). Now starting today's session...")
             else:
                 # Format the report
-                report_card_text = f"📋 **Written Practice Report Card: {datetime.date.today() - datetime.timedelta(days=1)}** 📋\n"
+                report_card_text = f"📋 **Written Practice Report Card: {datetime.datetime.now().date() - datetime.timedelta(days=1)}** 📋\n"
                 
                 # Part 1: Ranked Performers (only if the list is not empty)
                 if ranked_performers:
