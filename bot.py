@@ -1334,6 +1334,24 @@ def format_kalkaquiz_message(quizzes):
     message_parts.append(f"<b><i>For detailed format use /todayquiz command tomorrow!</i></b> 💪")
 
     return "\n".join(message_parts)
+# Temporary command to get the topic ID
+@bot.message_handler(commands=['get_topic_id'])
+def get_topic_id(message: types.Message):
+    """
+    A temporary utility command to find the message_thread_id of a topic.
+    """
+    if message.message_thread_id:
+        bot.reply_to(
+            message,
+            f"✅ This Topic's `message_thread_id` is:\n\n`{message.message_thread_id}`\n\n"
+            f"Aap is ID ko apne code me use kar sakte hain.",
+            parse_mode="Markdown"
+        )
+    else:
+        bot.reply_to(
+            message,
+            "ℹ️ This is the 'General' chat. It does not have a specific topic ID."
+        )
 @bot.message_handler(commands=['kalkaquiz'])
 @membership_required
 def handle_tomorrow_quiz(msg: types.Message):
