@@ -2734,16 +2734,16 @@ def handle_stop_marathon_command(msg: types.Message):
     session['is_active'] = False
 
     # 2. Announce that the marathon has been stopped.
-bot.send_message(
-    GROUP_ID,
-    "🛑 *Marathon Stopped!* 🛑\n\nAn admin has stopped the quiz. Calculating the final results now...",
-    parse_mode="Markdown",
-    message_thread_id=QUIZ_TOPIC_ID
-)
-    
+    bot.send_message(
+        GROUP_ID,
+        "🛑 *Marathon Stopped!* 🛑\n\nAn admin has stopped the quiz. Calculating the final results now...",
+        parse_mode="Markdown",
+        message_thread_id=QUIZ_TOPIC_ID
+    )
+
     # 3. THE FIX: Immediately call the function to send the results.
     send_marathon_results(session_id)
-    
+
     # 4. Cleanly delete the admin's /roko command message.
     try:
         bot.delete_message(msg.chat.id, msg.message_id)
