@@ -1905,42 +1905,89 @@ def handle_admin_reply_to_forward(msg: types.Message):
 @bot.message_handler(commands=['my_analysis'])
 @membership_required
 def handle_my_analysis_command(msg: types.Message):
-    """Provides a detailed analysis of a user's strengths and weaknesses using safe HTML."""
+    """
+    Provides a deep-dive analysis of a user's performance, including accuracy,
+    speed, and comparison with group averages for actionable insights.
+    """
     user_id = msg.from_user.id
-    # THE FIX: Switched to html.escape for safety and consistency.
     user_name = escape(msg.from_user.first_name)
     
-    analysis_data = {
-        'Leases': {'Theory': 90, 'Practical': 45},
-        'Taxation': {'Theory': 70, 'Case Study': 85, 'Practical': 60}
-    }
-    
-    if not analysis_data:
-        bot.reply_to(msg, f"Sorry {user_name}, I don't have enough data to create your analysis yet. Please participate in more quizzes!")
-        return
+    try:
+        response = supabase.rpc('get_user_deep_analysis', {'p_user_id': user_id}).execute()
         
-    # THE FIX: Converted the entire message to safe HTML.
-    analysis_text = f"🧠 <b>Performance Analysis for {user_name}</b> 🧠\n\n"
-    analysis_text += "Here's a breakdown of your accuracy by topic and question type:\n\n"
-    
-    for topic, types in analysis_data.items():
-        analysis_text += f"<b>{escape(topic)}:</b>\n"
-        weak_points = []
-        strong_points = []
-        for q_type, accuracy in types.items():
-            safe_q_type = escape(q_type)
-            if accuracy < 60:
-                weak_points.append(f"<b>{safe_q_type} questions</b>")
-                analysis_text += f"  - {safe_q_type}: {accuracy}% ⚠️\n"
-            else:
-                strong_points.append(f"<b>{safe_q_type} questions</b>")
-                analysis_text += f"  - {safe_q_type}: {accuracy}% ✅\n"
+        if not response.data:
+            bot.reply_to(msg, f"Sorry {user_name}, I don't have enough data for a deep analysis yet. Participate in more marathon quizzes to build your performance profile!")
+            return
+
+        analysis_text = f" Moti Bhai! पेश है आपका Performance Deep Dive, {user_name}! 🚀\n\n"
         
-        if weak_points:
-            analysis_text += f"  💡 <i>Suggestion:</i> You should focus more on {', '.join(weak_points)} in the <b>{escape(topic)}</b> chapter.\n"
-        analysis_text += "\n"
+        # --- Data Processing ---
+        analysis_data = {}
+        for item in response.data:
+            topic = item.get('topic', 'Unknown')
+            q_type = item.get('question_type', 'Unknown')
+            if topic not in analysis_data:
+                analysis_data[topic] = {}
+            
+            accuracy = (item['correct_answers'] / item['total_questions'] * 100) if item['total_questions'] > 0 else 0
+            
+            analysis_data[topic][q_type] = {
+                'accuracy': accuracy,
+                'correct': item['correct_answers'],
+                'total': item['total_questions'],
+                'avg_speed': item['avg_time_per_q']
+            }
         
-    bot.send_message(msg.chat.id, analysis_text, parse_mode="HTML")
+        # --- Display Matrix ---
+        analysis_text += "<b>📊 Accuracy & Speed Matrix</b>\n"
+        analysis_text += "<i>(Topic-wise performance breakdown)</i>\n\n"
+        for topic, types in analysis_data.items():
+            analysis_text += f"<b>{escape(topic)}:</b>\n"
+            for q_type, data in types.items():
+                emoji = "✅" if data['accuracy'] >= 75 else "🟠" if data['accuracy'] >= 50 else "⚠️"
+                analysis_text += f"  - <i>{escape(q_type)}:</i> {data['accuracy']:.0f}% ({data['correct']}/{data['total']}) {emoji} | Avg Speed: {data['avg_speed']:.1f}s\n"
+            analysis_text += "\n"
+
+        # --- Coach's Insights ---
+        kryptonite_type = {}
+        confusion_zone = []
+        speed_issues = []
+
+        for topic, types in analysis_data.items():
+            for q_type, data in types.items():
+                if data['accuracy'] < 50:
+                    kryptonite_type[q_type] = kryptonite_type.get(q_type, 0) + 1
+                if 40 <= data['accuracy'] < 60:
+                    confusion_zone.append(f"{topic} ({q_type})")
+                
+                # Compare speed with group average
+                group_stats_res = supabase.rpc('get_group_avg_stats', {'p_topic': topic, 'p_question_type': q_type}).execute()
+                if group_stats_res.data:
+                    group_avg_speed = group_stats_res.data[0].get('group_avg_speed', 0)
+                    if data['avg_speed'] > group_avg_speed * 1.5 and data['accuracy'] > 70:
+                        speed_issues.append(f"Slow but Right in <b>{escape(topic)} ({escape(q_type)})</b>")
+                    elif data['avg_speed'] < group_avg_speed * 0.7 and data['accuracy'] < 60:
+                        speed_issues.append(f"Fast but Wrong in <b>{escape(topic)} ({escape(q_type)})</b>")
+
+        analysis_text += "<b>⭐ Coach's Actionable Insights</b>\n"
+        if kryptonite_type:
+            worst_type = max(kryptonite_type, key=kryptonite_type.get)
+            analysis_text += f"• <b>Your Kryptonite:</b> Aapko <b>{escape(worst_type)}</b> type ke sawaalon par khaas dhyaan dena chahiye.\n"
+        if confusion_zone:
+            analysis_text += f"• <b>Confusion Zone:</b> In topics ko revise karein - <b>{escape(', '.join(confusion_zone))}</b>. Yahan aap 50-50 rehte hain.\n"
+        if speed_issues:
+            analysis_text += "• <b>Speed Alerts:</b>\n"
+            for issue in speed_issues:
+                analysis_text += f"  - {issue}\n"
+        if not kryptonite_type and not confusion_zone and not speed_issues:
+            analysis_text += "• No major weak points detected! You have a balanced performance. Keep it up! 🔥"
+
+        bot.send_message(msg.chat.id, analysis_text, parse_mode="HTML", message_thread_id=msg.message_thread_id)
+
+    except Exception as e:
+        print(f"Error in /my_analysis: {traceback.format_exc()}")
+        report_error_to_admin(f"Error generating dynamic analysis for {user_id}:\n{e}")
+        bot.reply_to(msg, "❌ Oops! Something went wrong while generating your deep-dive analysis.")
 
 
 @bot.message_handler(commands=['mystats'])
@@ -2902,6 +2949,31 @@ def send_marathon_results(session_id):
         APPRECIATION_STREAK = 8
         for user_id, p in sorted_items:
             record_quiz_participation(user_id, p['name'], p['score'], p['total_time'])
+            # Save detailed performance breakdown
+            for topic, type_data in p.get('performance_breakdown', {}).items():
+                for q_type, scores in type_data.items():
+                    try:
+                        supabase.rpc('upsert_performance_breakdown', {
+                            'p_user_id': user_id,
+                            'p_topic': topic,
+                            'p_question_type': q_type,
+                            'p_correct_increment': scores.get('correct', 0),
+                            'p_total_increment': scores.get('total', 0),
+                            'p_time_increment': scores.get('time', 0)
+                        }).execute()
+                    except Exception as rpc_error:
+                        print(f"Failed to upsert performance breakdown for user {user_id}: {rpc_error}")
+            # Save topic-wise performance
+            for topic, scores in p.get('topic_scores', {}).items():
+                try:
+                    supabase.rpc('upsert_user_topic_performance', {
+                        'p_user_id': user_id,
+                        'p_topic': topic,
+                        'p_correct_increment': scores.get('correct', 0),
+                        'p_total_increment': scores.get('total', 0)
+                    }).execute()
+                except Exception as rpc_error:
+                    print(f"Failed to upsert topic performance for user {user_id}: {rpc_error}")
             user_pre_stats = pre_quiz_stats_dict.get(user_id, {})
             highest_before = user_pre_stats.get('highest_marathon_score') or 0
             streak_before = user_pre_stats.get('current_streak') or 0
@@ -3657,7 +3729,7 @@ def handle_remind_checkers_command(msg: types.Message):
 def handle_all_poll_answers(poll_answer: types.PollAnswer):
     """
     This is the single master handler for all poll answers.
-    It now also records topic and question_type for marathons.
+    It now records a detailed breakdown for deep analysis.
     """
     poll_id_str = poll_answer.poll_id
     user_info = poll_answer.user
@@ -3680,8 +3752,7 @@ def handle_all_poll_answers(poll_answer: types.PollAnswer):
                 QUIZ_PARTICIPANTS.setdefault(session_id, {})[user_info.id] = {
                     'name': user_info.first_name, 'score': 0, 'total_time': 0,
                     'questions_answered': 0, 'correct_answer_times': [],
-                    'topic_scores': {},
-                    'type_scores': {}
+                    'performance_breakdown': {} # NEW: Detailed breakdown
                 }
 
             participant = QUIZ_PARTICIPANTS[session_id][user_info.id]
@@ -3691,26 +3762,24 @@ def handle_all_poll_answers(poll_answer: types.PollAnswer):
             question_idx = marathon_session['current_question_index'] - 1
             question_data = marathon_session['questions'][question_idx]
             correct_option_index = ['A', 'B', 'C', 'D'].index(str(question_data.get('Correct Answer', 'A')).upper())
-
-            question_topic = question_data.get('topic', 'Unknown Topic')
-            question_type = question_data.get('question_type', 'Unknown Type')
             
-            participant['topic_scores'].setdefault(question_topic, {'correct': 0, 'total': 0})
-            participant['topic_scores'][question_topic]['total'] += 1
-            
-            participant['type_scores'].setdefault(question_type, {'correct': 0, 'total': 0})
-            participant['type_scores'][question_type]['total'] += 1
+            question_topic = question_data.get('topic', 'General')
+            question_type = question_data.get('question_type', 'Theory')
 
-            q_stats = marathon_session['stats']['question_times'][question_idx]
-            q_stats['total_time'] += time_taken
-            q_stats['answer_count'] += 1
+            # Initialize dictionary keys if they don't exist
+            participant.setdefault('performance_breakdown', {})
+            participant['performance_breakdown'].setdefault(question_topic, {})
+            participant['performance_breakdown'][question_topic].setdefault(question_type, {'correct': 0, 'total': 0, 'time': 0})
+            
+            # Update totals
+            breakdown = participant['performance_breakdown'][question_topic][question_type]
+            breakdown['total'] += 1
+            breakdown['time'] += time_taken
 
             if selected_option == correct_option_index:
                 participant['score'] += 1
                 participant['correct_answer_times'].append(time_taken)
-                q_stats['correct_times'][user_info.id] = time_taken
-                participant['topic_scores'][question_topic]['correct'] += 1
-                participant['type_scores'][question_type]['correct'] += 1
+                breakdown['correct'] += 1
             
             return
 
@@ -3720,7 +3789,6 @@ def handle_all_poll_answers(poll_answer: types.PollAnswer):
             
             if active_poll_info and active_poll_info.get('type') == 'random_quiz':
                 if selected_option == active_poll_info['correct_option_id']:
-                    print(f"Correct answer for random quiz from {user_info.first_name}. Incrementing score.")
                     supabase.rpc('increment_score', {
                         'user_id_in': user_info.id,
                         'user_name_in': user_info.first_name
