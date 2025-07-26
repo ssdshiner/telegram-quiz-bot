@@ -560,17 +560,18 @@ def run_daily_checks():
         # --- Run Inactivity Checks Automatically ---
         final_warnings, first_warnings = find_inactive_users()
         if first_warnings:
-            user_list = [f"@{user['user_name']}" for user in first_warnings]
-            message = (f"⚠️ **Quiz Activity Warning!** ⚠️\n"
-                       f"The following members have not participated in any quiz for the last 3 days: {', '.join(user_list)}.\n"
+            user_list = [f"*{user['user_name']}*" for user in first_warnings]
+            message = (f"⚠️ *Quiz Activity Warning!* ⚠️\n\n"
+                       f"The following members have not participated in any quiz for the last 3 days: {', '.join(user_list)}.\n\n"
                        f"This is your final 24-hour notice.")
-            bot.send_message(GROUP_ID, message, message_thread_id=UPDATES_TOPIC_ID)
+            bot.send_message(GROUP_ID, message, parse_mode="Markdown", message_thread_id=UPDATES_TOPIC_ID)
             user_ids_to_update = [user['user_id'] for user in first_warnings]
             supabase.table('quiz_activity').update({'warning_level': 1}).in_('user_id', user_ids_to_update).execute()
+        
         if final_warnings:
-            user_list = [f"@{user['user_name']}" for user in final_warnings]
+            user_list = [f"*{user['user_name']}*" for user in final_warnings]
             message = f"Admins, please take action. The following members did not participate even after a final warning:\n" + ", ".join(user_list)
-            bot.send_message(GROUP_ID, message, message_thread_id=UPDATES_TOPIC_ID)
+            bot.send_message(GROUP_ID, message, parse_mode="Markdown", message_thread_id=UPDATES_TOPIC_ID)
             user_ids_to_update = [user['user_id'] for user in final_warnings]
             supabase.table('quiz_activity').update({'warning_level': 2}).in_('user_id', user_ids_to_update).execute()
 
@@ -578,9 +579,9 @@ def run_daily_checks():
         appreciations = find_users_to_appreciate()
         if appreciations:
             for user in appreciations:
-                message = (f"🏆 **Star Performer Alert!** 🏆\n\n"
-                           f"Hats off to **@{user['user_name']}** for showing incredible consistency! Your dedication is what makes this community awesome. Keep it up! 👏")
-                bot.send_message(GROUP_ID, message, message_thread_id=UPDATES_TOPIC_ID)
+                message = (f"🏆 *Star Performer Alert!* 🏆\n\n"
+                           f"Hats off to *{user['user_name']}* for showing incredible consistency! Your dedication is what makes this community awesome. Keep it up! 👏")
+                bot.send_message(GROUP_ID, message, parse_mode="Markdown", message_thread_id=UPDATES_TOPIC_ID)
 
         print("✅ Daily automated checks completed.")
     except Exception as e:
@@ -3181,7 +3182,7 @@ def handle_submission(msg: types.Message):
         }).eq('submission_id', submission_id).execute()
 
         # 6. Announce the assignment publicly
-        bot.reply_to(msg, f"✅ Submission received from @{msg.from_user.first_name}!\n\nYour answer sheet has been assigned to @{checker_name} for review. Please provide your feedback and marks.", parse_mode="Markdown")
+        bot.reply_to(msg, f"✅ Submission received from *{msg.from_user.first_name}*!\n\nYour answer sheet has been assigned to *{checker_name}* for review. Please provide your feedback and marks.", parse_mode="Markdown")
 
     except Exception as e:
         print(f"Error in /submit command: {traceback.format_exc()}")
@@ -3285,7 +3286,7 @@ def process_simple_review_marks(message, submission_id, total_marks):
         submission_data = supabase.table('practice_submissions').select('submitter_id').eq('submission_id', submission_id).single().execute().data
         submitter_info = supabase.table('all_time_scores').select('user_name').eq('user_id', submission_data['submitter_id']).single().execute().data
         submitter_name = submitter_info.get('user_name', 'the submitter')
-        bot.reply_to(message, f"✅ Marks awarded! @{submitter_name} scored **{marks_awarded}/{total_marks}** ({percentage}%).", parse_mode="Markdown")
+        bot.reply_to(message, f"✅ Marks awarded! *{submitter_name}* scored *{marks_awarded}/{total_marks}* ({percentage}%).", parse_mode="Markdown")
 
     except Exception as e:
         print(f"Error in process_simple_review_marks: {traceback.format_exc()}")
@@ -3347,7 +3348,7 @@ def process_both_q2_marks(message, submission_id, marks_dist, marks_q1):
         supabase.table('practice_submissions').update({'marks_awarded_details': marks_details, 'performance_percentage': percentage, 'review_status': 'Completed'}).eq('submission_id', submission_id).execute()
         submission_data = supabase.table('practice_submissions').select('submitter_id').eq('submission_id', submission_id).single().execute().data
         submitter_info = supabase.table('all_time_scores').select('user_name').eq('user_id', submission_data['submitter_id']).single().execute().data
-        bot.reply_to(message, f"✅ Marks awarded! @{submitter_info.get('user_name')} scored **{total_awarded}/{total_marks}** ({percentage}%).", parse_mode="Markdown")
+        bot.reply_to(message, f"✅ Marks awarded! *{submitter_info.get('user_name')}* scored *{total_awarded}/{total_marks}* ({percentage}%).", parse_mode="Markdown")
 
     except (ValueError, TypeError):
         prompt = bot.reply_to(message, "❌ That's not a valid number. Please try again for Question 2.")
@@ -3386,7 +3387,7 @@ def process_single_question_marks(message, submission_id, question_choice, marks
         supabase.table('practice_submissions').update({'marks_awarded_details': marks_details, 'performance_percentage': percentage, 'review_status': 'Completed'}).eq('submission_id', submission_id).execute()
         submission_data = supabase.table('practice_submissions').select('submitter_id').eq('submission_id', submission_id).single().execute().data
         submitter_info = supabase.table('all_time_scores').select('user_name').eq('user_id', submission_data['submitter_id']).single().execute().data
-        bot.reply_to(message, f"✅ Marks awarded! @{submitter_info.get('user_name')} scored **{marks_awarded}/{marks_for_q}** ({percentage}%) on the attempted question.", parse_mode="Markdown")
+        bot.reply_to(message, f"✅ Marks awarded! *{submitter_info.get('user_name')}* scored *{marks_awarded}/{marks_for_q}* ({percentage}%) on the attempted question.", parse_mode="Markdown")
         
     except (ValueError, TypeError):
         prompt = bot.reply_to(message, "❌ That's not a valid number. Please try again.")
@@ -3471,7 +3472,7 @@ def handle_report_confirmation(call: types.CallbackQuery):
                 
                 # Part 1: Ranked Performers (only if the list is not empty)
                 if ranked_performers:
-                    report_card_text += "\n--- **🏆 Performance Ranking** ---\n"
+                    report_card_text += "\n--- *🏆 Performance Ranking* ---\n"
                     rank_emojis = ["🥇", "🥈", "🥉"]
                     for i, performer in enumerate(ranked_performers):
                         emoji = rank_emojis[i] if i < 3 else f"*{i+1}.*"
@@ -3481,7 +3482,15 @@ def handle_report_confirmation(call: types.CallbackQuery):
                         total_marks = performer.get('total_marks', 0)
                         percentage = performer.get('percentage', 0)
                         checker_name = performer.get('checker_name', 'N/A')
-                        report_card_text += f"{emoji} **@{submitter_name}** - {marks_awarded}/{total_marks} ({percentage}%)\n  *(Checked by: @{checker_name})*\n"
+                        report_card_text += f"{emoji} *{submitter_name}* - {marks_awarded}/{total_marks} ({percentage}%)\n  *(Checked by: {checker_name})*\n"
+                
+                # Part 2: Pending Reviews (only if the list is not empty)
+                if pending_reviews:
+                    report_card_text += "\n--- *⚠️ Submissions Not Checked* ---\n"
+                    for pending in pending_reviews:
+                        submitter_name = pending.get('submitter_name', 'N/A')
+                        checker_name = pending.get('checker_name', 'N/A')
+                        report_card_text += f"• *{submitter_name}*'s answer is pending review by *{checker_name}*.\n"
                 
                 # Part 2: Pending Reviews (only if the list is not empty)
                 if pending_reviews:
