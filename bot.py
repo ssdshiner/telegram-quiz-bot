@@ -605,13 +605,18 @@ def background_worker():
                 run_daily_checks()
                 last_daily_check_day = current_day
 
-            # --- Process other scheduled tasks ---
-            for task in scheduled_tasks[:]:
-                if current_time_ist >= task['run_at'].astimezone(ist_tz):
-                    try:
-                        bot.send_message(task['chat_id'], task['text'], parse_mode="Markdown")
-                        print(f"✅ Executed scheduled task: {task['text']}")
-                    except Exception as task_error:
+# --- Process other scheduled tasks ---
+for task in scheduled_tasks[:]:
+    if current_time_ist >= task['run_at'].astimezone(ist_tz):
+        try:
+            bot.send_message(
+                task['chat_id'],
+                task['text'],
+                parse_mode="Markdown",
+                message_thread_id=task.get('message_thread_id') # Use topic ID if available
+            )
+            print(f"✅ Executed scheduled task: {task['text']}")
+        except Exception as task_error:
                         print(f"❌ Failed to execute scheduled task. Error: {task_error}")
                     scheduled_tasks.remove(task)
 
@@ -1860,6 +1865,7 @@ def handle_mystats_command(msg: types.Message):
 def handle_notify_command(msg: types.Message):
     """
     Sends a quiz notification. If time is <= 10 mins, it schedules a follow-up message.
+    NOW SENDS TO THE QUIZ TOPIC.
     """
     try:
         parts = msg.text.split(' ')
@@ -1876,24 +1882,22 @@ def handle_notify_command(msg: types.Message):
                              "❌ Please enter a positive number for minutes.")
             return
 
-        # Send the first message immediately
+        # Send the first message immediately TO THE QUIZ TOPIC
         initial_text = f"⏳ Quiz starts in: {minutes} minute(s) ⏳\n\nGet ready with all concepts revised in mind!"
-        bot.send_message(GROUP_ID, initial_text, parse_mode="Markdown")
+        bot.send_message(GROUP_ID, initial_text, parse_mode="Markdown", message_thread_id=QUIZ_TOPIC_ID)
 
         # If time is 10 mins or less, schedule the "Time's up" message.
         if minutes <= 10:
-            # Calculate when the follow-up message should be sent
-            run_time = datetime.datetime.now() + datetime.timedelta(
-                minutes=minutes)
+            run_time = datetime.datetime.now() + datetime.timedelta(minutes=minutes)
 
-            # Create the task dictionary (our "To-Do" note)
+            # Create the task dictionary and ADD THE TOPIC ID
             task = {
                 'run_at': run_time,
                 'chat_id': GROUP_ID,
-                'text': "⏰ **Time's up! The quiz is starting now!** 🔥"
+                'text': "⏰ **Time's up! The quiz is starting now!** 🔥",
+                'message_thread_id': QUIZ_TOPIC_ID
             }
 
-            # Add the task to our global list
             scheduled_tasks.append(task)
             print(f"ℹ️ Scheduled a new task: {task}")
 
