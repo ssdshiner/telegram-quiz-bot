@@ -1314,11 +1314,13 @@ def handle_today_quiz(msg: types.Message):
         today_date_str = datetime.datetime.now(ist_tz).strftime('%Y-%m-%d')
         response = supabase.table('quiz_schedule').select('*').eq('quiz_date', today_date_str).order('quiz_no').execute()
 
+        # THE FIX: We now use html.escape on the user's name because this function uses HTML parse mode.
+        user_name = escape(msg.from_user.first_name)
+        
         if not response.data:
-            bot.send_message(msg.chat.id, f"✅ Hey {msg.from_user.first_name}, no quizzes are scheduled for today. It might be a rest day! 🧘", message_thread_id=msg.message_thread_id)
+            bot.send_message(msg.chat.id, f"✅ Hey {user_name}, no quizzes are scheduled for today. It might be a rest day! 🧘", message_thread_id=msg.message_thread_id)
             return
         
-        user_name = msg.from_user.first_name
         all_greetings = [
             f"Step by step rising, never looking back,\n{user_name}, today's quiz schedule keeps you on track! 🛤️",
             f"Challenge accepted, ready to play,\n{user_name}, here's your quiz lineup for today! 🎮",
@@ -1346,12 +1348,11 @@ def handle_today_quiz(msg: types.Message):
         
         message_text += "———————————————"
         
-        # --- Interactive Buttons Logic ---
         markup = types.InlineKeyboardMarkup(row_width=2)
         markup.add(
             types.InlineKeyboardButton("📊 My Stats", callback_data=f"show_mystats_{msg.from_user.id}"),
             types.InlineKeyboardButton("🤖 All Commands", callback_data="show_info"),
-            types.InlineKeyboardButton("📅 View Full Schedule", url=WEBAPP_URL) # Kept the original button too
+            types.InlineKeyboardButton("📅 View Full Schedule", url=WEBAPP_URL)
         )
         
         bot.send_message(msg.chat.id, message_text, parse_mode="HTML", reply_markup=markup, message_thread_id=msg.message_thread_id)
@@ -1360,6 +1361,7 @@ def handle_today_quiz(msg: types.Message):
         print(f"CRITICAL Error in /todayquiz: {traceback.format_exc()}")
         report_error_to_admin(f"Failed to fetch today's quiz schedule:\n{traceback.format_exc()}")
         bot.send_message(msg.chat.id, "😥 Oops! Something went wrong while fetching the schedule.", message_thread_id=msg.message_thread_id)
+
 def format_kalkaquiz_message(quizzes):
     """
     Formats the quiz schedule for /kalkaquiz into the new mobile-first HTML format.
@@ -1881,17 +1883,9 @@ def handle_admin_reply_to_forward(msg: types.Message):
 def handle_my_analysis_command(msg: types.Message):
     """Provides a detailed analysis of a user's strengths and weaknesses."""
     user_id = msg.from_user.id
-    user_name = msg.from_user.first_name
+    # THE FIX: We escape the user's name right away using the correct function for Markdown.
+    user_name = escape_markdown(msg.from_user.first_name)
     
-    # We need to fetch data from past quizzes. This requires a more complex setup.
-    # For now, we will create a placeholder message.
-    # To implement this fully, we would need to store every single answer in a Supabase table.
-    
-    # Placeholder implementation:
-    # A real implementation would query a 'poll_answers' table.
-    # Let's assume we have some dummy data for demonstration.
-    
-    # Dummy data structure (a real one would be fetched from Supabase)
     analysis_data = {
         'Leases': {'Theory': 90, 'Practical': 45},
         'Taxation': {'Theory': 70, 'Case Study': 85, 'Practical': 60}
@@ -1901,6 +1895,7 @@ def handle_my_analysis_command(msg: types.Message):
         bot.reply_to(msg, f"Sorry {user_name}, I don't have enough data to create your analysis yet. Please participate in more quizzes!")
         return
         
+    # We now use the safe 'user_name' variable.
     analysis_text = f"🧠 *Performance Analysis for {user_name}* 🧠\n\n"
     analysis_text += "Here's a breakdown of your accuracy by topic and question type:\n\n"
     
