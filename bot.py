@@ -587,7 +587,6 @@ def run_daily_checks():
         print(f"❌ Error during daily checks: {e}")
         report_error_to_admin(f"Error in run_daily_checks:\n{traceback.format_exc()}")
 
-
 def background_worker():
     """Runs all scheduled tasks in a continuous loop."""
     global last_daily_check_day, last_schedule_announce_day
@@ -605,18 +604,18 @@ def background_worker():
                 run_daily_checks()
                 last_daily_check_day = current_day
 
-# --- Process other scheduled tasks ---
-for task in scheduled_tasks[:]:
-    if current_time_ist >= task['run_at'].astimezone(ist_tz):
-        try:
-            bot.send_message(
-                task['chat_id'],
-                task['text'],
-                parse_mode="Markdown",
-                message_thread_id=task.get('message_thread_id') # Use topic ID if available
-            )
-            print(f"✅ Executed scheduled task: {task['text']}")
-        except Exception as task_error:
+            # --- Process other scheduled tasks ---
+            for task in scheduled_tasks[:]:
+                if current_time_ist >= task['run_at'].astimezone(ist_tz):
+                    try:
+                        bot.send_message(
+                            task['chat_id'],
+                            task['text'],
+                            parse_mode="Markdown",
+                            message_thread_id=task.get('message_thread_id') # Use topic ID if available
+                        )
+                        print(f"✅ Executed scheduled task: {task['text']}")
+                    except Exception as task_error:
                         print(f"❌ Failed to execute scheduled task. Error: {task_error}")
                     scheduled_tasks.remove(task)
 
