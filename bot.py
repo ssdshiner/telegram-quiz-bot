@@ -541,8 +541,9 @@ def run_daily_checks():
         print("Starting daily automated checks...")
         
         final_warnings, first_warnings = find_inactive_users()
-if first_warnings:
-            # FIX: Using HTML mentions which work for everyone
+
+        if first_warnings:
+            # Using HTML mentions which work for everyone
             user_list = [f"<a href='tg://user?id={user['user_id']}'>{escape(user['user_name'])}</a>" for user in first_warnings]
             message = (f"⚠️ <b>Quiz Activity Warning!</b> ⚠️\n"
                        f"The following members have not participated in any quiz for the last 3 days: {', '.join(user_list)}.\n"
@@ -552,7 +553,7 @@ if first_warnings:
             supabase.table('quiz_activity').update({'warning_level': 1}).in_('user_id', user_ids_to_update).execute()
 
         if final_warnings:
-            # FIX: Using HTML mentions which work for everyone
+            # Using HTML mentions which work for everyone
             user_list = [f"<a href='tg://user?id={user['user_id']}'>{escape(user['user_name'])}</a>" for user in final_warnings]
             message = f"Admins, please take action. The following members did not participate even after a final warning:\n" + ", ".join(user_list)
             bot.send_message(GROUP_ID, message, parse_mode="HTML", message_thread_id=UPDATES_TOPIC_ID)
