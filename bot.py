@@ -1061,15 +1061,15 @@ def handle_group_message_content(msg: types.Message):
     Receives the content from the admin and copies it to the main group.
     """
     admin_id = msg.from_user.id
-    
+
     try:
         # bot.copy_message sends an exact copy of your message to the group
-bot.copy_message(
-    chat_id=GROUP_ID,
-    from_chat_id=admin_id,
-    message_id=msg.message_id,
-    message_thread_id=UPDATES_TOPIC_ID
-)
+        bot.copy_message(
+            chat_id=GROUP_ID,
+            from_chat_id=admin_id,
+            message_id=msg.message_id,
+            message_thread_id=UPDATES_TOPIC_ID
+        )
         bot.send_message(admin_id, "✅ Message successfully sent to the group!")
     except Exception as e:
         print(f"Error sending content with /message: {traceback.format_exc()}")
