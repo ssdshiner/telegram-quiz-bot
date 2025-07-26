@@ -1972,7 +1972,7 @@ def handle_mystats_command(msg: types.Message):
         else:
             coach_comment = "Aapki performance aachi hai. Keep practicing consistently!"
 
-        final_message = stats_message + f"--- *Coach's Comment* ---\n💡 {coach_comment}\n\n_This message will be deleted in 2 minutes._"
+        final_message = stats_message + f"--- *Coach's Comment* ---\n💡 {coach_comment}\n\n_Use /my_analysis command for more._"
         
         # --- 3. Send the message and schedule deletion ---
         sent_stats_message = bot.reply_to(msg, final_message, parse_mode="Markdown")
@@ -2169,8 +2169,11 @@ def handle_announce_command(msg: types.Message):
         )
         return
 
-    # Format the announcement
-    final_message = f"📣 *Announcement*\n\n{announcement_text}"
+    # THE FIX IS HERE: We now escape the admin's text to prevent formatting errors.
+    safe_announcement_text = escape_markdown(announcement_text)
+    
+    # Format the announcement using the now-safe text
+    final_message = f"📣 *Announcement*\n\n{safe_announcement_text}"
 
     try:
         # Step 1: Send the announcement message to the main group chat.
@@ -2204,7 +2207,6 @@ def handle_announce_command(msg: types.Message):
             "❌ **Error: Could not pin the message.**\n\n"
             "Please ensure the bot is an **admin** in the group and has the **'Pin Messages'** permission."
         )
-
 @bot.message_handler(commands=['cancel'])
 @admin_required
 def handle_cancel_command(msg: types.Message):
@@ -2502,7 +2504,7 @@ def handle_congratulate_command(msg: types.Message):
         fastest_winner_name = escape_markdown(fastest_winner_details['name'])
         
         congrats_message += f"⚡️ *Speed King/Queen:* A special mention to *{fastest_winner_name}* for being the fastest among the toppers.\n"
-        congrats_message += "\nKeep pushing your limits, everyone. The next leaderboard is waiting for you\. 🔥"
+        congrats_message += "\nKeep pushing your limits, everyone. The next leaderboard is waiting for you. 🔥"
 
         bot.send_message(GROUP_ID, congrats_message, parse_mode="Markdown", message_thread_id=QUIZ_TOPIC_ID)
 
