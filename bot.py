@@ -1482,25 +1482,23 @@ def handle_interlink_callbacks(call: types.CallbackQuery):
 @bot.message_handler(commands=['listfile'])
 @membership_required
 def handle_listfile_command(msg: types.Message):
-    """
-    Lists all available resources from the Vault.
-    """
+    """ Lists all available resources from the Vault using HTML. """
     try:
         response = supabase.table('resources').select('file_name, description').order('file_name').execute()
-        
+
         if not response.data:
             bot.reply_to(msg, "📚 The CA Vault is currently empty. Resources will be added soon!")
             return
 
-        list_message = "📚 **The CA Vault - Resource Library** 📚\n\n"
-        list_message += "Here are all the available notes. Use `/need <file_name>` to get one.\n\n"
+        list_message = "📚 <b>The CA Vault - Resource Library</b> 📚\n\n"
+        list_message += "Here are all the available notes. Use <code>/need &lt;file_name&gt;</code> to get one.\n\n"
 
         for i, resource in enumerate(response.data):
-            file_name = escape_markdown(resource.get('file_name', 'N/A'))
-            description = escape_markdown(resource.get('description', 'No description.'))
-            list_message += f"*{i + 1}.* `{file_name}`\n   ► _{description}_\n"
-            
-        bot.reply_to(msg, list_message, parse_mode="Markdown")
+            file_name = escape(resource.get('file_name', 'N/A'))
+            description = escape(resource.get('description', 'No description.'))
+            list_message += f"<b>{i + 1}.</b> <code>{file_name}</code>\n   ► <i>{description}</i>\n"
+
+        bot.reply_to(msg, list_message, parse_mode="HTML")
 
     except Exception as e:
         print(f"Error in /listfile: {traceback.format_exc()}")
@@ -1509,43 +1507,38 @@ def handle_listfile_command(msg: types.Message):
 @bot.message_handler(commands=['need'])
 @membership_required
 def handle_need_command(msg: types.Message):
-    """
-    Fetches a specific resource from the Vault by its filename.
-    Includes smart error handling if the file is not found.
-    """
+    """ Fetches a specific resource from the Vault by its filename using HTML. """
     try:
         parts = msg.text.split(' ', 1)
         if len(parts) < 2:
-            bot.reply_to(msg, "Please provide the exact file name after the command.\n*Example:* `/need AS-19_notes.pdf`\n\nUse `/listfile` to see all available files.", parse_mode="Markdown")
+            bot.reply_to(msg, "Please provide the exact file name after the command.\n<b>Example:</b> <code>/need AS-19_notes.pdf</code>\n\nUse /listfile to see all available files.", parse_mode="HTML")
             return
 
         file_name_to_find = parts[1].strip()
-        
-        # Find the resource by its exact name (case-insensitive)
+
         response = supabase.table('resources').select('file_id, file_name, description').ilike('file_name', file_name_to_find).limit(1).single().execute()
-        
+
         if response.data:
             resource = response.data
             file_id = resource['file_id']
-            caption = f"Here is the resource you requested:\n\n**File:** {resource['file_name']}\n**Description:** {resource['description']}"
-            
-            bot.send_document(msg.chat.id, file_id, caption=caption, reply_to_message_id=msg.message_id)
+            caption = f"Here is the resource you requested:\n\n<b>File:</b> {escape(resource['file_name'])}\n<b>Description:</b> {escape(resource['description'])}"
+
+            bot.send_document(msg.chat.id, file_id, caption=caption, reply_to_message_id=msg.message_id, parse_mode="HTML")
         else:
-            # --- Smart Error Handling ---
             all_files_response = supabase.table('resources').select('file_name').order('file_name').execute()
-            
-            error_message = f"❌ Sorry, I couldn't find a file named `{escape_markdown(file_name_to_find)}`.\n\n"
-            error_message += "Here is a list of all available files. Please **copy the exact file name** and use the command again.\n\n"
-            error_message += "*Available Files:*\n"
-            
+
+            error_message = f"❌ Sorry, I couldn't find a file named <code>{escape(file_name_to_find)}</code>.\n\n"
+            error_message += "Please <b>copy the exact file name</b> and use the command again.\n\n"
+            error_message += "<i>Available Files:</i>\n"
+
             if all_files_response.data:
                 for resource in all_files_response.data:
-                    error_message += f"• `{escape_markdown(resource['file_name'])}`\n"
+                    error_message += f"• <code>{escape(resource['file_name'])}</code>\n"
             else:
-                error_message += "_The Vault is currently empty._\n"
-            
-            error_message += "\n*Example:* `/need AS-19_notes.pdf`"
-            bot.reply_to(msg, error_message, parse_mode="Markdown")
+                error_message += "<i>The Vault is currently empty.</i>\n"
+
+            error_message += "\n<b>Example:</b> <code>/need AS-19_notes.pdf</code>"
+            bot.reply_to(msg, error_message, parse_mode="HTML")
 
     except Exception as e:
         print(f"Error in /need command: {traceback.format_exc()}")
@@ -3197,10 +3190,7 @@ def process_q2_marks(message, session_id, marks_q1):
 # === Submit command ===
 @bot.message_handler(commands=['submit'])
 def handle_submission(msg: types.Message):
-    """
-    Handles a user's answer sheet submission.
-    Assigns another active member to review the submission.
-    """
+    """ Handles a user's answer sheet submission using HTML. """
     if not is_group_message(msg):
         bot.reply_to(msg, "This command can only be used in the main group chat.")
         return
@@ -3211,49 +3201,43 @@ def handle_submission(msg: types.Message):
 
     try:
         submitter_id = msg.from_user.id
-        
-        # 1. Get the latest active session
+
         session_response = supabase.table('practice_sessions').select('*').eq('status', 'Questions Posted').order('session_id', desc=True).limit(1).execute()
         if not session_response.data:
             bot.reply_to(msg, "There is no active practice session to submit to right now.")
             return
-        
+
         latest_session = session_response.data[0]
         session_id = latest_session['session_id']
 
-        # 2. Check for duplicate submissions
         existing_submission = supabase.table('practice_submissions').select('submission_id').eq('session_id', session_id).eq('submitter_id', submitter_id).execute()
         if existing_submission.data:
             bot.reply_to(msg, "You have already submitted your answer for this session.")
             return
 
-        # 3. Record the submission first
         submission_insert_response = supabase.table('practice_submissions').insert({
             'session_id': session_id,
             'submitter_id': submitter_id,
             'submission_message_id': msg.reply_to_message.message_id
         }).execute()
         submission_id = submission_insert_response.data[0]['submission_id']
-        
-        # 4. Call the RPC to get a fair checker
+
         checker_response = supabase.rpc('assign_checker', {'p_session_id': session_id, 'p_submitter_id': submitter_id}).execute()
 
         if not checker_response.data:
             bot.reply_to(msg, "✅ Submission received! However, I couldn't find any available members to check your copy right now. An admin might need to assign it manually.")
             return
-            
+
         checker = checker_response.data
         checker_id = checker['user_id']
-        checker_name = checker['user_name']
+        checker_name = escape(checker['user_name'])
 
-        # 5. Update the submission with the assigned checker
         supabase.table('practice_submissions').update({
             'checker_id': checker_id,
             'review_status': 'Pending Review'
         }).eq('submission_id', submission_id).execute()
 
-        # 6. Announce the assignment publicly
-        bot.reply_to(msg, f"✅ Submission received from *{msg.from_user.first_name}*!\n\nYour answer sheet has been assigned to *{checker_name}* for review. Please provide your feedback and marks.", parse_mode="Markdown")
+        bot.reply_to(msg, f"✅ Submission received from <b>{escape(msg.from_user.first_name)}</b>!\n\nYour answer sheet has been assigned to <b>{checker_name}</b> for review. Please provide your feedback and marks.", parse_mode="HTML")
 
     except Exception as e:
         print(f"Error in /submit command: {traceback.format_exc()}")
@@ -3584,38 +3568,34 @@ def handle_report_confirmation(call: types.CallbackQuery):
 @bot.message_handler(commands=['remind_checkers'])
 @admin_required
 def handle_remind_checkers_command(msg: types.Message):
-    """
-    Sends a reminder to the group for all pending reviews for the current day.
-    """
+    """ Sends a reminder for pending reviews using HTML. """
     if not msg.chat.type == 'private':
         bot.reply_to(msg, "🤫 Please use this command in a private chat with me.")
         return
 
     try:
-        bot.send_message(msg.chat.id, "🔍 Checking for today's pending reviews...")
-        
-        # Call the RPC function
+        bot.send_message(msg.chat.id, "🔍 Checking for pending reviews...")
+
         response = supabase.rpc('get_pending_reviews_for_today').execute()
-        
+
         if not response.data:
             bot.send_message(msg.chat.id, "✅ Great news! There are no pending reviews for today's session.")
             return
 
         pending_reviews = response.data
-        
-        # --- Build the Reminder Message ---
-        reminder_message = "📢 **Gentle Reminder for Pending Reviews** 📢\n\n"
-        reminder_message += "The following submissions from today's session are still awaiting review. Checkers, please provide your valuable feedback soon!\n\n"
-        
+
+        reminder_message = "📢 <b>Gentle Reminder for Pending Reviews</b> 📢\n\n"
+        reminder_message += "The following submissions are still awaiting review. Checkers, please provide your valuable feedback soon!\n\n"
+
         for review in pending_reviews:
-            submitter = review.get('submitter_name', 'N/A')
-            checker = review.get('checker_name', 'N/A')
-            reminder_message += f"• **@{submitter}**'s answer sheet is waiting for **@{checker}**.\n"
-            
+            submitter = escape(review.get('submitter_name', 'N/A'))
+            checker = escape(review.get('checker_name', 'N/A'))
+            reminder_message += f"• <b>@{submitter}</b>'s answer sheet is waiting for <b>@{checker}</b>.\n"
+
         reminder_message += "\nThank you for your cooperation! 🙏"
-        
-        bot.send_message(GROUP_ID, reminder_message, parse_mode="Markdown", message_thread_id=QNA_TOPIC_ID)
-        bot.send_message(msg.chat.id, f"✅ Reminder for **{len(pending_reviews)}** pending review(s) has been posted in the group.")
+
+        bot.send_message(GROUP_ID, reminder_message, parse_mode="HTML", message_thread_id=QNA_TOPIC_ID)
+        bot.send_message(msg.chat.id, f"✅ Reminder for <b>{len(pending_reviews)}</b> pending review(s) has been posted in the group.", parse_mode="HTML")
 
     except Exception as e:
         print(f"Error in /remind_checkers: {traceback.format_exc()}")
