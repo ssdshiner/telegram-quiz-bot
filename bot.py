@@ -1193,7 +1193,7 @@ def handle_quoted_reply_content(msg: types.Message):
     original_message_id = state_data['original_message_id']
     
     try:
-        # Use copy_message with the 'reply_to_message_id' parameter
+        # bot.copy_message sends an exact copy of your message to the group
         bot.copy_message(
             chat_id=GROUP_ID,
             from_chat_id=admin_id,
@@ -1209,7 +1209,6 @@ def handle_quoted_reply_content(msg: types.Message):
         # Clean up the state to end the conversation
         if admin_id in user_states:
             del user_states[admin_id]
-
 @bot.message_handler(commands=['todayquiz'])
 @membership_required
 def handle_today_quiz(msg: types.Message):
