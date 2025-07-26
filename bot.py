@@ -2045,12 +2045,12 @@ def handle_announce_command(msg: types.Message):
     try:
         # Step 1: Send the announcement message to the main group chat.
         # We capture the returned message object to get its ID.
-sent_message = bot.send_message(
-    GROUP_ID,
-    final_message,
-    parse_mode="Markdown",
-    message_thread_id=UPDATES_TOPIC_ID
-)
+        sent_message = bot.send_message(
+            GROUP_ID,
+            final_message,
+            parse_mode="Markdown",
+            message_thread_id=UPDATES_TOPIC_ID
+        )
 
         # Step 2: Pin the message we just sent.
         # `disable_notification=False` ensures all members are notified of the pin.
