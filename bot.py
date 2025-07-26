@@ -981,6 +981,10 @@ def save_data():
 @membership_required
 def handle_info_command(msg: types.Message):
     """ Provides a list of all available commands for members using HTML. """
+    try:
+        supabase.rpc('update_chat_activity', {'p_user_id': msg.from_user.id, 'p_user_name': msg.from_user.username or msg.from_user.first_name}).execute()
+    except Exception as e:
+        print(f"Activity tracking failed for user {msg.from_user.id} in command: {e}")
     info_text = """
 🤖 <b>Bot Commands for Members</b> 🤖
 
@@ -1295,6 +1299,10 @@ def handle_today_quiz(msg: types.Message):
     """
     Shows the quiz schedule with greetings, detailed info, and interactive buttons.
     """
+    try:
+        supabase.rpc('update_chat_activity', {'p_user_id': msg.from_user.id, 'p_user_name': msg.from_user.username or msg.from_user.first_name}).execute()
+    except Exception as e:
+        print(f"Activity tracking failed for user {msg.from_user.id} in command: {e}")
     if not is_group_message(msg):
         bot.send_message(msg.chat.id, "ℹ️ The `/todayquiz` command is designed to be used in the main group chat.")
         return
@@ -1452,6 +1460,10 @@ def handle_tomorrow_quiz(msg: types.Message):
     """
     Shows the quiz schedule for the next day using the new mobile-first format.
     """
+    try:
+        supabase.rpc('update_chat_activity', {'p_user_id': msg.from_user.id, 'p_user_name': msg.from_user.username or msg.from_user.first_name}).execute()
+    except Exception as e:
+        print(f"Activity tracking failed for user {msg.from_user.id} in command: {e}")
     if not is_group_message(msg):
         bot.send_message(msg.chat.id, "ℹ️ The `/kalkaquiz` command is designed to be used in the main group chat.")
         return
@@ -1508,6 +1520,10 @@ def handle_interlink_callbacks(call: types.CallbackQuery):
 @bot.message_handler(commands=['listfile'])
 @membership_required
 def handle_listfile_command(msg: types.Message):
+    try:
+        supabase.rpc('update_chat_activity', {'p_user_id': msg.from_user.id, 'p_user_name': msg.from_user.username or msg.from_user.first_name}).execute()
+    except Exception as e:
+        print(f"Activity tracking failed for user {msg.from_user.id} in command: {e}")
     """ Lists all available resources from the Vault using HTML. """
     try:
         response = supabase.table('resources').select('file_name, description').order('file_name').execute()
@@ -1536,7 +1552,10 @@ def handle_listfile_command(msg: types.Message):
 @bot.message_handler(commands=['need'])
 @membership_required
 def handle_need_command(msg: types.Message):
-    """ Fetches a specific resource from the Vault by its filename using HTML. """
+    try:
+        supabase.rpc('update_chat_activity', {'p_user_id': msg.from_user.id, 'p_user_name': msg.from_user.username or msg.from_user.first_name}).execute()
+    except Exception as e:
+        print(f"Activity tracking failed for user {msg.from_user.id} in command: {e}")
     try:
         parts = msg.text.split(' ', 1)
         if len(parts) < 2:
@@ -1931,6 +1950,10 @@ def handle_mystats_command(msg: types.Message):
     Fetches comprehensive stats, posts them as a public reply using robust HTML,
     and auto-deletes both messages.
     """
+    try:
+        supabase.rpc('update_chat_activity', {'p_user_id': msg.from_user.id, 'p_user_name': msg.from_user.username or msg.from_user.first_name}).execute()
+    except Exception as e:
+        print(f"Activity tracking failed for user {msg.from_user.id} in command: {e}")
     user_id = msg.from_user.id
     user_name = escape(msg.from_user.first_name) # Escape user name immediately
 
