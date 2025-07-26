@@ -49,6 +49,11 @@ except (ValueError, TypeError):
 # --- Bot and Flask App Initialization ---
 bot = TeleBot(BOT_TOKEN, threaded=False)
 app = Flask(__name__)
+# --- Topic IDs ---
+UPDATES_TOPIC_ID = 2595
+QNA_TOPIC_ID = 2612
+QUIZ_TOPIC_ID = 2592
+CHATTING_TOPIC_ID = 2624
 # =============================================================================
 # 2.5. NETWORK STABILITY PATCH (MONKEY-PATCHING)
 # =============================================================================
@@ -514,7 +519,7 @@ def fetch_and_announce_schedule(target_date):
         
         message_text += "You can view this anytime using the `/kalkaquiz` command. All the best! 📖"
         
-        bot.send_message(GROUP_ID, message_text, parse_mode="HTML")
+        bot.send_message(GROUP_ID, message_text, parse_mode="HTML", message_thread_id=UPDATES_TOPIC_ID)
         return True
 
     except Exception as e:
@@ -559,13 +564,13 @@ def run_daily_checks():
             message = (f"⚠️ **Quiz Activity Warning!** ⚠️\n"
                        f"The following members have not participated in any quiz for the last 3 days: {', '.join(user_list)}.\n"
                        f"This is your final 24-hour notice.")
-            bot.send_message(GROUP_ID, message)
+            bot.send_message(GROUP_ID, message, message_thread_id=UPDATES_TOPIC_ID)
             user_ids_to_update = [user['user_id'] for user in first_warnings]
             supabase.table('quiz_activity').update({'warning_level': 1}).in_('user_id', user_ids_to_update).execute()
         if final_warnings:
             user_list = [f"@{user['user_name']}" for user in final_warnings]
             message = f"Admins, please take action. The following members did not participate even after a final warning:\n" + ", ".join(user_list)
-            bot.send_message(GROUP_ID, message)
+            bot.send_message(GROUP_ID, message, message_thread_id=UPDATES_TOPIC_ID)
             user_ids_to_update = [user['user_id'] for user in final_warnings]
             supabase.table('quiz_activity').update({'warning_level': 2}).in_('user_id', user_ids_to_update).execute()
 
@@ -575,7 +580,7 @@ def run_daily_checks():
             for user in appreciations:
                 message = (f"🏆 **Star Performer Alert!** 🏆\n\n"
                            f"Hats off to **@{user['user_name']}** for showing incredible consistency! Your dedication is what makes this community awesome. Keep it up! 👏")
-                bot.send_message(GROUP_ID, message)
+                bot.send_message(GROUP_ID, message, message_thread_id=UPDATES_TOPIC_ID)
 
         print("✅ Daily automated checks completed.")
     except Exception as e:
@@ -893,7 +898,7 @@ def handle_leaderboard(msg: types.Message):
             leaderboard_text += f"{rank_emoji} *{safe_name}* - {item.get('score', 0)} points\n"
 
         # THE FIX: Always send the leaderboard to the main group using GROUP_ID.
-        bot.send_message(GROUP_ID, leaderboard_text, parse_mode="Markdown")
+        bot.send_message(GROUP_ID, leaderboard_text, parse_mode="Markdown", message_thread_id=QUIZ_TOPIC_ID)
         
         # THE IMPROVEMENT: If the command was used in a private chat, send a confirmation.
         if msg.chat.id != GROUP_ID:
@@ -1022,7 +1027,7 @@ def handle_info_command(msg: types.Message):
 *📝 `/submit`* & *✅ `/review_done`*
    ► Used during Written Practice sessions.
 """
-    bot.send_message(msg.chat.id, info_text, parse_mode="Markdown")
+    bot.send_message(msg.chat.id, info_text, parse_mode="Markdown", message_thread_id=msg.message_thread_id)
 # =============================================================================
 # 9. TELEGRAM BOT HANDLERS (UPDATED /todayquiz)
 # =============================================================================
@@ -1055,11 +1060,12 @@ def handle_group_message_content(msg: types.Message):
     
     try:
         # bot.copy_message sends an exact copy of your message to the group
-        bot.copy_message(
-            chat_id=GROUP_ID,
-            from_chat_id=admin_id,
-            message_id=msg.message_id
-        )
+bot.copy_message(
+    chat_id=GROUP_ID,
+    from_chat_id=admin_id,
+    message_id=msg.message_id,
+    message_thread_id=UPDATES_TOPIC_ID
+)
         bot.send_message(admin_id, "✅ Message successfully sent to the group!")
     except Exception as e:
         print(f"Error sending content with /message: {traceback.format_exc()}")
@@ -1224,7 +1230,7 @@ def handle_today_quiz(msg: types.Message):
         response = supabase.table('quiz_schedule').select('*').eq('quiz_date', today_date_str).order('quiz_no').execute()
 
         if not response.data:
-            bot.send_message(msg.chat.id, f"✅ Hey {msg.from_user.first_name}, no quizzes are scheduled for today. It might be a rest day! 🧘")
+            bot.send_message(msg.chat.id, f"✅ Hey {msg.from_user.first_name}, no quizzes are scheduled for today. It might be a rest day! 🧘", message_thread_id=msg.message_thread_id)
             return
         
         user_name = msg.from_user.first_name
@@ -1263,12 +1269,12 @@ def handle_today_quiz(msg: types.Message):
             types.InlineKeyboardButton("📅 View Full Schedule", url=WEBAPP_URL) # Kept the original button too
         )
         
-        bot.send_message(msg.chat.id, message_text, parse_mode="HTML", reply_markup=markup)
+        bot.send_message(msg.chat.id, message_text, parse_mode="HTML", reply_markup=markup, message_thread_id=msg.message_thread_id)
 
     except Exception as e:
         print(f"CRITICAL Error in /todayquiz: {traceback.format_exc()}")
         report_error_to_admin(f"Failed to fetch today's quiz schedule:\n{traceback.format_exc()}")
-        bot.send_message(msg.chat.id, "😥 Oops! Something went wrong while fetching the schedule.")
+        bot.send_message(msg.chat.id, "😥 Oops! Something went wrong while fetching the schedule.", message_thread_id=msg.message_thread_id)
 def format_kalkaquiz_message(quizzes):
     """
     Formats the quiz schedule for /kalkaquiz into the new mobile-first HTML format.
@@ -1370,18 +1376,18 @@ def handle_tomorrow_quiz(msg: types.Message):
         response = supabase.table('quiz_schedule').select('*').eq('quiz_date', tomorrow_date_str).order('quiz_no').execute()
 
         if not response.data:
-            bot.send_message(msg.chat.id, f"✅ Hey {escape(msg.from_user.first_name)}, tomorrow's schedule has not been updated yet. Please check back later!")
+            bot.send_message(msg.chat.id, f"✅ Hey {escape(msg.from_user.first_name)}, tomorrow's schedule has not been updated yet. Please check back later!", message_thread_id=msg.message_thread_id)
             return
         
         # Use our new helper function to generate the message
         message_text = format_kalkaquiz_message(response.data)
         
-        bot.send_message(msg.chat.id, message_text, parse_mode="HTML")
+        bot.send_message(msg.chat.id, message_text, parse_mode="HTML", message_thread_id=msg.message_thread_id)
 
     except Exception as e:
         print(f"CRITICAL Error in /kalkaquiz: {traceback.format_exc()}")
         report_error_to_admin(f"Failed to fetch tomorrow's quiz schedule:\n{traceback.format_exc()}")
-        bot.send_message(msg.chat.id, "😥 Oops! Something went wrong while fetching the schedule.")
+        bot.send_message(msg.chat.id, "😥 Oops! Something went wrong while fetching the schedule.", message_thread_id=msg.message_thread_id)
 # === ADD THIS FUNCTION IF IT DOESN'T EXIST ===
 @bot.callback_query_handler(func=lambda call: call.data.startswith('show_'))
 def handle_interlink_callbacks(call: types.CallbackQuery):
@@ -1981,6 +1987,7 @@ def handle_random_quiz(msg: types.Message):
         # We REMOVE the unsupported 'question_parse_mode' and use 'parse_mode' on explanation.
         sent_poll = bot.send_poll(
             chat_id=GROUP_ID,
+            message_thread_id=QUIZ_TOPIC_ID,
             question=formatted_question,
             options=formatted_options,
             type='quiz',
@@ -1993,7 +2000,7 @@ def handle_random_quiz(msg: types.Message):
         
         # The reply message now also uses Markdown for consistency.
         timer_message = "☝️ You have *10 minutes* to answer this quiz. Good luck bro! 🤞"
-        bot.send_message(GROUP_ID, timer_message, reply_to_message_id=sent_poll.message_id, parse_mode="Markdown")
+        bot.send_message(GROUP_ID, timer_message, reply_to_message_id=sent_poll.message_id, parse_mode="Markdown", message_thread_id=QUIZ_TOPIC_ID)
         
         active_polls.append({
             'poll_id': sent_poll.poll.id,
@@ -2036,11 +2043,12 @@ def handle_announce_command(msg: types.Message):
     try:
         # Step 1: Send the announcement message to the main group chat.
         # We capture the returned message object to get its ID.
-        sent_message = bot.send_message(
-            GROUP_ID,
-            final_message,
-            parse_mode="Markdown"
-        )
+sent_message = bot.send_message(
+    GROUP_ID,
+    final_message,
+    parse_mode="Markdown",
+    message_thread_id=UPDATES_TOPIC_ID
+)
 
         # Step 2: Pin the message we just sent.
         # `disable_notification=False` ensures all members are notified of the pin.
@@ -2233,7 +2241,7 @@ def handle_public_report_confirmation(call: types.CallbackQuery):
         
         public_report += "*Keep up the fantastic participation! Let's see your name here next week!* 💪"
         
-        bot.send_message(GROUP_ID, public_report, parse_mode="Markdown")
+        bot.send_message(GROUP_ID, public_report, parse_mode="Markdown", message_thread_id=UPDATES_TOPIC_ID)
         bot.send_message(admin_id, "✅ Public summary has been posted to the group.")
 
     else: # If the choice is 'no'
@@ -2364,7 +2372,7 @@ def handle_congratulate_command(msg: types.Message):
         congrats_message += f"⚡️ *Speed King/Queen:* A special mention to *{fastest_winner_name}* for being the fastest among the toppers.\n"
         congrats_message += "\nKeep pushing your limits, everyone. The next leaderboard is waiting for you\. 🔥"
 
-        bot.send_message(GROUP_ID, congrats_message, parse_mode="Markdown")
+        bot.send_message(GROUP_ID, congrats_message, parse_mode="Markdown", message_thread_id=QUIZ_TOPIC_ID)
 
         try:
             bot.delete_message(msg.chat.id, msg.message_id)
@@ -2425,7 +2433,7 @@ def handle_motivation_command(msg: types.Message):
     ]
 
     # Send a random quote from the master list
-    bot.send_message(GROUP_ID, random.choice(quotes), parse_mode="Markdown")
+    bot.send_message(GROUP_ID, random.choice(quotes), parse_mode="Markdown", message_thread_id=UPDATES_TOPIC_ID)
     bot.send_message(msg.chat.id, "✅ Professional motivation sent to the group.")
 
 @bot.message_handler(commands=['studytip'])
@@ -2492,7 +2500,7 @@ def handle_study_tip_command(msg: types.Message):
 
     # Send a random tip from the master list
     tip = random.choice(tips)
-    bot.send_message(GROUP_ID, tip, parse_mode="Markdown")
+    bot.send_message(GROUP_ID, tip, parse_mode="Markdown", message_thread_id=UPDATES_TOPIC_ID)
     bot.send_message(msg.chat.id, "✅ Professional study strategy sent to the group.")
 
 # =============================================================================
@@ -2548,7 +2556,7 @@ def handle_section_command(msg: types.Message):
             bot.send_message(
                 msg.chat.id,
                 "Please provide a section number after the command.\n*Example:* `/section 141`",
-                parse_mode="Markdown")
+                parse_mode="Markdown", message_thread_id=msg.message_thread_id)
             return
 
         section_number_to_find = parts[1].strip()
@@ -2559,7 +2567,7 @@ def handle_section_command(msg: types.Message):
             section_data = response.data[0]
             user_name = msg.from_user.first_name
             formatted_message = format_section_message(section_data, user_name)
-            bot.send_message(msg.chat.id, formatted_message, parse_mode="HTML")
+            bot.send_message(msg.chat.id, formatted_message, parse_mode="HTML", message_thread_id=msg.message_thread_id)
             try:
                 bot.delete_message(msg.chat.id, msg.message_id)
             except Exception as e:
@@ -2568,13 +2576,14 @@ def handle_section_command(msg: types.Message):
             bot.send_message(
                 msg.chat.id,
                 f"Sorry, I couldn't find any details for Section '{section_number_to_find}'. Please check the section number."
+                message_thread_id=msg.message_thread_id
             )
 
     except Exception as e:
         print(f"Error in /section command: {traceback.format_exc()}")
         bot.send_message(
             msg.chat.id,
-            "❌ Oops Something went wrong while fetching the details.")
+            "❌ Oops Something went wrong while fetching the details.", message_thread_id=msg.message_thread_id)
 
 # =============================================================================
 # 17 ADVANCED QUIZ MARATHON FEATURE (FULLY CORRECTED AND ROBUST)
@@ -2651,7 +2660,7 @@ def process_marathon_question_count(msg: types.Message):
             f"_{escape_markdown(QUIZ_SESSIONS[session_id]['description'])}_\n\n"
             f"Get ready for *{len(questions_for_marathon)}* questions. Let's go!"
         )
-        bot.send_message(GROUP_ID, start_message, parse_mode="Markdown")
+        bot.send_message(GROUP_ID, start_message, parse_mode="Markdown", message_thread_id=QUIZ_TOPIC_ID)
 
         time.sleep(5)
         send_marathon_question(session_id)
@@ -2688,6 +2697,7 @@ def send_marathon_question(session_id):
     
     poll_message = bot.send_poll(
         chat_id=GROUP_ID,
+        message_thread_id=QUIZ_TOPIC_ID,
         question=question_text,
         options=options,
         type='quiz',
@@ -2722,11 +2732,12 @@ def handle_stop_marathon_command(msg: types.Message):
     session['is_active'] = False
 
     # 2. Announce that the marathon has been stopped.
-    bot.send_message(
-        GROUP_ID,
-        "🛑 *Marathon Stopped!* 🛑\n\nAn admin has stopped the quiz. Calculating the final results now...",
-        parse_mode="Markdown"
-    )
+bot.send_message(
+    GROUP_ID,
+    "🛑 *Marathon Stopped!* 🛑\n\nAn admin has stopped the quiz. Calculating the final results now...",
+    parse_mode="Markdown",
+    message_thread_id=QUIZ_TOPIC_ID
+)
     
     # 3. THE FIX: Immediately call the function to send the results.
     send_marathon_results(session_id)
@@ -2808,7 +2819,7 @@ def send_marathon_results(session_id):
             results_text += "\n"
             
         results_text += "\n🏆 Congratulations to the winners! (Here the PB tag given for personal best of the members from all previous quizzes.)"
-        bot.send_message(GROUP_ID, results_text, parse_mode="Markdown")
+        bot.send_message(GROUP_ID, results_text, parse_mode="Markdown", message_thread_id=QUIZ_TOPIC_ID)
         
         # --- THE FINAL CHANGE IS HERE ---
         # We now call our new, powerful analysis function
@@ -2890,7 +2901,7 @@ def send_performance_analysis(session, participants):
 
         analysis_message += "\n*Weak topics ko revise karna na bhoolein. Keep up the great work!* ✨"
 
-        bot.send_message(GROUP_ID, analysis_message, parse_mode="Markdown")
+        bot.send_message(GROUP_ID, analysis_message, parse_mode="Markdown", message_thread_id=QUIZ_TOPIC_ID)
 
     except Exception as e:
         print(f"Error in send_performance_analysis: {traceback.format_exc()}")
@@ -2927,7 +2938,7 @@ def handle_weekly_rankers(msg: types.Message):
         leaderboard_text += "\nKeep participating to climb up the leaderboard! 🔥"
 
         # Send the leaderboard to the main group
-        bot.send_message(GROUP_ID, leaderboard_text, parse_mode="Markdown")
+        bot.send_message(GROUP_ID, leaderboard_text, parse_mode="Markdown", message_thread_id=QUIZ_TOPIC_ID)
         # Send confirmation to the admin
         bot.send_message(msg.chat.id, "✅ Weekly leaderboard has been sent to the group successfully.")
 
@@ -2991,7 +3002,7 @@ def handle_all_time_rankers(msg: types.Message):
         leaderboard_text += "\nYour legacy is built with every quiz! 💪"
 
         # Send the leaderboard to the main group
-        bot.send_message(GROUP_ID, leaderboard_text, parse_mode="Markdown")
+        bot.send_message(GROUP_ID, leaderboard_text, parse_mode="Markdown", message_thread_id=QUIZ_TOPIC_ID)
         # Send confirmation to the admin
         bot.send_message(msg.chat.id, "✅ All-Time leaderboard has been sent to the group successfully.")
 
@@ -3297,7 +3308,7 @@ def handle_review_type_choice(call: types.CallbackQuery):
             types.InlineKeyboardButton(f"Question 1 ({marks_dist.get('q1')} marks)", callback_data=f"review_single_q1_{submission_id}"),
             types.InlineKeyboardButton(f"Question 2 ({marks_dist.get('q2')} marks)", callback_data=f"review_single_q2_{submission_id}")
         )
-        bot.send_message(call.message.chat.id, "Which question did the member attempt?", reply_markup=markup)
+        bot.send_message(call.message.chat.id, "Which question did the member attempt?", reply_markup=markup, message_thread_id=call.message.message_thread_id
 
 
 def process_both_q1_marks(message, submission_id, marks_dist):
@@ -3421,7 +3432,7 @@ def start_new_practice_session(chat_id):
             f"They will post 2 questions from **{question_source}** related to tomorrow's quiz topics (1 question from each chapter of tomorrow quiz , one from G1 and one from g2)\n\n"
             f"After posting the questions, please use the `/questions_posted` command by replying to your message."
         )
-        bot.send_message(GROUP_ID, announcement)
+        bot.send_message(GROUP_ID, announcement, message_thread_id=QNA_TOPIC_ID)
         bot.send_message(chat_id, f"✅ New practice session started. @{setter_name} has been assigned as the Question Setter.")
     except Exception as e:
         print(f"Error in start_new_practice_session: {traceback.format_exc()}")
@@ -3449,7 +3460,7 @@ def handle_report_confirmation(call: types.CallbackQuery):
             pending_reviews = report_data.get('pending_reviews', [])
 
             if not report_data or (not ranked_performers and not pending_reviews):
-                 bot.send_message(GROUP_ID, "No practice activity (submissions or reviews) was found for yesterday's session.")
+                 bot.send_message(GROUP_ID, "No practice activity (submissions or reviews) was found for yesterday's session.", message_thread_id=QNA_TOPIC_ID
                  bot.send_message(admin_chat_id, "✅ Report posted (No Activity). Now starting today's session...")
             else:
                 # Format the report
@@ -3480,7 +3491,7 @@ def handle_report_confirmation(call: types.CallbackQuery):
                 # TODO: Add 'Not Submitted' logic here in the future
                 
                 report_card_text += "\n--- \nGreat effort everyone! Keep practicing! ✨"
-                bot.send_message(GROUP_ID, report_card_text, parse_mode="Markdown")
+                bot.send_message(GROUP_ID, report_card_text, parse_mode="Markdown", message_thread_id=QNA_TOPIC_ID)
                 bot.send_message(admin_chat_id, "✅ Report posted successfully. Now starting today's session...")
         
         except Exception as e:
@@ -3528,7 +3539,7 @@ def handle_remind_checkers_command(msg: types.Message):
             
         reminder_message += "\nThank you for your cooperation! 🙏"
         
-        bot.send_message(GROUP_ID, reminder_message, parse_mode="Markdown")
+        bot.send_message(GROUP_ID, reminder_message, parse_mode="Markdown", message_thread_id=QNA_TOPIC_ID)
         bot.send_message(msg.chat.id, f"✅ Reminder for **{len(pending_reviews)}** pending review(s) has been posted in the group.")
 
     except Exception as e:
@@ -3731,14 +3742,14 @@ def handle_run_checks_confirmation(call: types.CallbackQuery):
             message = (f"⚠️ **Quiz Activity Warning!** ⚠️\n"
                        f"The following members have not participated in any quiz for the last 3 days: {', '.join(user_list)}.\n"
                        f"This is your final 24-hour notice.")
-            bot.send_message(GROUP_ID, message)
+            bot.send_message(GROUP_ID, message, message_thread_id=UPDATES_TOPIC_ID)
             user_ids_to_update = [user['user_id'] for user in actions['first_warnings']]
             supabase.table('quiz_activity').update({'warning_level': 1}).in_('user_id', user_ids_to_update).execute()
         
         if actions['final_warnings']:
             user_list = [f"@{user['user_name']}" for user in actions['final_warnings']]
             message = f"Admins, please take action. The following members did not participate even after a final warning:\n" + ", ".join(user_list)
-            bot.send_message(GROUP_ID, message)
+            bot.send_message(GROUP_ID, message, message_thread_id=UPDATES_TOPIC_ID)
             user_ids_to_update = [user['user_id'] for user in actions['final_warnings']]
             supabase.table('quiz_activity').update({'warning_level': 2}).in_('user_id', user_ids_to_update).execute()
 
@@ -3746,7 +3757,7 @@ def handle_run_checks_confirmation(call: types.CallbackQuery):
             for user in actions['appreciations']:
                 message = (f"🏆 **Star Performer Alert!** 🏆\n\n"
                            f"Hats off to **@{user['user_name']}** for showing incredible consistency! Your dedication is what makes this community awesome. Keep it up! 👏")
-                bot.send_message(GROUP_ID, message)
+                bot.send_message(GROUP_ID, message, message_thread_id=UPDATES_TOPIC_ID)
 
         bot.send_message(admin_id, "✅ All approved messages have been sent to the group.")
     
@@ -3779,7 +3790,7 @@ def handle_new_member(msg: types.Message):
             
             # Pick a random message from the list
             welcome_text = random.choice(welcome_messages)
-            bot.send_message(msg.chat.id, welcome_text)
+            bot.send_message(msg.chat.id, welcome_text, message_thread_id=CHATTING_TOPIC_ID)
             # ------------------------------------
 
             # --- Robustly add/update user in the database ---
