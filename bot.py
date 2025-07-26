@@ -1930,19 +1930,22 @@ def handle_mystats_command(msg: types.Message):
     reply with a smart coach's comment, and auto-deletes both messages.
     """
     user_id = msg.from_user.id
-    user_name = msg.from_user.first_name
+    # THE FIX: Escape the user's name as soon as we get it.
+    user_name = escape_markdown(msg.from_user.first_name)
 
     try:
         response = supabase.rpc('get_user_stats', {'p_user_id': user_id}).execute()
         stats = response.data
 
         if not stats or not stats.get('user_name'):
+            # The name here is also escaped for safety.
             error_msg = bot.reply_to(msg, f"Sorry @{user_name}, I couldn't find any stats for you yet. Please participate in a quiz first!")
             delete_message_in_thread(msg.chat.id, msg.message_id, 15)
             delete_message_in_thread(error_msg.chat.id, error_msg.message_id, 15)
             return
 
         # --- 1. Format the main stats message ---
+        # We now use the safe 'user_name' variable.
         stats_message = f"📊 **Personal Performance Stats for @{user_name}** 📊\n\n"
         stats_message += "--- *Quiz Marathon Performance* ---\n"
         stats_message += f"🏆 **All-Time Rank:** {stats.get('all_time_rank') or 'Not Ranked'}\n"
