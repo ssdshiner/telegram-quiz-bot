@@ -1921,40 +1921,37 @@ def handle_my_analysis_command(msg: types.Message):
 @membership_required
 def handle_mystats_command(msg: types.Message):
     """
-    THE ULTIMATE VERSION: Fetches comprehensive stats, posts them as a public
-    reply with a smart coach's comment, and auto-deletes both messages.
+    Fetches comprehensive stats, posts them as a public reply using robust HTML,
+    and auto-deletes both messages.
     """
     user_id = msg.from_user.id
-    # THE FIX: Escape the user's name as soon as we get it.
-    user_name = escape_markdown(msg.from_user.first_name)
+    user_name = escape(msg.from_user.first_name) # Escape user name immediately
 
     try:
         response = supabase.rpc('get_user_stats', {'p_user_id': user_id}).execute()
         stats = response.data
 
         if not stats or not stats.get('user_name'):
-            # The name here is also escaped for safety.
             error_msg = bot.reply_to(msg, f"Sorry @{user_name}, I couldn't find any stats for you yet. Please participate in a quiz first!")
             delete_message_in_thread(msg.chat.id, msg.message_id, 15)
             delete_message_in_thread(error_msg.chat.id, error_msg.message_id, 15)
             return
 
-        # --- 1. Format the main stats message ---
-        # We now use the safe 'user_name' variable.
-        stats_message = f"📊 **Personal Performance Stats for @{user_name}** 📊\n\n"
-        stats_message += "--- *Quiz Marathon Performance* ---\n"
-        stats_message += f"🏆 **All-Time Rank:** {stats.get('all_time_rank') or 'Not Ranked'}\n"
-        stats_message += f"📅 **This Week's Rank:** {stats.get('weekly_rank') or 'Not Ranked'}\n"
-        stats_message += f"▶️ **Total Quizzes Played:** {stats.get('total_quizzes_played', 0)}\n\n"
-        stats_message += "--- *Random Quiz Performance* ---\n"
-        stats_message += f"🎯 **Leaderboard Rank:** {stats.get('random_quiz_rank') or 'Not Ranked'}\n"
-        stats_message += f"⭐ **Total Score:** {stats.get('random_quiz_score', 0)} points\n\n"
-        stats_message += "--- *Written Practice Performance* ---\n"
-        stats_message += f"📝 **Total Submissions:** {stats.get('total_submissions', 0)}\n"
-        stats_message += f"📈 **Average Score:** {stats.get('average_performance', 0)}%\n"
-        stats_message += f"🧑‍🏫 **Copies Checked by You:** {stats.get('copies_checked', 0)}\n\n"
-        stats_message += "--- *Community Engagement* ---\n"
-        stats_message += f"🔥 **Current Appreciation Streak:** {stats.get('current_streak', 0)} quizzes\n\n"
+        # --- 1. Format the main stats message using HTML ---
+        stats_message = f"📊 <b>Personal Performance Stats for @{user_name}</b> 📊\n\n"
+        stats_message += "--- <i>Quiz Marathon Performance</i> ---\n"
+        stats_message += f"🏆 <b>All-Time Rank:</b> {stats.get('all_time_rank') or 'Not Ranked'}\n"
+        stats_message += f"📅 <b>This Week's Rank:</b> {stats.get('weekly_rank') or 'Not Ranked'}\n"
+        stats_message += f"▶️ <b>Total Quizzes Played:</b> {stats.get('total_quizzes_played', 0)}\n\n"
+        stats_message += "--- <i>Random Quiz Performance</i> ---\n"
+        stats_message += f"🎯 <b>Leaderboard Rank:</b> {stats.get('random_quiz_rank') or 'Not Ranked'}\n"
+        stats_message += f"⭐ <b>Total Score:</b> {stats.get('random_quiz_score', 0)} points\n\n"
+        stats_message += "--- <i>Written Practice Performance</i> ---\n"
+        stats_message += f"📝 <b>Total Submissions:</b> {stats.get('total_submissions', 0)}\n"
+        stats_message += f"📈 <b>Average Score:</b> {stats.get('average_performance', 0)}%\n"
+        stats_message += f"🧑‍🏫 <b>Copies Checked by You:</b> {stats.get('copies_checked', 0)}\n\n"
+        stats_message += "--- <i>Community Engagement</i> ---\n"
+        stats_message += f"🔥 <b>Current Appreciation Streak:</b> {stats.get('current_streak', 0)} quizzes\n\n"
 
         # --- 2. Smart "Coach's Comment" Logic ---
         coach_comment = ""
@@ -1970,10 +1967,10 @@ def handle_mystats_command(msg: types.Message):
         else:
             coach_comment = "Aapki performance aachi hai. Keep practicing consistently!"
 
-        final_message = stats_message + f"--- *Coach's Comment* ---\n💡 {coach_comment}\n\n_Use /my_analysis command for more._"
+        final_message = stats_message + f"--- <i>Coach's Comment</i> ---\n💡 {escape(coach_comment)}\n\n<i>This message will be deleted in 2 minutes.</i>"
         
-        # --- 3. Send the message and schedule deletion ---
-        sent_stats_message = bot.reply_to(msg, final_message, parse_mode="Markdown")
+        # --- 3. Send the message using HTML parse mode ---
+        sent_stats_message = bot.reply_to(msg, final_message, parse_mode="HTML")
         
         DELETE_DELAY_SECONDS = 120  # 2 minutes
         delete_message_in_thread(msg.chat.id, msg.message_id, DELETE_DELAY_SECONDS)
