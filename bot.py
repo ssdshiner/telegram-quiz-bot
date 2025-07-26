@@ -2718,69 +2718,100 @@ def handle_section_command(msg: types.Message):
         bot.send_message(
             msg.chat.id,
             "❌ Oops Something went wrong while fetching the details.", message_thread_id=msg.message_thread_id)
+
 # =============================================================================
-# 8. TELEGRAM BOT HANDLERS - QUIZ MARATHON FEATURE
+# 8. TELEGRAM BOT HANDLERS - QUIZ MARATHON FEATURE (NEW PRESET-BASED FLOW)
 # =============================================================================
 
 @bot.message_handler(commands=['quizmarathon'])
 @admin_required
 def start_marathon_setup(msg: types.Message):
-    """Starts the conversational setup for a new quiz marathon."""
-    user_id = msg.from_user.id
-    user_states[user_id] = {'step': 'awaiting_title'}
-    # THE FIX: Converted prompt to safe HTML
-    prompt_text = "🏁<b>Quiz Marathon Setup: Step 1 of 3</b>\n\nPlease enter the title for this quiz marathon."
-    prompt = bot.send_message(user_id, prompt_text, parse_mode="HTML")
-    bot.register_next_step_handler(prompt, process_marathon_title)
+    """Starts the new, streamlined setup for a quiz marathon by showing presets."""
+    try:
+        # Step 1: Fetch quiz presets from the database
+        presets_response = supabase.table('quiz_presets').select('set_name, button_label').order('id').execute()
+        if not presets_response.data:
+            bot.send_message(msg.chat.id, "❌ No quiz presets found in the database. Please add presets first using Supabase.")
+            return
 
-def process_marathon_title(msg: types.Message):
-    """Processes the title and asks for the description."""
-    if not is_admin(msg.from_user.id): return
-    user_id = msg.from_user.id
-    user_states[user_id]['title'] = msg.text.strip()
-    user_states[user_id]['step'] = 'awaiting_description'
-    # THE FIX: Converted prompt to safe HTML
-    prompt_text = "✅ Title set.\n\n<b>Step 2 of 3: Description</b>\nPlease enter a short description for the quiz."
-    prompt = bot.send_message(user_id, prompt_text, parse_mode="HTML")
-    bot.register_next_step_handler(prompt, process_marathon_description)
+        # Step 2: Create buttons for each preset
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        buttons = [
+            types.InlineKeyboardButton(
+                preset['button_label'],
+                callback_data=f"start_marathon_{preset['set_name']}"
+            ) for preset in presets_response.data
+        ]
+        markup.add(*buttons)
+        
+        # Step 3: Ask the admin to choose
+        bot.send_message(msg.chat.id, "🏁 Please select the quiz set you want to start:", reply_markup=markup)
 
-def process_marathon_description(msg: types.Message):
-    """Processes the description and asks for the number of questions."""
-    if not is_admin(msg.from_user.id): return
-    user_id = msg.from_user.id
-    user_states[user_id]['description'] = msg.text.strip()
-    user_states[user_id]['step'] = 'awaiting_question_count'
-    # THE FIX: Converted prompt to safe HTML
-    prompt_text = "✅ Description set.\n\n<b>Step 3 of 3: Number of Questions</b>\nHow many questions should be in this marathon?"
+    except Exception as e:
+        print(f"Error in start_marathon_setup: {traceback.format_exc()}")
+        report_error_to_admin(f"Error in start_marathon_setup:\n{e}")
+        bot.send_message(msg.chat.id, "❌ An error occurred while fetching quiz presets.")
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('start_marathon_'))
+def handle_marathon_set_selection(call: types.CallbackQuery):
+    """Handles the admin's selection of a quiz set and asks for question count."""
+    user_id = call.from_user.id
+    bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id) # Remove buttons
+
+    selected_set = call.data.split('_', 2)[-1]
+    
+    # Store the selection and move to the next step
+    user_states[user_id] = {
+        'step': 'awaiting_marathon_question_count',
+        'selected_set': selected_set
+    }
+    
+    prompt_text = f"✅ Set '<b>{escape(selected_set)}</b>' selected.\n\nHow many questions should be in this marathon?"
     prompt = bot.send_message(user_id, prompt_text, parse_mode="HTML")
     bot.register_next_step_handler(prompt, process_marathon_question_count)
 
+
 def process_marathon_question_count(msg: types.Message):
-    """Finalizes setup and starts the marathon."""
+    """Finalizes setup using presets and starts the marathon."""
     if not is_admin(msg.from_user.id): return
     user_id = msg.from_user.id
+
     try:
         num_questions = int(msg.text.strip())
         if not (0 < num_questions <= 100):
-            bot.send_message(user_id, "❌ Please enter a positive number of questions (up to 100).")
+            prompt = bot.send_message(user_id, "❌ Please enter a positive number of questions (up to 100).")
+            bot.register_next_step_handler(prompt, process_marathon_question_count)
             return
 
-        bot.send_message(user_id, "✅ Setup complete! Fetching questions and starting the marathon...")
-        
-        response = supabase.table('quiz_questions').select('*').eq('used', False).order('id', desc=False).limit(num_questions).execute()
-        
-        if not response.data:
-            bot.send_message(user_id, "❌ Could not find any unused questions. You may need to add more or reset them.")
+        state_data = user_states.get(user_id, {})
+        selected_set = state_data.get('selected_set')
+
+        if not selected_set:
+            bot.send_message(user_id, "❌ Something went wrong, your quiz set selection was lost. Please start over with /quizmarathon.")
             return
 
-        questions_for_marathon = response.data
+        bot.send_message(user_id, "✅ Setup complete! Fetching preset details and questions...")
+        
+        # Fetch preset details (title, description) from the database
+        preset_details_res = supabase.table('quiz_presets').select('quiz_title, quiz_description').eq('set_name', selected_set).single().execute()
+        preset_details = preset_details_res.data
+        
+        # Fetch the questions for the selected set
+        questions_res = supabase.table('quiz_questions').select('*').eq('quiz_set', selected_set).eq('used', False).order('id').limit(num_questions).execute()
+        
+        if not questions_res.data:
+            bot.send_message(user_id, f"❌ Could not find any unused questions for the set '<b>{escape(selected_set)}</b>'. You may need to add more questions with this set name or reset usage.", parse_mode="HTML")
+            return
+
+        questions_for_marathon = questions_res.data
         if len(questions_for_marathon) < num_questions:
-            bot.send_message(user_id, f"⚠️ Warning: You requested {num_questions}, but only {len(questions_for_marathon)} unused questions are available. The marathon will run with these.")
+            bot.send_message(user_id, f"⚠️ Warning: You requested {num_questions}, but only {len(questions_for_marathon)} unused questions are available for this set. The marathon will run with these.")
         
         session_id = str(GROUP_ID)
         QUIZ_SESSIONS[session_id] = {
-            'title': user_states[user_id]['title'],
-            'description': user_states[user_id]['description'],
+            'title': preset_details['quiz_title'],
+            'description': preset_details['quiz_description'],
             'questions': questions_for_marathon,
             'current_question_index': 0,
             'is_active': True,
@@ -2788,7 +2819,6 @@ def process_marathon_question_count(msg: types.Message):
         }
         QUIZ_PARTICIPANTS[session_id] = {}
 
-        # THE FIX: Converted start message to safe HTML and escaped variables
         safe_title = escape(QUIZ_SESSIONS[session_id]['title'])
         safe_description = escape(QUIZ_SESSIONS[session_id]['description'])
         start_message = (
@@ -2804,15 +2834,18 @@ def process_marathon_question_count(msg: types.Message):
         if user_id in user_states: del user_states[user_id]
 
     except ValueError:
-        bot.send_message(user_id, "❌ That's not a valid number. Please enter a number like 10 or 25.")
+        prompt = bot.send_message(user_id, "❌ That's not a valid number. Please enter a number like 10 or 25.")
+        bot.register_next_step_handler(prompt, process_marathon_question_count)
     except Exception as e:
         print(f"Error starting marathon: {traceback.format_exc()}")
+        report_error_to_admin(f"Error starting marathon:\n{e}")
         bot.send_message(user_id, "❌ An error occurred while starting the marathon.")
 
 
 def send_marathon_question(session_id):
     """
     Sends the next question in the marathon, sending an image first if available.
+    (This function remains unchanged but is included for completeness).
     """
     session = QUIZ_SESSIONS.get(session_id)
     if not session or not session.get('is_active'):
@@ -2841,7 +2874,6 @@ def send_marathon_question(session_id):
     options = [str(question_data.get(f'Option {c}', '')) for c in ['A', 'B', 'C', 'D']]
     correct_option_index = ['A', 'B', 'C', 'D'].index(str(question_data.get('Correct Answer', 'A')).upper())
     
-    # THE FIX: Escaped the question text for safety, as it comes from the database.
     question_text = f"Question {idx + 1}/{len(session['questions'])}\n\n{escape(question_data.get('Question', ''))}"
     
     poll_message = bot.send_poll(
@@ -2853,8 +2885,8 @@ def send_marathon_question(session_id):
         correct_option_id=correct_option_index,
         is_anonymous=False,
         open_period=timer_seconds,
-        explanation=escape(str(question_data.get('Explanation', ''))), # THE FIX: Escaped explanation
-        explanation_parse_mode="HTML" # THE FIX: Changed to HTML
+        explanation=escape(str(question_data.get('Explanation', ''))),
+        explanation_parse_mode="HTML"
     )
 
     ist_tz = timezone(timedelta(hours=5, minutes=30))
@@ -2864,6 +2896,7 @@ def send_marathon_question(session_id):
     session['current_question_index'] += 1
 
     threading.Timer(timer_seconds + 3, send_marathon_question, args=[session_id]).start()
+
 # =============================================================================
 # 8. TELEGRAM BOT HANDLERS - QUIZ MARATHON COMPLETION
 # =============================================================================
