@@ -2451,7 +2451,7 @@ def parse_leaderboard(text):
 def handle_congratulate_command(msg: types.Message):
     """
     Analyzes a replied-to leaderboard message and sends a personalized 
-    congratulatory message. Now correctly handles usernames.
+    congratulatory message. Now correctly handles usernames and special characters.
     """
     if not msg.reply_to_message or not msg.reply_to_message.text:
         bot.send_message(
@@ -2472,6 +2472,7 @@ def handle_congratulate_command(msg: types.Message):
             )
             return
 
+        # --- THE FIX: Escape the quiz title ---
         quiz_title = escape_markdown(leaderboard_data.get('quiz_title', 'the recent quiz'))
         total_questions = leaderboard_data.get('total_questions', 0)
 
@@ -2485,22 +2486,20 @@ def handle_congratulate_command(msg: types.Message):
         for winner in top_winners:
             percentage = (winner['score'] / total_questions * 100) if total_questions > 0 else 0
             
-            # --- THIS IS THE FIX ---
-            # We no longer re-escape the winner's name. We just use it as is.
-            safe_winner_name = winner['name']
-            
-            # We still escape the time string, as that is safe practice.
+            # --- THE FIX: Escape the winner's name before using it ---
+            safe_winner_name = escape_markdown(winner['name'])
             safe_time_str = escape_markdown(winner['time_str'])
             
             congrats_message += (
-                f"{winner['rank_icon']} *{safe_winner_name}*\n" # The name is now correctly bolded
+                f"{winner['rank_icon']} *{safe_winner_name}*\n"
                 f" ► Score: *{winner['score']}/{total_questions}* ({percentage:.2f}%)\n"
                 f" ► Time: *{safe_time_str}*\n\n")
 
         congrats_message += "*━━━ Performance Insights ━━━*\n"
         
-        # We also fix the 'fastest_winner_name' here in the same way.
-        fastest_winner_name = min(top_winners, key=lambda x: x['time_in_seconds'])['name']
+        # --- THE FIX: Escape the fastest winner's name as well ---
+        fastest_winner_details = min(top_winners, key=lambda x: x['time_in_seconds'])
+        fastest_winner_name = escape_markdown(fastest_winner_details['name'])
         
         congrats_message += f"⚡️ *Speed King/Queen:* A special mention to *{fastest_winner_name}* for being the fastest among the toppers.\n"
         congrats_message += "\nKeep pushing your limits, everyone. The next leaderboard is waiting for you\. 🔥"
@@ -2932,8 +2931,10 @@ def send_marathon_results(session_id):
                 p['pb_achieved'] = True
             if (streak_before + 1) == APPRECIATION_STREAK:
                 p['streak_completed'] = True
-
-        results_text = f"🏁 The quiz *'{escape_markdown(session['title'])}'* has finished!\n\n"
+        # --- THE FIX: Escape the quiz title before using it in the message ---
+        safe_quiz_title = escape_markdown(session['title'])
+        results_text = f"🏁 The quiz *'{safe_quiz_title}'* has finished!\n\n"
+        
         if total_active_members > 0:
             participation_percentage = (len(participants) / total_active_members) * 100
             results_text += f"*{len(participants)}* members ({participation_percentage:.0f}% of active members) participated.\n\n"
@@ -2941,6 +2942,7 @@ def send_marathon_results(session_id):
         rank_emojis = ["🥇", "🥈", "🥉"]
         for i, (user_id, p) in enumerate(sorted_items[:10]):
             rank = rank_emojis[i] if i < 3 else f"  *{i + 1}.*"
+            # Name is already correctly escaped from the previous fix, this is good
             name = escape_markdown(p['name'])
             percentage = (p['score'] / total_questions_asked * 100) if total_questions_asked > 0 else 0
             formatted_time = format_duration(p['total_time'])
@@ -2948,7 +2950,6 @@ def send_marathon_results(session_id):
             if p.get('pb_achieved'): results_text += " 🏆 PB!"
             if p.get('streak_completed'): results_text += " 🔥 Streak!"
             results_text += "\n"
-            
         results_text += "\n🏆 Congratulations to the winners! (Here the PB tag given for personal best of the members from all previous quizzes.)"
         bot.send_message(GROUP_ID, results_text, parse_mode="Markdown", message_thread_id=QUIZ_TOPIC_ID)
         
