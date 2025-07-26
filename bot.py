@@ -1831,7 +1831,7 @@ def handle_prune_dms(msg: types.Message):
         bot.send_message(msg.chat.id, "❌ An error occurred while pruning the user list.")
 # === ADD THIS ENTIRE NEW FUNCTION ===
 @bot.message_handler(
-    func=lambda msg: is_admin(msg.from_user.id) and msg.reply_to_message and msg.reply_to_message.forward_from,
+    func=lambda msg: msg.chat.type == 'private' and is_admin(msg.from_user.id) and msg.reply_to_message and msg.reply_to_message.forward_from,
     content_types=['text', 'photo', 'video', 'document', 'audio', 'sticker', 'animation']
 )
 def handle_admin_reply_to_forward(msg: types.Message):
@@ -1867,9 +1867,11 @@ def handle_admin_reply_to_forward(msg: types.Message):
 
     except Exception as e:
         print(f"Error handling admin reply: {traceback.format_exc()}")
-        report_error_to_admin(f"Could not deliver admin reply:\n{e}")
-        # Inform the admin if the reply could not be sent
-        bot.reply_to(msg, "❌ Could not send the reply. The user might have blocked the bot.")
+        # We don't need to report this common error to the admin log unless we want to
+        # report_error_to_admin(f"Could not deliver admin reply:\n{e}")
+        
+        # Inform the admin with a more detailed message
+        bot.reply_to(msg, "❌ **Reply Failed.**\n\nThis usually happens for one of two reasons:\n1. The user has blocked the bot.\n2. The user has never started a private chat with the bot.", parse_mode="Markdown")
 # =============================================================================
 # 12 GENERAL ADMIN COMMANDS (CLEANED UP)
 # =============================================================================
