@@ -3603,30 +3603,22 @@ def handle_report_confirmation(call: types.CallbackQuery):
                     rank_emojis = ["🥇", "🥈", "🥉"]
                     for i, performer in enumerate(ranked_performers):
                         emoji = rank_emojis[i] if i < 3 else f"*{i+1}.*"
-                        # Use .get() for safe access to all keys
-                        submitter_name = performer.get('submitter_name', 'N/A')
+                        # Use .get() for safe access and escape user-generated names
+                        submitter_name = escape_markdown(performer.get('submitter_name', 'N/A'))
                         marks_awarded = performer.get('marks_awarded', 0)
                         total_marks = performer.get('total_marks', 0)
                         percentage = performer.get('percentage', 0)
-                        checker_name = performer.get('checker_name', 'N/A')
+                        checker_name = escape_markdown(performer.get('checker_name', 'N/A'))
                         report_card_text += f"{emoji} *{submitter_name}* - {marks_awarded}/{total_marks} ({percentage}%)\n  *(Checked by: {checker_name})*\n"
                 
                 # Part 2: Pending Reviews (only if the list is not empty)
                 if pending_reviews:
                     report_card_text += "\n--- *⚠️ Submissions Not Checked* ---\n"
                     for pending in pending_reviews:
-                        submitter_name = pending.get('submitter_name', 'N/A')
-                        checker_name = pending.get('checker_name', 'N/A')
+                        submitter_name = escape_markdown(pending.get('submitter_name', 'N/A'))
+                        checker_name = escape_markdown(pending.get('checker_name', 'N/A'))
                         report_card_text += f"• *{submitter_name}*'s answer is pending review by *{checker_name}*.\n"
-                
-                # Part 2: Pending Reviews (only if the list is not empty)
-                if pending_reviews:
-                    report_card_text += "\n--- **⚠️ Submissions Not Checked** ---\n"
-                    for pending in pending_reviews:
-                        submitter_name = pending.get('submitter_name', 'N/A')
-                        checker_name = pending.get('checker_name', 'N/A')
-                        report_card_text += f"• **@{submitter_name}**'s answer is pending review by **@{checker_name}**.\n"
-                
+
                 # TODO: Add 'Not Submitted' logic here in the future
                 
                 report_card_text += "\n--- \nGreat effort everyone! Keep practicing! ✨"
