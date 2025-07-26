@@ -1073,7 +1073,7 @@ def handle_group_message_content(msg: types.Message):
             chat_id=GROUP_ID,
             from_chat_id=admin_id,
             message_id=msg.message_id,
-            message_thread_id=UPDATES_TOPIC_ID
+            message_thread_id=CHATTING_TOPIC_ID
         )
         bot.send_message(admin_id, "✅ Message successfully sent to the group!")
     except Exception as e:
