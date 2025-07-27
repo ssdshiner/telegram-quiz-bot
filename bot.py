@@ -3806,12 +3806,8 @@ def process_marathon_question_count(msg: types.Message):
         }
         QUIZ_PARTICIPANTS[session_id] = {}
 
-        # Calculate leaderboard update intervals (every 3-4 questions)
-        update_intervals = []
-        for i in range(3, actual_count, 4):  # Show updates at questions 3, 7, 11, etc.
-            if i < actual_count - 2:  # Don't show too close to end
-                update_intervals.append(i)
-        QUIZ_SESSIONS[session_id]['leaderboard_updates'] = update_intervals
+        # Show mid-quiz leaderboard only once, after question 5 (before question 6)
+        QUIZ_SESSIONS[session_id]['leaderboard_updates'] = [5]
 
         # Send beautiful marathon announcement
         safe_title = escape(preset_details['quiz_title'])
@@ -3911,169 +3907,108 @@ def process_marathon_question_count(msg: types.Message):
 
 
 def send_marathon_question(session_id):
-    """Send the next question with beautiful presentation, dynamic timer messages, and real-time progress tracking."""
-    session = QUIZ_SESSIONS.get(session_id)
-    # Naya check add kiya gaya hai 'ending' ke liye
-    if not session or not session.get('is_active') or session.get('ending'):
-        return
+    """
+    Send the next question. This version uses a lock to prevent the end-of-quiz
+    race condition, ensuring the final results are triggered only once.
+    """
+    session = None
+    is_quiz_over = False
 
-    idx = session['current_question_index']
-    total_questions = len(session['questions'])
-    
-    if idx >= total_questions:
-        # 'ending' flag set kar rahe hain taaki yeh block dobara na chale
-        session['ending'] = True 
-        session['is_active'] = False
-        # Send final suspense message before results
+    # --- CRITICAL SECTION START ---
+    # This lock ensures only one thread at a time can check if the quiz is over.
+    with session_lock:
+        session = QUIZ_SESSIONS.get(session_id)
+        if not session or not session.get('is_active') or session.get('ending'):
+            return
+
+        idx = session['current_question_index']
+        total_questions = len(session['questions'])
+
+        if idx >= total_questions:
+            is_quiz_over = True
+            session['ending'] = True  # Set the flag to stop any other threads
+            session['is_active'] = False
+    # --- CRITICAL SECTION END ---
+
+    # If the quiz is over, trigger the final sequence and stop execution here.
+    if is_quiz_over:
         send_final_suspense_message(session_id)
         return
 
+    # --- The rest of the logic runs outside the lock ---
+    idx = session['current_question_index']
     question_data = session['questions'][idx]
     
-    # Update quiz phase for dynamic messaging
-    if idx == 0:
-        session['stats']['current_phase'] = 'starting'
-    elif idx < total_questions // 3:
-        session['stats']['current_phase'] = 'early'  
-    elif idx < 2 * total_questions // 3:
-        session['stats']['current_phase'] = 'middle'
-    else:
-        session['stats']['current_phase'] = 'final'
-    
-    # Yeh raha sahi indented code
+    # ... [Previous logic for mid-quiz update, image sending, etc. remains here] ...
+    # Mid-quiz update logic
     try:
-        # Check if we should show a leaderboard update
         if idx in session.get('leaderboard_updates', []) and QUIZ_PARTICIPANTS.get(session_id):
             send_mid_quiz_update(session_id)
-            time.sleep(4)  # Brief pause after update
+            time.sleep(4)
     except Exception:
-        pass # Error ko chup-chaap ignore karega
+        pass
 
-    # Get question timing first
+    # Timer and Image logic...
     try:
         timer_seconds = int(question_data.get('time_allotted', 60))
-        if not (15 <= timer_seconds <= 300):  # Ensure reasonable timing
+        if not (15 <= timer_seconds <= 300):
             timer_seconds = 60
     except (ValueError, TypeError):
         timer_seconds = 60
     
-    # Send image if available (Now correctly indented)
     image_id = question_data.get('image_file_id')
     if image_id:
         try:
             image_caption = f"""🖼️ <b>Visual Clue Incoming!</b>
 📸 <i>Study this image carefully...</i>
-🎯 <b>Question {idx+1}/{total_questions} loading...</b>"""
-            bot.send_photo(GROUP_ID, image_id, caption=image_caption,
-                          parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
+🎯 <b>Question {idx+1}/{len(session['questions'])} loading...</b>"""
+            bot.send_photo(GROUP_ID, image_id, caption=image_caption, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
             time.sleep(3)
         except Exception as e:
             print(f"Error sending image for question {idx+1}: {e}")
-            # Optional: Notify admin that an image failed to send
             report_error_to_admin(f"Failed to send image for QID {question_data.get('id')}")
 
-    # Prepare question options
+    # ... [The rest of the function for creating and sending the poll remains the same] ...
     options = [str(question_data.get(f'Option {c}', '')) for c in ['A', 'B', 'C', 'D']]
     correct_answer_letter = str(question_data.get('Correct Answer', 'A')).upper()
     correct_option_index = ['A', 'B', 'C', 'D'].index(correct_answer_letter)
     
-    # Create engaging question presentation with mobile-optimized progress bar
+    total_questions = len(session['questions'])
     progress_filled = "▓" * (idx + 1)
     progress_empty = "░" * (total_questions - idx - 1)
     progress_bar = progress_filled + progress_empty
     
-    # Truncate progress bar for mobile (max 25 chars)
     if len(progress_bar) > 25:
         ratio = (idx + 1) / total_questions
         filled_chars = int(ratio * 25)
         progress_bar = "▓" * filled_chars + "░" * (25 - filled_chars)
     
-    # First, unescape data from DB, then escape it for Telegram. This prevents double-escaping.
     clean_question = unescape(question_data.get('Question', ''))
-    
     question_text = f"""📝 <b>Question {idx + 1} of {total_questions}</b>
 
 {progress_bar}
 
 {escape(clean_question)}"""
     
-    # Send the poll
     poll_message = bot.send_poll(
-        chat_id=GROUP_ID,
-        message_thread_id=QUIZ_TOPIC_ID,
-        question=question_text,
-        options=options,
-        type='quiz',
-        correct_option_id=correct_option_index,
-        is_anonymous=False,
+        chat_id=GROUP_ID, message_thread_id=QUIZ_TOPIC_ID,
+        question=question_text, options=options, type='quiz',
+        correct_option_id=correct_option_index, is_anonymous=False,
         open_period=timer_seconds,
         explanation=escape(str(question_data.get('Explanation', ''))),
         explanation_parse_mode="HTML"
     )
 
-    # Dynamic timer messages based on quiz phase
-    phase = session['stats']['current_phase']
-    participants_count = len(QUIZ_PARTICIPANTS.get(session_id, {}))
-    
-    if phase == 'starting':
-        if idx == 0:
-            timer_message = f"""🚀 <b>Aur shuru ho gaya!</b> 
+    # --- DYNAMIC COMMENTARY HAS BEEN REMOVED AS PER YOUR REQUEST ---
 
-⏰ <b>{timer_seconds} seconds</b> hai aapke paas!
+    # Update session data (this should also be locked)
+    with session_lock:
+        ist_tz = timezone(timedelta(hours=5, minutes=30))
+        session['current_poll_id'] = poll_message.poll.id
+        session['question_start_time'] = datetime.datetime.now(ist_tz)
+        session['current_question_index'] += 1
 
-💪 <i>Pehla question hai, confidence ke saath jaiye!</i> 🎯"""
-        else:
-            timer_message = f"""🎯 <b>Warm-up mode on!</b>
-
-⏰ <b>{timer_seconds} seconds</b> - aaram se sochiye!
-
-🔥 <i>Abhi toh yeh sirf practice hai!</i> 💫"""
-        
-    elif phase == 'early':
-        competitive_messages = [
-            f"🎯 <b>Badhiya chal raha hai!</b>\n\n⏰ <b>{timer_seconds} seconds</b> - think karo aur answer do!\n\n🔥 <i>Competition heating up ho rahi hai!</i> 💫",
-            f"⚡ <b>Early stage mei lead lena hai?</b>\n\n⏰ <b>{timer_seconds} seconds</b> - smart choice kariye!\n\n🎪 <i>{participants_count} participants compete kar rahe hain!</i> 🏆",
-            f"🚀 <b>Momentum build karne ka time!</b>\n\n⏰ <b>{timer_seconds} seconds</b> - confident rahiye!\n\n💪 <i>Abhi foundation strong banayenge!</i> ✨"
-        ]
-        timer_message = competitive_messages[idx % len(competitive_messages)]
-        
-    elif phase == 'middle':
-        intense_messages = [
-            f"⚡ <b>Ab toh serious ho jaiye!</b>\n\n⏰ <b>{timer_seconds} seconds</b> - middle phase mei hai hum!\n\n🎪 <i>Competition tight ho rahi hai!</i> 🏆",
-            f"🔥 <b>Middle game ka pressure!</b>\n\n⏰ <b>{timer_seconds} seconds</b> - har answer counts!\n\n👑 <i>Leadership change ho sakti hai!</i> 💫",
-            f"💪 <b>Half-time ke baad ka josh!</b>\n\n⏰ <b>{timer_seconds} seconds</b> - stay focused!\n\n⚡ <i>Champions yahi phase mei bante hain!</i> 🏅"
-        ]
-        timer_message = intense_messages[idx % len(intense_messages)]
-        
-    else:  # final phase
-        climax_messages = [
-            f"🔥 <b>Final stretch mei hain!</b>\n\n⏰ <b>{timer_seconds} seconds</b> - har second count karta hai!\n\n👑 <i>Ab decide hoga kaun banega champion!</i> 🏅",
-            f"👑 <b>Championship ka final moment!</b>\n\n⏰ <b>{timer_seconds} seconds</b> - give your best!\n\n⚡ <i>History banne wala hai!</i> 🏆",
-            f"🏆 <b>Last few questions!</b>\n\n⏰ <b>{timer_seconds} seconds</b> - champions ki tarah fight karo!\n\n🔥 <i>Victory sirf kuch steps away!</i> 👑"
-        ]
-        timer_message = climax_messages[idx % len(climax_messages)]
-
-    # Add real-time progress tracking info
-    if participants_count > 0:
-        timer_message += f"\n\n📊 <i>Live: {participants_count} active participants</i>"
-
-    bot.send_message(GROUP_ID, timer_message, reply_to_message_id=poll_message.message_id, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
-
-    # Update session data for real-time tracking
-    ist_tz = timezone(timedelta(hours=5, minutes=30))
-    session['current_poll_id'] = poll_message.poll.id
-    session['question_start_time'] = datetime.datetime.now(ist_tz)
-    session['stats']['question_times'][idx] = {
-        'total_time': timer_seconds, 
-        'answer_count': 0, 
-        'correct_times': {},
-        'question_topic': question_data.get('topic', 'General'),
-        'question_type': question_data.get('question_type', 'Theory'),
-        'difficulty': question_data.get('difficulty', 'Medium')
-    }
-    session['current_question_index'] += 1
-
-    # Schedule next question
+    # Schedule the next question
     threading.Timer(timer_seconds + 7, send_marathon_question, args=[session_id]).start()
 
 
@@ -4304,10 +4239,10 @@ def send_final_suspense_message(session_id):
         bot.send_message(GROUP_ID, suspense_message, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
         
         # Wait 5 seconds before showing results
-        threading.Timer(5, send_marathon_results, args=[session_id]).start()
+        threading.Timer(5, send_final_report_sequence, args=[session_id]).start()
     else:
         # Fallback if no sorted participants
-        threading.Timer(2, send_marathon_results, args=[session_id]).start()
+        threading.Timer(2, send_final_report_sequence, args=[session_id]).start()
 
 
 # Enhanced Stop Marathon Command
@@ -4375,8 +4310,8 @@ def handle_stop_marathon_command(msg: types.Message):
 
     bot.send_message(msg.from_user.id, admin_confirmation, parse_mode="HTML")
     
-    # Generate results
-    send_marathon_results(session_id)
+    # Generate results using the new, correct sequence
+    send_final_report_sequence(session_id)
     
     # Clean up admin command message
     try:
@@ -4398,15 +4333,13 @@ def delete_message_in_thread(chat_id, message_id, delay):
     
     threading.Thread(target=task).start()
 
-def format_duration(seconds):
-    """Convert seconds to human-readable time format"""
+def format_duration(seconds: float) -> str:
+    """Formats seconds into 'X.Y minutes' or 'Z seconds' for consistency."""
     if seconds < 60:
         return f"{int(seconds)} seconds"
-    minutes = seconds / 60
-    if minutes < 60:
+    else:
+        minutes = seconds / 60
         return f"{minutes:.1f} minutes"
-    hours = minutes / 60
-    return f"{hours:.1f} hours"
 
 def record_quiz_participation(user_id, username, score, total_time):
     """Record quiz participation in database"""
@@ -4451,6 +4384,27 @@ def calculate_legend_tier(user_score, total_questions, all_scores):
     else:
         return None
 
+def send_final_report_sequence(session_id):
+    """
+    A new orchestrator function to send the final messages in the correct order:
+    1. Performance Analysis
+    2. Marathon Results (which also handles cleanup)
+    """
+    session = QUIZ_SESSIONS.get(session_id)
+    participants = QUIZ_PARTICIPANTS.get(session_id)
+
+    if not session or not participants:
+        print(f"Aborting final report for session {session_id} due to missing data.")
+        return
+
+    # Step 1: Send the performance analysis first.
+    send_performance_analysis(session, participants)
+    
+    # Add a small delay for better user experience
+    time.sleep(3)
+    
+    # Step 2: Send the final results, which includes the session cleanup.
+    send_marathon_results(session_id)
 
 def send_marathon_results(session_id):
     """
@@ -4618,15 +4572,12 @@ def send_marathon_results(session_id):
                 for tier in tier_order:
                     if tier in tier_counts:
                         results_text += f"{tier_emojis[tier]} {tier.title()}: <b>{tier_counts[tier]}</b> legends\n"
-                results_text += f"\n{ '-'*25 }\n\n"
+                results_text += f"\n{ '━'*25 }\n\n"
             
-            results_text += "🎉 <b>Congratulations to all participants!</b>\n\n"
-            results_text += "<i>Performance analysis coming next...</i>"
+            results_text += "🎉 <b>Congratulations to all participants!</b>"
             
             bot.send_message(GROUP_ID, results_text, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
             
-            time.sleep(3)
-            send_performance_analysis(session, participants)
     
     finally:
         # THIS BLOCK WILL *ALWAYS* RUN, even if errors happen above.
@@ -4732,6 +4683,7 @@ def send_performance_analysis(session, participants):
 • <b>Overall Accuracy:</b> {overall_accuracy:.1f}%
 • <b>Total Participants:</b> {len(participants)}
 • <b>Questions Answered:</b> {total_questions_answered}
+<i>(Sabhi participants ke diye gaye total answers)</i>
 • <b>Average Score:</b> {(total_correct_answers / len(participants)):.1f} per person"""
 
         # Question type analysis
