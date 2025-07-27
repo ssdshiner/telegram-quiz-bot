@@ -2775,7 +2775,7 @@ def handle_announcement_steps(msg: types.Message):
         # Create beautiful announcement based on priority
         title = user_state['data']['title']
         content = user_state['data']['content']
-        time_now_ist = datetime.now(IST)
+        time_now_ist = datetime.datetime.now(IST)
         current_time_str = time_now_ist.strftime("%I:%M %p")
         current_date_str = time_now_ist.strftime("%d %B %Y")
         
