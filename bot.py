@@ -1142,66 +1142,27 @@ def handle_info_command(msg: types.Message):
     except Exception as e:
         print(f"Activity tracking failed for user {msg.from_user.id} in command: {e}")
     
-    info_text = """🤖 <b>BOT COMMANDS FOR MEMBERS</b> 🤖
+    info_text = """🤖 <b>Bot Commands</b> 🤖
 
-💡 <i>Tap any command to copy it instantly!</i>
+💡 <i>Tap command to copy, then paste to use.</i>
 
-━━━ 📅 <b>SCHEDULE & PERFORMANCE</b> ━━━
+━━ <b>Quiz & Stats</b> ━━
+<code>/todayquiz</code> - 📋 Today's Schedule
+<code>/kalkaquiz</code> - 🔮 Tomorrow's Schedule
+<code>/mystats</code> - 📊 My Personal Stats
+<code>/my_analysis</code> - 🔍 My Deep Analysis
 
-<code>/todayquiz</code>
-📋 <b>View Today's Quiz Schedule</b>
-Get complete details of all quizzes happening today including timing, subjects, and difficulty levels. Perfect for daily planning!
+━━ <b>Resources & Notes</b> ━━
+<code>/listfile</code> - 🗂️ Browse All Notes
+<code>/need &lt;keyword&gt;</code> - 🔎 Search for Notes
+<code>/section &lt;num&gt;</code> - 📖 Get Law Section Details
 
-<code>/kalkaquiz</code> 
-🔮 <b>Tomorrow's Quiz Preview</b>
-Plan ahead! See what quizzes are scheduled for tomorrow so you can prepare your study materials and time accordingly.
+━━ <b>Written Practice</b> ━━
+<code>/submit</code> - 📤 Submit Answer Sheet
+<code>/review_done</code> - ✅ Mark Review Complete
 
-<code>/mystats</code>
-📊 <b>Your Complete Performance Dashboard</b>
-Get detailed statistics including total quizzes attempted, average scores, subject-wise performance, and improvement trends over time.
-
-<code>/my_analysis</code>
-🔍 <b>Advanced Performance Analytics</b>
-Receive in-depth analysis of your accuracy patterns, speed metrics, weak areas, and personalized recommendations for improvement.
-
-━━━ 📚 <b>THE VAULT: NOTES & RESOURCES</b> ━━━
-
-<code>/listfile</code>
-🗂️ <b>Interactive Notes Browser</b>
-Browse through our complete library of CA study materials with easy navigation, search filters, and quick preview options.
-
-<code>/need keyword</code>
-🔎 <b>Smart File Search & Download</b>
-Instantly find and download specific notes or resources. Just type keywords related to the topic you need.
-
-💭 <i>Usage Examples:</i>
-• <code>/need tax planning</code> - Find taxation notes
-• <code>/need audit procedure</code> - Get audit materials
-• <code>/need latest amendments</code> - Recent updates
-
-━━━ ✍️ <b>PRACTICE SESSION TOOLS</b> ━━━
-
-<code>/submit</code>
-📤 <b>Submit Your Answer Sheet</b>
-Upload your completed practice test answers for evaluation. Attach images or PDFs of your solutions for detailed review.
-
-<code>/review_done</code>
-✅ <b>For Reviewers: Mark Submission Complete</b>
-Teaching assistants and checkers use this to submit marks and feedback after reviewing student submissions.
-
-━━━ 🛠️ <b>ADDITIONAL UTILITIES</b> ━━━
-
-<code>/section number</code>
-📖 <b>Law Section Quick Reference</b>
-Get instant details about any section of CA-related laws including Companies Act, Income Tax Act, GST Act, etc.
-<i>Example:</i> <code>/section 44AD</code>
-
-<code>/feedback message</code>
-💬 <b>Direct Message to Admin</b>
-Send private feedback, suggestions, or report issues directly to the admin team. Your message will be handled confidentially.
-<i>Example:</i> <code>/feedback The quiz timing needs adjustment</code>
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━ <b>Other Commands</b> ━━
+<code>/feedback &lt;message&gt;</code> - 💬 Send Feedback
 
 <b>C.A.V.Y.A is here to help you 💝</b>"""
 
@@ -2259,108 +2220,45 @@ def handle_mystats_command(msg: types.Message):
             delete_message_in_thread(error_msg.chat.id, error_msg.message_id, 15)
             return
 
-        # --- Create comprehensive mobile-optimized stats message ---
-        current_date = datetime.datetime.now().strftime("%d %b %Y")
-        
-        stats_message = f"""📊 <b>PERSONAL STATS</b> 📊
+        # --- Create compact, mobile-optimized stats message ---
+        stats_message = f"""📊 <b>My Stats: {user_name}</b> 📊
 
-👤 <b>{user_name}</b>
-📅 <i>{current_date}</i>
+━━ 🏆 <b>Rankings</b> ━━
+• <b>All-Time:</b> {stats.get('all_time_rank') or 'Not Ranked'}
+• <b>Weekly:</b> {stats.get('weekly_rank') or 'Not Ranked'}
+• <b>Random Quiz:</b> {stats.get('random_quiz_rank') or 'Not Ranked'}
 
-━━━ 🏆 <b>RANKINGS</b> 🏆 ━━━
+━━ 🎮 <b>Performance</b> ━━
+• <b>Quizzes Played:</b> {stats.get('total_quizzes_played', 0)}
+• <b>Random Score:</b> {stats.get('random_quiz_score', 0)} pts
+• <b>Current Streak:</b> 🔥 {stats.get('current_streak', 0)}
 
-🥇 <b>All-Time Rank:</b>
-{stats.get('all_time_rank') or '🔸 Not Ranked Yet'}
-
-📅 <b>This Week's Rank:</b>
-{stats.get('weekly_rank') or '🔸 Not Ranked Yet'}
-
-🎯 <b>Random Quiz Rank:</b>
-{stats.get('random_quiz_rank') or '🔸 Not Ranked Yet'}
-
-━━━ 🎮 <b>QUIZ PERFORMANCE</b> 🎮 ━━━
-
-▶️ <b>Total Quizzes Played:</b>
-📈 <b>{stats.get('total_quizzes_played', 0)}</b> sessions
-
-⭐ <b>Random Quiz Score:</b>
-🎯 <b>{stats.get('random_quiz_score', 0)}</b> points
-
-🔥 <b>Current Streak:</b>
-⚡ <b>{stats.get('current_streak', 0)}</b> quiz appreciation streak
-
-━━━ 📝 <b>WRITTEN PRACTICE</b> 📝 ━━━
-
-📤 <b>Total Submissions:</b>
-📋 <b>{stats.get('total_submissions', 0)}</b> practice sheets
-
-📊 <b>Average Performance:</b>
-🎯 <b>{stats.get('average_performance', 0)}%</b> accuracy
-
-🧑‍🏫 <b>Copies You Checked:</b>
-✅ <b>{stats.get('copies_checked', 0)}</b> reviews completed
-
-━━━━━━━━━━━━━━━━━━━━━━━━━
-
+━━ 📝 <b>Practice</b> ━━
+• <b>Submissions:</b> {stats.get('total_submissions', 0)}
+• <b>Avg. Performance:</b> {stats.get('average_performance', 0)}%
+• <b>Copies Checked:</b> {stats.get('copies_checked', 0)}
 """
 
-        # --- Enhanced Coach's Comment Logic ---
+        # --- Shortened Coach's Comment Logic ---
         coach_comment = ""
         APPRECIATION_STREAK = 8
         current_streak = stats.get('current_streak', 0)
         total_quizzes = stats.get('total_quizzes_played', 0)
-        weekly_rank = stats.get('weekly_rank', 0)
-        copies_checked = stats.get('copies_checked', 0)
-        average_performance = stats.get('average_performance', 0)
         
         if current_streak >= APPRECIATION_STREAK:
-            coach_comment = f"🌟 <b>Outstanding!</b> You've maintained a {current_streak}-quiz appreciation streak! You're truly dedicated to excellence."
-            
+            coach_comment = f"Wow, a {current_streak}-quiz streak! Incredible consistency! 🔥"
         elif current_streak == (APPRECIATION_STREAK - 1):
-            coach_comment = f"🔥 <b>So Close!</b> Just one more quiz to achieve your {APPRECIATION_STREAK}-quiz appreciation streak! Keep the momentum going!"
-            
-        elif weekly_rank == 0 and total_quizzes > 0:
-            coach_comment = "💪 <b>Weekly Focus Needed!</b> You haven't ranked this week yet. Let's aim for the next quiz and climb those rankings!"
-            
-        elif copies_checked == 0 and total_quizzes > 2:
-            coach_comment = "📚 <b>Teaching Opportunity!</b> Try checking others' practice sheets - it's a great way to learn different approaches and reinforce concepts."
-            
-        elif average_performance > 80:
-            coach_comment = f"🎯 <b>Excellent Work!</b> Your {average_performance}% average shows strong understanding. Keep this consistency going!"
-            
-        elif average_performance > 60:
-            coach_comment = f"📈 <b>Good Progress!</b> Your {average_performance}% average is solid. Focus on weak areas to push towards 80%+"
-            
-        elif total_quizzes < 5:
-            coach_comment = "🚀 <b>Getting Started!</b> You're building your foundation. Regular participation will show great improvements soon!"
-            
+            coach_comment = "Just one more quiz for a new streak milestone! You can do it! 🚀"
+        elif stats.get('weekly_rank', 0) == 0 and total_quizzes > 0:
+            coach_comment = "You haven't ranked this week yet. The next quiz is your chance! 💪"
+        elif total_quizzes < 3:
+            coach_comment = "You're just getting started. Keep participating to see your stats grow! 🌱"
         else:
-            coach_comment = "💡 <b>Keep Growing!</b> Consistent practice is key. Every quiz is a step towards mastery - don't give up!"
-
-        # --- Add motivational section based on performance ---
-        motivation_section = ""
-        if current_streak > 0:
-            motivation_section = f"🔥 <b>STREAK POWER:</b> {current_streak} consecutive appreciations!\n"
-        
-        if stats.get('all_time_rank') and int(stats.get('all_time_rank', 999)) <= 10:
-            motivation_section += "👑 <b>TOP PERFORMER:</b> You're in the elite circle!\n"
-            
-        if stats.get('total_submissions', 0) > 10:
-            motivation_section += "📝 <b>PRACTICE CHAMPION:</b> Excellent submission consistency!\n"
+            coach_comment = "Consistent practice is the key to success. Keep going! ✨"
 
         # --- Final message assembly ---
-        final_stats_message = stats_message
-        
-        if motivation_section:
-            final_stats_message += f"🌟 <b>ACHIEVEMENTS:</b>\n{motivation_section}\n"
-            
-        final_stats_message += f"""💭 <b>COACH'S INSIGHT:</b>
-{coach_comment}
+        final_stats_message = stats_message + f"\n\n💡 <b>Coach's Tip:</b> {coach_comment}"
 
-━━━━━━━━━━━━━━━━━━━━━━━━━
-
-<b>C.A.V.Y.A is here to help you 💝</b>"""
-        
         # --- Send the comprehensive stats message with a fallback ---
         DELETE_DELAY_SECONDS = 120
         sent_stats_message = None
