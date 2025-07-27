@@ -19,7 +19,7 @@ from datetime import timezone, timedelta
 IST = timezone(timedelta(hours=5, minutes=30))
 from supabase import create_client, Client
 from urllib.parse import quote
-from html import escape
+from html import escape, unescape
 
 # =============================================================================
 # 2. CONFIGURATION & INITIALIZATION
@@ -3988,11 +3988,14 @@ def send_marathon_question(session_id):
         filled_chars = int(ratio * 25)
         progress_bar = "▓" * filled_chars + "░" * (25 - filled_chars)
     
+    # First, unescape data from DB, then escape it for Telegram. This prevents double-escaping.
+    clean_question = unescape(question_data.get('Question', ''))
+    
     question_text = f"""📝 <b>Question {idx + 1} of {total_questions}</b>
 
 {progress_bar}
 
-{escape(question_data.get('Question', ''))}"""
+{escape(clean_question)}"""
     
     # Send the poll
     poll_message = bot.send_poll(
