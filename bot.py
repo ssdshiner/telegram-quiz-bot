@@ -2087,8 +2087,8 @@ def handle_admin_reply_to_forward(msg: types.Message):
 @membership_required
 def handle_my_analysis_command(msg: types.Message):
     """
-    Provides a deep-dive analysis of a user's performance, including accuracy,
-    speed, and comparison with group averages for actionable insights.
+    Provides a deep-dive analysis of a user's performance, now with
+    group comparison data fetched in a single, efficient RPC call.
     """
     try:
         supabase.rpc('update_chat_activity', {'p_user_id': msg.from_user.id, 'p_user_name': msg.from_user.username or msg.from_user.first_name}).execute()
@@ -2099,6 +2099,7 @@ def handle_my_analysis_command(msg: types.Message):
     user_name = escape(msg.from_user.first_name)
     
     try:
+        # Call the new, more powerful function
         response = supabase.rpc('get_user_deep_analysis', {'p_user_id': user_id}).execute()
         
         if not response.data:
@@ -2111,27 +2112,23 @@ def handle_my_analysis_command(msg: types.Message):
         analysis_data = {}
         for item in response.data:
             topic = item.get('topic', 'Unknown')
-            q_type = item.get('question_type', 'Unknown')
             if topic not in analysis_data:
-                analysis_data[topic] = {}
+                analysis_data[topic] = []
             
-            accuracy = (item['correct_answers'] / item['total_questions'] * 100) if item['total_questions'] > 0 else 0
+            accuracy = (item['user_correct'] * 100.0 / item['user_total']) if item['user_total'] > 0 else 0
             
-            analysis_data[topic][q_type] = {
-                'accuracy': accuracy,
-                'correct': item['correct_answers'],
-                'total': item['total_questions'],
-                'avg_speed': item['avg_time_per_q']
-            }
+            item['user_accuracy'] = accuracy # Add user accuracy for later use
+            analysis_data[topic].append(item)
         
         # --- Display Matrix ---
         analysis_text += "<b>📊 Accuracy & Speed Matrix</b>\n"
         analysis_text += "<i>(Topic-wise performance breakdown)</i>\n\n"
-        for topic, types in analysis_data.items():
+        for topic, items in analysis_data.items():
             analysis_text += f"<b>{escape(topic)}:</b>\n"
-            for q_type, data in types.items():
-                emoji = "✅" if data['accuracy'] >= 75 else "🟠" if data['accuracy'] >= 50 else "⚠️"
-                analysis_text += f"  - <i>{escape(q_type)}:</i> {data['accuracy']:.0f}% ({data['correct']}/{data['total']}) {emoji} | Avg Speed: {data['avg_speed']:.1f}s\n"
+            for data in items:
+                q_type = data.get('question_type', 'Unknown')
+                emoji = "✅" if data['user_accuracy'] >= 75 else "🟠" if data['user_accuracy'] >= 50 else "⚠️"
+                analysis_text += f"  - <i>{escape(q_type)}:</i> {data['user_accuracy']:.0f}% ({data['user_correct']}/{data['user_total']}) {emoji} | Avg Speed: {data.get('user_avg_speed', 0):.1f}s\n"
             analysis_text += "\n"
 
         # --- Coach's Insights ---
@@ -2139,19 +2136,22 @@ def handle_my_analysis_command(msg: types.Message):
         confusion_zone = []
         speed_issues = []
 
-        for topic, types in analysis_data.items():
-            for q_type, data in types.items():
-                if data['accuracy'] < 50:
+        # This loop is now much faster as it doesn't call the database anymore
+        for topic, items in analysis_data.items():
+            for data in items:
+                q_type = data.get('question_type', 'Unknown')
+                if data['user_accuracy'] < 50:
                     kryptonite_type[q_type] = kryptonite_type.get(q_type, 0) + 1
-                if 40 <= data['accuracy'] < 60:
+                if 40 <= data['user_accuracy'] < 60:
                     confusion_zone.append(f"{topic} ({q_type})")
                 
-                group_stats_res = supabase.rpc('get_group_avg_stats', {'p_topic': topic, 'p_question_type': q_type}).execute()
-                if group_stats_res.data:
-                    group_avg_speed = group_stats_res.data[0].get('group_avg_speed', 0)
-                    if group_avg_speed and data['avg_speed'] > group_avg_speed * 1.5 and data['accuracy'] > 70:
+                group_avg_speed = data.get('group_avg_speed')
+                user_avg_speed = data.get('user_avg_speed')
+
+                if group_avg_speed and user_avg_speed:
+                    if user_avg_speed > group_avg_speed * 1.5 and data['user_accuracy'] > 70:
                         speed_issues.append(f"Slow but Right in <b>{escape(topic)} ({escape(q_type)})</b>")
-                    elif group_avg_speed and data['avg_speed'] < group_avg_speed * 0.7 and data['accuracy'] < 60:
+                    elif user_avg_speed < group_avg_speed * 0.7 and data['user_accuracy'] < 60:
                         speed_issues.append(f"Fast but Wrong in <b>{escape(topic)} ({escape(q_type)})</b>")
 
         analysis_text += "<b>⭐ Coach's Actionable Insights</b>\n"
