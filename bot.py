@@ -125,7 +125,7 @@ scheduled_tasks = []
 QUIZ_SESSIONS = {}
 QUIZ_PARTICIPANTS = {}
 user_states = {}
-
+session_lock = threading.Lock()
 # Legend Tier Thresholds (percentiles)
 LEGEND_TIERS = {
     'DIAMOND': 95,    # Top 5%
