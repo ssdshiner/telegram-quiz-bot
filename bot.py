@@ -2655,6 +2655,10 @@ Unexpected system error occurred
 @admin_required
 def handle_announce_command(msg: types.Message):
     """Interactive announcement creator with beautiful formatting."""
+    if msg.chat.type != 'private':
+        bot.reply_to(msg, "🤫 Please create announcements in a private chat with me.")
+        return
+        
     user_id = msg.from_user.id
     
     # Initialize user state for announcement creation
@@ -2684,7 +2688,8 @@ def handle_announce_command(msg: types.Message):
     bot.send_message(msg.chat.id, welcome_message, parse_mode="HTML")
 
 
-@bot.message_handler(func=lambda msg: msg.from_user.id in user_states and 
+@bot.message_handler(func=lambda msg: msg.chat.type == 'private' and
+                     msg.from_user.id in user_states and
                      user_states[msg.from_user.id].get('action') == 'create_announcement')
 def handle_announcement_steps(msg: types.Message):
     """Handle multi-step announcement creation process."""
@@ -2844,6 +2849,7 @@ def handle_announcement_steps(msg: types.Message):
 <i>This will be posted in the Updates topic...</i>"""
 
         user_state['data']['final_announcement'] = final_announcement
+        user_state['data']['priority_choice'] = priority_input # Storing the choice
         user_state['step'] = 'awaiting_confirmation'
         
         bot.send_message(msg.chat.id, preview_message, parse_mode="HTML")
@@ -2880,7 +2886,7 @@ def handle_announcement_steps(msg: types.Message):
 📊 <b>Details:</b>
 • Title: "{escape(user_state['data']['title'])}"
 • Characters: {len(user_state['data']['content'])}
-• Priority: {['Regular', 'Important', 'Urgent', 'Celebration'][int(user_state['step_data'] if 'step_data' in user_state else '1') - 1]}
+• Priority: {['Regular', 'Important', 'Urgent', 'Celebration'][int(user_state['data']['priority_choice']) - 1]}
 
 🎉 <b>Your announcement is now live!</b>"""
 
