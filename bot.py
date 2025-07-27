@@ -373,7 +373,7 @@ def create_file_list_page(page=1):
     """
     try:
         # 'count' parameter total files ka number dega pagination ke liye
-        response = supabase.table('resources').select('file_id, file_name', count='exact').order('file_name').execute()
+        response = supabase.table('resources').select('id, file_id, file_name', count='exact').order('file_name').execute()
         
         if not hasattr(response, 'data'):
              return "❌ An error occurred while fetching data from the Vault.", None
@@ -399,7 +399,7 @@ def create_file_list_page(page=1):
             button = types.InlineKeyboardButton(
                 text=f"📄 {escape(resource['file_name'])}",
                 # Yeh 'getfile_' callback hamare purane /need command wale handler ko trigger karega
-                callback_data=f"getfile_{resource['file_id']}"
+                callback_data=f"getfile_{resource['id']}"
             )
             markup.add(button)
         
@@ -1786,19 +1786,27 @@ def handle_need_command(msg: types.Message):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('getfile_'))
 def handle_getfile_callback(call: types.CallbackQuery):
-    """Handles the button click to send the selected file."""
+    """
+    Handles the button click. It now receives the short primary key 'id',
+    fetches the full file_id from Supabase, and then sends the document.
+    """
     try:
-        file_id = call.data.split('_', 1)[1]
+        resource_id = int(call.data.split('_', 1)[1])
         
         # Acknowledge the button press
-        bot.answer_callback_query(call.id, text="✅ Sending your selected file...")
+        bot.answer_callback_query(call.id, text="✅ Fetching your file from the Vault...")
         
-        # You can optionally fetch details again to create a caption
-        # For simplicity, we'll just send the file directly
-        bot.send_document(chat_id=call.message.chat.id, document=file_id)
+        # Use the short 'id' to get the full file_id from the database
+        response = supabase.table('resources').select('file_id').eq('id', resource_id).single().execute()
         
-        # Remove the buttons after selection
-        bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+        if response.data:
+            file_id_to_send = response.data['file_id']
+            bot.send_document(chat_id=call.message.chat.id, document=file_id_to_send)
+            # Remove the buttons after selection
+            bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+        else:
+            bot.answer_callback_query(call.id, text="❌ Error: Could not find this file.", show_alert=True)
+            bot.edit_message_text("Sorry, this file seems to have been removed.", call.message.chat.id, call.message.message_id)
 
     except Exception as e:
         print(f"Error in handle_getfile_callback: {traceback.format_exc()}")
