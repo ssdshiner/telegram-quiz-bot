@@ -1633,6 +1633,12 @@ def handle_need_command(msg: types.Message):
     Searches for a resource from the Vault using keywords and provides results
     as a direct file or interactive buttons.
     """
+    # Add activity tracking
+    try:
+        supabase.rpc('update_chat_activity', {'p_user_id': msg.from_user.id, 'p_user_name': msg.from_user.username or msg.from_user.first_name}).execute()
+    except Exception as e:
+        print(f"Activity tracking failed for user {msg.from_user.id} in command: {e}")
+
     try:
         parts = msg.text.split(' ', 1)
         if len(parts) < 2:
@@ -1672,6 +1678,7 @@ def handle_need_command(msg: types.Message):
         print(f"Error in /need command: {traceback.format_exc()}")
         report_error_to_admin(f"Error in /need (search) command:\n{e}")
         bot.reply_to(msg, "❌ An error occurred while searching for the file.")
+
 @bot.callback_query_handler(func=lambda call: call.data.startswith('getfile_'))
 def handle_getfile_callback(call: types.CallbackQuery):
     """Handles the button click to send the selected file."""
@@ -2005,14 +2012,15 @@ def handle_admin_reply_to_forward(msg: types.Message):
 @bot.message_handler(commands=['my_analysis'])
 @membership_required
 def handle_my_analysis_command(msg: types.Message):
-    try:
-        supabase.rpc('update_chat_activity', {'p_user_id': msg.from_user.id, 'p_user_name': msg.from_user.username or msg.from_user.first_name}).execute()
-    except Exception as e:
-        print(f"Activity tracking failed for user {msg.from_user.id} in command: {e}")
     """
     Provides a deep-dive analysis of a user's performance, including accuracy,
     speed, and comparison with group averages for actionable insights.
     """
+    try:
+        supabase.rpc('update_chat_activity', {'p_user_id': msg.from_user.id, 'p_user_name': msg.from_user.username or msg.from_user.first_name}).execute()
+    except Exception as e:
+        print(f"Activity tracking failed for user {msg.from_user.id} in command: {e}")
+
     user_id = msg.from_user.id
     user_name = escape(msg.from_user.first_name)
     
@@ -2064,13 +2072,12 @@ def handle_my_analysis_command(msg: types.Message):
                 if 40 <= data['accuracy'] < 60:
                     confusion_zone.append(f"{topic} ({q_type})")
                 
-                # Compare speed with group average
                 group_stats_res = supabase.rpc('get_group_avg_stats', {'p_topic': topic, 'p_question_type': q_type}).execute()
                 if group_stats_res.data:
                     group_avg_speed = group_stats_res.data[0].get('group_avg_speed', 0)
-                    if data['avg_speed'] > group_avg_speed * 1.5 and data['accuracy'] > 70:
+                    if group_avg_speed and data['avg_speed'] > group_avg_speed * 1.5 and data['accuracy'] > 70:
                         speed_issues.append(f"Slow but Right in <b>{escape(topic)} ({escape(q_type)})</b>")
-                    elif data['avg_speed'] < group_avg_speed * 0.7 and data['accuracy'] < 60:
+                    elif group_avg_speed and data['avg_speed'] < group_avg_speed * 0.7 and data['accuracy'] < 60:
                         speed_issues.append(f"Fast but Wrong in <b>{escape(topic)} ({escape(q_type)})</b>")
 
         analysis_text += "<b>⭐ Coach's Actionable Insights</b>\n"
