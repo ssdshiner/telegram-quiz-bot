@@ -2797,22 +2797,22 @@ def handle_announcement_steps(msg: types.Message):
         # Style based on priority
         if priority_input == '1':  # Regular
             header_emoji = "📢"
-            border = "━━━━━━━━━━━━━━━━━━━━━━━━━"
+            border = "---------------------"
             priority_tag = "📋 <b>ANNOUNCEMENT</b>"
             
         elif priority_input == '2':  # Important
             header_emoji = "⚠️"
-            border = "━━━━━━━━━━━━━━━━━━━━━━━━━"
+            border = "---------------------"
             priority_tag = "⚠️ <b>IMPORTANT NOTICE</b>"
             
         elif priority_input == '3':  # Urgent
             header_emoji = "🚨"
-            border = "━━━━━━━━━━━━━━━━━━━━━━━━━"
+            border = "---------------------"
             priority_tag = "🚨 <b>URGENT ANNOUNCEMENT</b>"
             
         else:  # Celebration
             header_emoji = "🎉"
-            border = "━━━━━━━━━━━━━━━━━━━━━━━━━"
+            border = "---------------------"
             priority_tag = "🎉 <b>CELEBRATION</b>"
         
         # Create final announcement
@@ -4569,7 +4569,7 @@ def send_marathon_results(session_id):
             marathon_duration = datetime.datetime.now() - session['stats']['start_time']
             
             results_text = f"""🏁 <b>MARATHON RESULTS - '{safe_quiz_title}'</b> 🏁
-{ "━"*25 }
+{ "-"*45 }
 📊 <b>Marathon Statistics:</b>
 • Questions: <b>{total_questions_asked}</b> asked ({total_planned_questions} planned)
 • Duration: <b>{format_duration(marathon_duration.total_seconds())}</b>
@@ -4577,7 +4577,7 @@ def send_marathon_results(session_id):
             if total_active_members > 0:
                 participation_percentage = (len(participants) / total_active_members) * 100
                 results_text += f"\n• Participation: <b>{participation_percentage:.0f}%</b> of active members"
-            results_text += f"\n\n{ "━"*25 }\n\n"
+            results_text += f"\n\n{ '-'*45 }\n\n"
             
             champion_id, champion_data = sorted_items[0]
             champion_name = escape(champion_data['name'])
@@ -4595,7 +4595,7 @@ def send_marathon_results(session_id):
             if champion_data.get('pb_achieved'): achievements.append("🔥 Personal Best!")
             if champion_data.get('streak_completed'): achievements.append("⚡ Streak Master!")
             if achievements: results_text += f"\n🎯 {' • '.join(achievements)}"
-            results_text += f"\n\n{ "━"*25 }\n\n"
+            results_text += f"\n\n{ '-'*25 }\n\n"
             
             results_text += "🏆 <b>FINAL LEADERBOARD</b>\n\n"
             rank_emojis = ["🥇", "🥈", "🥉"]
@@ -4608,9 +4608,9 @@ def send_marathon_results(session_id):
                 line = f"{rank} <b>{display_name}</b> – {p['score']} ({percentage:.0f}%) {formatted_time}"
                 if p.get('legend_tier'): line += f" {p['legend_tier']['emoji']}"
                 if p.get('pb_achieved'): line += " 🏆"
-                if p.get('streak_completed'): line += " 🔥"
+                 if p.get('streak_completed'): line += " 🔥"
                 results_text += line + "\n"
-            results_text += f"\n{ "━"*25 }\n\n"
+            results_text += f"\n{ '-'*25 }\n\n"
             
             tier_counts = {}
             for _, p in sorted_items:
@@ -4624,7 +4624,7 @@ def send_marathon_results(session_id):
                 for tier in tier_order:
                     if tier in tier_counts:
                         results_text += f"{tier_emojis[tier]} {tier.title()}: <b>{tier_counts[tier]}</b> legends\n"
-                results_text += f"\n{ "━"*25 }\n\n"
+                results_text += f"\n{ '-'*25 }\n\n"
             
             results_text += "🎉 <b>Congratulations to all participants!</b>\n\n"
             results_text += "<i>Performance analysis coming next...</i>"
