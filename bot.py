@@ -3952,13 +3952,13 @@ def send_marathon_question(session_id):
     else:
         session['stats']['current_phase'] = 'final'
     
-    try:
-        # Check if we should show a leaderboard update
-        if idx in session.get('leaderboard_updates', []) and QUIZ_PARTICIPANTS.get(session_id):
-            send_mid_quiz_update(session_id)
-            time.sleep(4)  # Brief pause after update
+     try:
+            # Check if we should show a leaderboard update
+            if idx in session.get('leaderboard_updates', []) and QUIZ_PARTICIPANTS.get(session_id):
+                send_mid_quiz_update(session_id)
+                time.sleep(4)  # Brief pause after update
         except Exception:
-       pass
+            pass
         # Get question timing first
         try:
             timer_seconds = int(question_data.get('time_allotted', 60))
