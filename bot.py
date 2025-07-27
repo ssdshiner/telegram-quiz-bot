@@ -1600,25 +1600,28 @@ def handle_listfile_command(msg: types.Message):
         supabase.rpc('update_chat_activity', {'p_user_id': msg.from_user.id, 'p_user_name': msg.from_user.username or msg.from_user.first_name}).execute()
     except Exception as e:
         print(f"Activity tracking failed for user {msg.from_user.id} in command: {e}")
-        
-    text, markup = create_file_list_page(page=1)
     
-    bot.reply_to(msg, text, reply_markup=markup, parse_mode="HTML")
-
+    try:
+        text, markup = create_file_list_page(page=1)
+        bot.reply_to(msg, text, reply_markup=markup, parse_mode="HTML")
+        
+        # Get response data from database
+        response = supabase.table('resources').select('*').execute()
+        
         if not response.data:
             bot.reply_to(msg, "📚 The CA Vault is currently empty. Resources will be added soon!")
             return
-
+            
         list_message = "📚 <b>The CA Vault - Resource Library</b> 📚\n\n"
         list_message += "Here are all the available notes. Use <code>/need &lt;file_name&gt;</code> to get one.\n\n"
-
+        
         for i, resource in enumerate(response.data):
             file_name = escape(resource.get('file_name', 'N/A'))
             description = escape(resource.get('description', 'No description.'))
             list_message += f"<b>{i + 1}.</b> <code>{file_name}</code>\n   ► <i>{description}</i>\n"
-
+            
         bot.reply_to(msg, list_message, parse_mode="HTML")
-
+        
     except Exception as e:
         print(f"Error in /listfile: {traceback.format_exc()}")
         bot.reply_to(msg, "❌ An error occurred while fetching the file list.")
