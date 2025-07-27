@@ -4610,7 +4610,7 @@ def send_marathon_results(session_id):
                 line = f"{rank} <b>{display_name}</b> – {p['score']} ({percentage:.0f}%) {formatted_time}"
                 if p.get('legend_tier'): line += f" {p['legend_tier']['emoji']}"
                 if p.get('pb_achieved'): line += " 🏆"
-                 if p.get('streak_completed'): line += " 🔥"
+                if p.get('streak_completed'): line += " 🔥"
                 results_text += line + "\n"
             results_text += f"\n{ '-'*25 }\n\n"
             
