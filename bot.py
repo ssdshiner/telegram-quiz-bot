@@ -16,6 +16,7 @@ from flask import Flask, request
 from telebot import TeleBot, types
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import timezone, timedelta
+IST = timezone(timedelta(hours=5, minutes=30))
 from supabase import create_client, Client
 from urllib.parse import quote
 from html import escape
@@ -1722,23 +1723,6 @@ def handle_listfile_command(msg: types.Message):
         text, markup = create_file_list_page(page=1)
         bot.reply_to(msg, text, reply_markup=markup, parse_mode="HTML")
         
-        # Get response data from database
-        response = supabase.table('resources').select('*').execute()
-        
-        if not response.data:
-            bot.reply_to(msg, "📚 The CA Vault is currently empty. Resources will be added soon!")
-            return
-            
-        list_message = "📚 <b>The CA Vault - Resource Library</b> 📚\n\n"
-        list_message += "Here are all the available notes. Use <code>/need &lt;file_name&gt;</code> to get one.\n\n"
-        
-        for i, resource in enumerate(response.data):
-            file_name = escape(resource.get('file_name', 'N/A'))
-            description = escape(resource.get('description', 'No description.'))
-            list_message += f"<b>{i + 1}.</b> <code>{file_name}</code>\n   ► <i>{description}</i>\n"
-            
-        bot.reply_to(msg, list_message, parse_mode="HTML")
-        
     except Exception as e:
         print(f"Error in /listfile: {traceback.format_exc()}")
         bot.reply_to(msg, "❌ An error occurred while fetching the file list.")
@@ -2567,7 +2551,7 @@ def handle_random_quiz(msg: types.Message):
         )
         
         # Create engaging timer message with motivation
-        current_hour = datetime.datetime.now().hour
+        current_hour = datetime.datetime.now(IST).hour
         
         if 6 <= current_hour < 12:
             time_greeting = "🌅 <b>Morning Challenge!</b>"
@@ -2791,8 +2775,9 @@ def handle_announcement_steps(msg: types.Message):
         # Create beautiful announcement based on priority
         title = user_state['data']['title']
         content = user_state['data']['content']
-        current_date = datetime.datetime.now().strftime("%d %B %Y")
-        current_time = datetime.datetime.now().strftime("%I:%M %p")
+        time_now_ist = datetime.now(IST)
+        current_time_str = time_now_ist.strftime("%I:%M %p")
+        current_date_str = time_now_ist.strftime("%d %B %Y")
         
         # Style based on priority
         if priority_input == '1':  # Regular
@@ -2826,8 +2811,8 @@ def handle_announcement_steps(msg: types.Message):
 
 {border}
 
-📅 <i>{current_date}</i>
-🕐 <i>{current_time}</i>
+📅 <i>{current_date_str}</i>
+🕐 <i>{current_time_str}</i>
 
 <b>C.A.V.Y.A Management Team</b> 💝"""
 
@@ -3266,7 +3251,7 @@ def handle_congratulate_command(msg: types.Message):
         congrats_message += f"⚡️ <i>Speed King/Queen:</i> A special mention to <b>{fastest_winner_name}</b> for being the fastest among the toppers.\n"
         congrats_message += "\nKeep pushing your limits, everyone. The next leaderboard is waiting for you. 🔥"
 
-        bot.send_message(GROUP_ID, congrats_message, parse_mode="HTML", message_thread_id=QUIZ_TOP_IC_ID)
+        bot.send_message(GROUP_ID, congrats_message, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
 
         try:
             bot.delete_message(msg.chat.id, msg.message_id)
@@ -3928,13 +3913,16 @@ def process_marathon_question_count(msg: types.Message):
 def send_marathon_question(session_id):
     """Send the next question with beautiful presentation, dynamic timer messages, and real-time progress tracking."""
     session = QUIZ_SESSIONS.get(session_id)
-    if not session or not session.get('is_active'):
+    # Naya check add kiya gaya hai 'ending' ke liye
+    if not session or not session.get('is_active') or session.get('ending'):
         return
 
     idx = session['current_question_index']
     total_questions = len(session['questions'])
     
     if idx >= total_questions:
+        # 'ending' flag set kar rahe hain taaki yeh block dobara na chale
+        session['ending'] = True 
         session['is_active'] = False
         # Send final suspense message before results
         send_final_suspense_message(session_id)
@@ -3968,20 +3956,21 @@ def send_marathon_question(session_id):
             timer_seconds = 60
     except (ValueError, TypeError):
         timer_seconds = 60
-        # Send image if available
-        image_id = question_data.get('image_file_id')
-        if image_id:
-            try:
-                image_caption = f"""🖼️ <b>Visual Clue Incoming!</b>
+    
+    # Send image if available (Now correctly indented)
+    image_id = question_data.get('image_file_id')
+    if image_id:
+        try:
+            image_caption = f"""🖼️ <b>Visual Clue Incoming!</b>
 📸 <i>Study this image carefully...</i>
 🎯 <b>Question {idx+1}/{total_questions} loading...</b>"""
-                bot.send_photo(GROUP_ID, image_id, caption=image_caption,
-                              parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
-                time.sleep(3)
-            except Exception as e:
-                print(f"Error sending image for question {idx+1}: {e}")
-                # Optional: Notify admin that an image failed to send
-                report_error_to_admin(f"Failed to send image for QID {question_data.get('id')}")
+            bot.send_photo(GROUP_ID, image_id, caption=image_caption,
+                          parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
+            time.sleep(3)
+        except Exception as e:
+            print(f"Error sending image for question {idx+1}: {e}")
+            # Optional: Notify admin that an image failed to send
+            report_error_to_admin(f"Failed to send image for QID {question_data.get('id')}")
 
     # Prepare question options
     options = [str(question_data.get(f'Option {c}', '')) for c in ['A', 'B', 'C', 'D']]
@@ -4571,7 +4560,7 @@ def send_marathon_results(session_id):
             marathon_duration = datetime.datetime.now() - session['stats']['start_time']
             
             results_text = f"""🏁 <b>MARATHON RESULTS - '{safe_quiz_title}'</b> 🏁
-{ "-"*45 }
+{ "━"*25 }
 📊 <b>Marathon Statistics:</b>
 • Questions: <b>{total_questions_asked}</b> asked ({total_planned_questions} planned)
 • Duration: <b>{format_duration(marathon_duration.total_seconds())}</b>
@@ -4579,7 +4568,7 @@ def send_marathon_results(session_id):
             if total_active_members > 0:
                 participation_percentage = (len(participants) / total_active_members) * 100
                 results_text += f"\n• Participation: <b>{participation_percentage:.0f}%</b> of active members"
-            results_text += f"\n\n{ '-'*45 }\n\n"
+            results_text += f"\n\n{ '━'*25 }\n\n"
             
             champion_id, champion_data = sorted_items[0]
             champion_name = escape(champion_data['name'])
@@ -4597,7 +4586,7 @@ def send_marathon_results(session_id):
             if champion_data.get('pb_achieved'): achievements.append("🔥 Personal Best!")
             if champion_data.get('streak_completed'): achievements.append("⚡ Streak Master!")
             if achievements: results_text += f"\n🎯 {' • '.join(achievements)}"
-            results_text += f"\n\n{ '-'*25 }\n\n"
+            results_text += f"\n\n{ '━'*25 }\n\n"
             
             results_text += "🏆 <b>FINAL LEADERBOARD</b>\n\n"
             rank_emojis = ["🥇", "🥈", "🥉"]
@@ -4612,7 +4601,7 @@ def send_marathon_results(session_id):
                 if p.get('pb_achieved'): line += " 🏆"
                 if p.get('streak_completed'): line += " 🔥"
                 results_text += line + "\n"
-            results_text += f"\n{ '-'*25 }\n\n"
+            results_text += f"\n{ '━'*25 }\n\n"
             
             tier_counts = {}
             for _, p in sorted_items:
