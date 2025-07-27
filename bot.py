@@ -14,6 +14,7 @@ import random
 import requests
 from flask import Flask, request
 from telebot import TeleBot, types
+from telebot.apihelper import ApiTelegramException
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import timezone, timedelta
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -2352,13 +2353,27 @@ def handle_mystats_command(msg: types.Message):
 
 <b>C.A.V.Y.A is here to help you 💝</b>"""
         
-        # --- Send the comprehensive stats message ---
-        sent_stats_message = bot.reply_to(msg, final_stats_message, parse_mode="HTML")
-        
-        # --- Auto-delete both messages after 2 minutes (120 seconds) ---
+        # --- Send the comprehensive stats message with a fallback ---
         DELETE_DELAY_SECONDS = 120
-        delete_message_in_thread(msg.chat.id, msg.message_id, DELETE_DELAY_SECONDS)
-        delete_message_in_thread(sent_stats_message.chat.id, sent_stats_message.message_id, DELETE_DELAY_SECONDS)
+        sent_stats_message = None
+        try:
+            # Try to reply for better context
+            sent_stats_message = bot.reply_to(msg, final_stats_message, parse_mode="HTML")
+            # If reply succeeds, also schedule the original command for deletion
+            delete_message_in_thread(msg.chat.id, msg.message_id, DELETE_DELAY_SECONDS)
+            
+        except ApiTelegramException as e:
+            if 'message to be replied not found' in e.description:
+                # If the original message is gone, send a new message instead of crashing
+                print("Original /mystats message was deleted. Sending stats as a new message.")
+                sent_stats_message = bot.send_message(msg.chat.id, final_stats_message, parse_mode="HTML", message_thread_id=msg.message_thread_id)
+            else:
+                # If it's a different API error, we should still know about it
+                raise e
+
+        # Schedule the bot's stats message for deletion (if it was sent successfully)
+        if sent_stats_message:
+            delete_message_in_thread(sent_stats_message.chat.id, sent_stats_message.message_id, DELETE_DELAY_SECONDS)
 
     except Exception as e:
         print(f"Error in /mystats: {traceback.format_exc()}")
