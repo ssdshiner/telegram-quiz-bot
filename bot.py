@@ -26,14 +26,21 @@ from html import escape
 
 # --- Configuration ---
 BOT_TOKEN = os.getenv('BOT_TOKEN')
+FILES_PER_PAGE = 10
 SERVER_URL = os.getenv('SERVER_URL')
 GROUP_ID_STR = os.getenv('GROUP_ID')
 WEBAPP_URL = os.getenv('WEBAPP_URL')
 ADMIN_USER_ID_STR = os.getenv('ADMIN_USER_ID')
 BOT_USERNAME = "CAVYA_bot"
 PUBLIC_GROUP_COMMANDS = [
-    'todayquiz', 'section', 'feedback', 'mystats', 'info', 'kalkaquiz',
-    'listfile', 'need'
+    # Schedule & Performance
+    'todayquiz', 'kalkaquiz', 'mystats', 'my_analysis',
+    # Vault & Tools
+    'listfile', 'need', 'section',
+    # Written Practice
+    'submit', 'review_done', 'questions_posted',
+    # General
+    'feedback', 'info'
 ]
 GOOGLE_SHEETS_CREDENTIALS_PATH = os.getenv('GOOGLE_SHEETS_CREDENTIALS_PATH')
 GOOGLE_SHEET_KEY = os.getenv('GOOGLE_SHEET_KEY')
@@ -350,7 +357,60 @@ def membership_required(func):
 # =============================================================================
 # 5. HELPER FUNCTIONS (Continued) - Core Logic
 # =============================================================================
+def create_file_list_page(page=1):
+    """
+    Fetches all resources and generates the text and button markup for a specific page.
+    Returns: A tuple (message_text, reply_markup_object)
+    """
+    try:
+        # 'count' parameter total files ka number dega pagination ke liye
+        response = supabase.table('resources').select('file_id, file_name', count='exact').order('file_name').execute()
+        
+        if not hasattr(response, 'data'):
+             return "❌ An error occurred while fetching data from the Vault.", None
 
+        all_files = response.data
+        total_files = response.count
+        
+        if total_files == 0:
+            return "📚 The CA Vault is currently empty. Resources will be added soon!", None
+
+        total_pages = (total_files + FILES_PER_PAGE - 1) // FILES_PER_PAGE
+        page = max(1, min(page, total_pages)) # Ensure page number is valid
+
+        # Calculate which files to show on the current page
+        start_index = (page - 1) * FILES_PER_PAGE
+        end_index = start_index + FILES_PER_PAGE
+        files_on_page = all_files[start_index:end_index]
+        
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        
+        # Create a button for each file on the page
+        for resource in files_on_page:
+            button = types.InlineKeyboardButton(
+                text=f"📄 {escape(resource['file_name'])}",
+                # Yeh 'getfile_' callback hamare purane /need command wale handler ko trigger karega
+                callback_data=f"getfile_{resource['file_id']}"
+            )
+            markup.add(button)
+        
+        # Create Next/Previous navigation buttons
+        nav_buttons = []
+        if page > 1:
+            nav_buttons.append(types.InlineKeyboardButton("⬅️ Previous", callback_data=f"listpage_{page-1}"))
+        if page < total_pages:
+            nav_buttons.append(types.InlineKeyboardButton("Next ➡️", callback_data=f"listpage_{page+1}"))
+        
+        if nav_buttons:
+            markup.row(*nav_buttons)
+        
+        text = f"📚 <b>The CA Vault - Page {page}/{total_pages}</b> 📚\n\nClick any file to download it directly:"
+        return text, markup
+
+    except Exception as e:
+        print(f"Error creating file list page: {traceback.format_exc()}")
+        report_error_to_admin(f"Error in create_file_list_page: {e}")
+        return "❌ An error occurred while fetching the file list.", None
 def create_main_menu_keyboard(message: types.Message):
     """
     Creates the main menu keyboard.
@@ -821,6 +881,21 @@ def handle_quiz_start_button(msg: types.Message):
     # When clicked, the Mini App opens automatically.
     # We send a simple confirmation message to make the experience smoother.
     bot.send_message(msg.chat.id, "🚀 Opening the weekly schedule...")
+@bot.callback_query_handler(func=lambda call: call.data.startswith('listpage_'))
+def handle_listpage_callback(call: types.CallbackQuery):
+    """Handles 'Next' and 'Previous' button clicks for the file list."""
+    page = int(call.data.split('_')[1])
+    bot.answer_callback_query(call.id) # Acknowledge the button press
+    
+    text, markup = create_file_list_page(page)
+    
+    # Edit the existing message to show the new page
+    if markup:
+        try:
+            bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
+        except Exception as e:
+            # This can happen if the message content is identical, which is fine.
+            print(f"Info: Could not edit message for pagination. {e}")
 # =============================================================================
 # 8. TELEGRAM BOT HANDLERS - CORE COMMANDS (Continued)
 # =============================================================================
@@ -869,7 +944,7 @@ Hello Admin! Here are your available tools.
 
 
 @bot.message_handler(commands=['leaderboard'])
-@membership_required
+@admin_required
 def handle_leaderboard(msg: types.Message):
     """ Fetches and displays the top 10 random quiz scorers using HTML. """
     try:
@@ -980,37 +1055,36 @@ def save_data():
 @bot.message_handler(commands=['info'])
 @membership_required
 def handle_info_command(msg: types.Message):
-    """ Provides a list of all available commands for members using HTML. """
+    """ Provides a beautifully formatted and categorized list of commands for members. """
+    # Add activity tracking
     try:
         supabase.rpc('update_chat_activity', {'p_user_id': msg.from_user.id, 'p_user_name': msg.from_user.username or msg.from_user.first_name}).execute()
     except Exception as e:
         print(f"Activity tracking failed for user {msg.from_user.id} in command: {e}")
+
     info_text = """
 🤖 <b>Bot Commands for Members</b> 🤖
+<i>Tip: Click any command below to copy it!</i>
 
-📅 <code>/todayquiz</code>
-   ► Shows the quiz schedule for today.
+<b>📅 SCHEDULE & PERFORMANCE</b>
+<code>/todayquiz</code> - See today's quiz lineup.
+<code>/kalkaquiz</code> - Check tomorrow's schedule.
+<code>/mystats</code> - Get your overall performance summary.
+<code>/my_analysis</code> - Receive a deep-dive analysis of your accuracy and speed.
 
-⏩ <code>/kalkaquiz</code>
-   ► Shows the quiz schedule for tomorrow.
+<b>📚 THE VAULT: NOTES & RESOURCES</b>
+<code>/listfile</code> - Interactively browse all notes.
+<code>/need &lt;keyword&gt;</code> - Search for a specific file.
+<i><b>How to use:</b> First, browse with <code>/listfile</code>, then search with <code>/need tax notes</code> to download.</i>
 
-📊 <code>/mystats</code>
-   ► Get your personal performance stats.
+<b>✍️ WRITTEN PRACTICE SESSION</b>
+<i>(Commands used during daily practice)</i>
+<code>/submit</code> - To submit your answer sheet for review.
+<code>/review_done</code> - For checkers to submit marks after reviewing.
 
-📖 <code>/section &lt;number&gt;</code>
-   ► Get details for a specific Law section.
-
-✍️ <code>/feedback &lt;message&gt;</code>
-   ► Send private feedback to the admin.
-
-📚 <code>/listfile</code>
-   ► Lists all available study materials from the Vault.
-
-📥 <code>/need &lt;file_name&gt;</code>
-   ► Get a specific file from the Vault.
-
-📝 <code>/submit</code> &amp; ✅ <code>/review_done</code>
-   ► Used during Written Practice sessions.
+<b>📝 OTHER TOOLS</b>
+<code>/section &lt;number&gt;</code> - Get details on a Law section.
+<code>/feedback &lt;message&gt;</code> - Send a private message to the admin.
 """
     bot.send_message(msg.chat.id, info_text, parse_mode="HTML", message_thread_id=msg.message_thread_id)
 
@@ -1520,13 +1594,16 @@ def handle_interlink_callbacks(call: types.CallbackQuery):
 @bot.message_handler(commands=['listfile'])
 @membership_required
 def handle_listfile_command(msg: types.Message):
+    """Shows the first page of the new interactive file vault browser."""
+    # Add activity tracking
     try:
         supabase.rpc('update_chat_activity', {'p_user_id': msg.from_user.id, 'p_user_name': msg.from_user.username or msg.from_user.first_name}).execute()
     except Exception as e:
         print(f"Activity tracking failed for user {msg.from_user.id} in command: {e}")
-    """ Lists all available resources from the Vault using HTML. """
-    try:
-        response = supabase.table('resources').select('file_name, description').order('file_name').execute()
+        
+    text, markup = create_file_list_page(page=1)
+    
+    bot.reply_to(msg, text, reply_markup=markup, parse_mode="HTML")
 
         if not response.data:
             bot.reply_to(msg, "📚 The CA Vault is currently empty. Resources will be added soon!")
@@ -1552,45 +1629,68 @@ def handle_listfile_command(msg: types.Message):
 @bot.message_handler(commands=['need'])
 @membership_required
 def handle_need_command(msg: types.Message):
-    try:
-        supabase.rpc('update_chat_activity', {'p_user_id': msg.from_user.id, 'p_user_name': msg.from_user.username or msg.from_user.first_name}).execute()
-    except Exception as e:
-        print(f"Activity tracking failed for user {msg.from_user.id} in command: {e}")
+    """
+    Searches for a resource from the Vault using keywords and provides results
+    as a direct file or interactive buttons.
+    """
     try:
         parts = msg.text.split(' ', 1)
         if len(parts) < 2:
-            bot.reply_to(msg, "Please provide the exact file name after the command.\n<b>Example:</b> <code>/need AS-19_notes.pdf</code>\n\nUse /listfile to see all available files.", parse_mode="HTML")
+            bot.reply_to(msg, "Please provide a keyword to search for.\n<b>Example:</b> <code>/need AS 19</code> or <code>/need tax notes</code>", parse_mode="HTML")
             return
 
-        file_name_to_find = parts[1].strip()
+        search_term = parts[1].strip()
+        
+        # Call the new search function in Supabase
+        response = supabase.rpc('search_resources', {'search_term': search_term}).execute()
 
-        response = supabase.table('resources').select('file_id, file_name, description').ilike('file_name', file_name_to_find).limit(1).single().execute()
-
-        if response.data:
-            resource = response.data
+        if not response.data:
+            bot.reply_to(msg, f"😥 Sorry, I couldn't find any files matching '<code>{escape(search_term)}</code>'.\n\nTry using the <code>/listfile</code> command to see all available resources.", parse_mode="HTML")
+        
+        elif len(response.data) == 1:
+            # If only one result, send it directly
+            resource = response.data[0]
             file_id = resource['file_id']
-            caption = f"Here is the resource you requested:\n\n<b>File:</b> {escape(resource['file_name'])}\n<b>Description:</b> {escape(resource['description'])}"
-
+            caption = f"✅ Here is the result for '<code>{escape(search_term)}</code>':\n\n<b>File:</b> {escape(resource['file_name'])}\n<b>Description:</b> {escape(resource['description'])}"
             bot.send_document(msg.chat.id, file_id, caption=caption, reply_to_message_id=msg.message_id, parse_mode="HTML")
+
         else:
-            all_files_response = supabase.table('resources').select('file_name').order('file_name').execute()
-
-            error_message = f"❌ Sorry, I couldn't find a file named <code>{escape(file_name_to_find)}</code>.\n\n"
-            error_message += "Please <b>copy the exact file name</b> and use the command again.\n\n"
-            error_message += "<i>Available Files:</i>\n"
-
-            if all_files_response.data:
-                for resource in all_files_response.data:
-                    error_message += f"• <code>{escape(resource['file_name'])}</code>\n"
-            else:
-                error_message += "<i>The Vault is currently empty.</i>\n"
-
-            error_message += "\n<b>Example:</b> <code>/need AS-19_notes.pdf</code>"
-            bot.reply_to(msg, error_message, parse_mode="HTML")
+            # If multiple results, show buttons
+            markup = types.InlineKeyboardMarkup()
+            results_text = f"🔎 I found <b>{len(response.data)}</b> files matching '<code>{escape(search_term)}</code>'. Please choose one:\n\n"
+            
+            for resource in response.data[:10]: # Show max 10 results
+                button = types.InlineKeyboardButton(
+                    text=f"📄 {resource['file_name']}",
+                    callback_data=f"getfile_{resource['file_id']}"
+                )
+                markup.add(button)
+            
+            bot.reply_to(msg, results_text, reply_markup=markup, parse_mode="HTML")
 
     except Exception as e:
         print(f"Error in /need command: {traceback.format_exc()}")
-        bot.reply_to(msg, "❌ An error occurred while fetching the file.")
+        report_error_to_admin(f"Error in /need (search) command:\n{e}")
+        bot.reply_to(msg, "❌ An error occurred while searching for the file.")
+@bot.callback_query_handler(func=lambda call: call.data.startswith('getfile_'))
+def handle_getfile_callback(call: types.CallbackQuery):
+    """Handles the button click to send the selected file."""
+    try:
+        file_id = call.data.split('_', 1)[1]
+        
+        # Acknowledge the button press
+        bot.answer_callback_query(call.id, text="✅ Sending your selected file...")
+        
+        # You can optionally fetch details again to create a caption
+        # For simplicity, we'll just send the file directly
+        bot.send_document(chat_id=call.message.chat.id, document=file_id)
+        
+        # Remove the buttons after selection
+        bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+
+    except Exception as e:
+        print(f"Error in handle_getfile_callback: {traceback.format_exc()}")
+        report_error_to_admin(f"Error sending file from callback:\n{e}")
 
 # --- Admin Command: Direct Messaging System (/dm) ---
 
@@ -1905,6 +2005,10 @@ def handle_admin_reply_to_forward(msg: types.Message):
 @bot.message_handler(commands=['my_analysis'])
 @membership_required
 def handle_my_analysis_command(msg: types.Message):
+    try:
+        supabase.rpc('update_chat_activity', {'p_user_id': msg.from_user.id, 'p_user_name': msg.from_user.username or msg.from_user.first_name}).execute()
+    except Exception as e:
+        print(f"Activity tracking failed for user {msg.from_user.id} in command: {e}")
     """
     Provides a deep-dive analysis of a user's performance, including accuracy,
     speed, and comparison with group averages for actionable insights.
