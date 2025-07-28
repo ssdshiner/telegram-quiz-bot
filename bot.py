@@ -4568,12 +4568,7 @@ def send_final_report_sequence(session_id):
         report_error_to_admin(f"CRITICAL: Failed during final report sequence for session {session_id}:\n{e}")
         # Even if sending fails, we MUST try to clean up.
         send_marathon_results(session_id)
-
 def send_marathon_results(session_id):
-"""
-Generates and sends comprehensive marathon results with legend tiers,
-and guarantees session cleanup to prevent memory leaks.
-"""
 session = QUIZ_SESSIONS.get(session_id)
 if not session:
 return  # Session already cleaned up or never existed
