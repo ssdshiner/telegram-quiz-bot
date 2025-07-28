@@ -3996,7 +3996,7 @@ def process_marathon_question_count(msg: types.Message):
                 'topics': {}, 'question_types': {}, 'difficulty_levels': {}
             }
         }
-QUIZ_PARTICIPANTS[session_id] = {}
+        QUIZ_PARTICIPANTS[session_id] = {}
 
         # This block calculates when to show mid-quiz leaderboard updates.
         # Its indentation is now corrected to be inside the main 'try' block.
