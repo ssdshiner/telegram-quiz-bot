@@ -2470,9 +2470,7 @@ def handle_random_quiz(msg: types.Message):
         correct_index = quiz_data.get('correct_index')
         explanation_text = quiz_data.get('explanation')
         category = quiz_data.get('category', 'General Knowledge')
-        # --- NAYA CODE START ---
-        image_file_id = quiz_data.get('image_file_id') # Image ID nikalte hain
-        # --- NAYA CODE END ---
+        image_file_id = quiz_data.get('image_file_id')
 
         # Validate quiz data integrity
         if not question_text or not isinstance(options_data, list) or len(options_data) != 4 or correct_index is None:
@@ -2492,22 +2490,20 @@ def handle_random_quiz(msg: types.Message):
             supabase.table('questions').update({'used': True}).eq('id', question_id).execute()
             return
 
-        # --- NAYA CODE START ---
-        # Agar image_file_id hai, toh poll se pehle image bhejte hain
         if image_file_id:
             try:
                 image_caption = f"🖼️ <b>Visual Clue for the upcoming quiz!</b>\n\n📸 <i>Study this image carefully...</i>"
                 bot.send_photo(GROUP_ID, image_file_id, caption=image_caption, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
-                time.sleep(3) # Users ko image dekhne ke liye thoda time dein
+                time.sleep(3)
             except Exception as e:
                 print(f"Error sending image for random quiz: {e}")
                 report_error_to_admin(f"Failed to send image {image_file_id} for random quiz QID {question_id}")
                 bot.send_message(admin_chat_id, f"⚠️ Warning: Could not send image for QID {question_id}, but sending the quiz anyway.")
-        # --- NAYA CODE END ---
 
         # Create engaging quiz presentation
         option_emojis = ['1️⃣', '2️⃣', '3️⃣', '4️⃣']
-        formatted_options = [f"{option_emojis[i]} {str(opt)}" for i, opt in enumerate(options_data)]
+        # FIX #1: The apostrophe issue. We use html.unescape to convert codes like ' back into apostrophes.
+        formatted_options = [f"{option_emojis[i]} {unescape(str(opt))}" for i, opt in enumerate(options_data)]
         
         quiz_titles = [
             "🧠 Brain Challenge!", "💡 Knowledge Test!", "🎯 Quick Quiz!",
@@ -2515,16 +2511,16 @@ def handle_random_quiz(msg: types.Message):
             "🚀 Test Zone!", "🎲 Challenge!"
         ]
         
-        # Agar image hai toh title badal dete hain
         title = "🖼️ Visual Quiz!" if image_file_id else random.choice(quiz_titles)
         
+        # FIX #1 (continued): We also unescape the question text itself.
         formatted_question = (
             f"{title}\n"
             f"📚 {escape(category)}\n\n"
-            f"{escape(question_text)}"
+            f"{escape(unescape(question_text))}"
         )
         
-        safe_explanation = escape(explanation_text) if explanation_text else None
+        safe_explanation = escape(unescape(explanation_text)) if explanation_text else None
         open_period_seconds = 600
         
         # Send the quiz poll
@@ -2541,7 +2537,6 @@ def handle_random_quiz(msg: types.Message):
             explanation_parse_mode="HTML"
         )
         
-        # Baaki ka poora logic bilkul same rahega...
         current_hour = datetime.datetime.now(IST).hour
         
         if 6 <= current_hour < 12:
@@ -2584,9 +2579,19 @@ def handle_random_quiz(msg: types.Message):
         supabase.table('questions').update({'used': True}).eq('id', question_id).execute()
         print(f"✅ Marked question ID {question_id} as used.")
         
+        # FIX #2: Restored the detailed admin confirmation message.
         admin_success_message = f"""✅ <b>Quiz Posted Successfully!</b>
-(Image was included: {"Yes" if image_file_id else "No"})
-"""
+
+🎯 <b>Details:</b>
+• Question ID: {question_id}
+• Category: {escape(category)}
+• Duration: {open_period_seconds // 60} minutes
+• Options: {len(options_data)} choices
+
+🚀 <b>Status:</b> Live in group!
+📊 <b>Tracking:</b> Added to active polls
+
+🎪 <b>Let the quiz begin!</b>"""
         bot.send_message(admin_chat_id, admin_success_message, parse_mode="HTML")
 
     except Exception as e:
@@ -2646,25 +2651,26 @@ def handle_randomquizvisual(msg: types.Message):
         try:
             image_caption = f"🖼️ <b>Visual Clue for the upcoming quiz!</b>\n\n📸 <i>Study this image carefully...</i>"
             bot.send_photo(GROUP_ID, image_file_id, caption=image_caption, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
-            time.sleep(3) # Users ko image dekhne ke liye thoda time dein
+            time.sleep(3)
         except Exception as e:
             print(f"Error sending image for visual quiz: {e}")
             report_error_to_admin(f"Failed to send image {image_file_id} for visual quiz QID {question_id}")
-            # Agar image fail ho jaye, toh bhi quiz aage bhej dein taaki flow na ruke
             bot.send_message(admin_chat_id, f"⚠️ Warning: Could not send image for QID {question_id}, but sending the quiz anyway.")
 
         # Create engaging quiz presentation
         option_emojis = ['1️⃣', '2️⃣', '3️⃣', '4️⃣']
-        formatted_options = [f"{option_emojis[i]} {str(opt)}" for i, opt in enumerate(options_data)]
+        # FIX #1: Apostrophe issue fix
+        formatted_options = [f"{option_emojis[i]} {unescape(str(opt))}" for i, opt in enumerate(options_data)]
         
         # Step 3: Title ko "Visual Quiz" ke liye badlein
+        # FIX #1 (continued): Apostrophe issue fix
         formatted_question = (
             f"🖼️ Visual Quiz Challenge!\n"
             f"📚 {escape(category)}\n\n"
-            f"{escape(question_text)}"
+            f"{escape(unescape(question_text))}"
         )
         
-        safe_explanation = escape(explanation_text) if explanation_text else None
+        safe_explanation = escape(unescape(explanation_text)) if explanation_text else None
         open_period_seconds = 600
         
         # Send the quiz poll
@@ -2681,7 +2687,6 @@ def handle_randomquizvisual(msg: types.Message):
             explanation_parse_mode="HTML"
         )
         
-        # Baaki ka logic (timer message, tracking, etc.) same rahega
         current_hour = datetime.datetime.now(IST).hour
         
         if 6 <= current_hour < 12:
@@ -2724,7 +2729,17 @@ def handle_randomquizvisual(msg: types.Message):
         supabase.table('questions').update({'used': True}).eq('id', question_id).execute()
         print(f"✅ Marked question ID {question_id} as used.")
         
-        bot.send_message(admin_chat_id, "✅ Visual Quiz posted successfully!", parse_mode="HTML")
+        # FIX #2: Added detailed admin confirmation message
+        admin_success_message = f"""✅ <b>Visual Quiz Posted Successfully!</b>
+
+🖼️ <b>Image Included:</b> Yes
+🎯 <b>Details:</b>
+• Question ID: {question_id}
+• Category: {escape(category)}
+• Duration: {open_period_seconds // 60} minutes
+
+🚀 <b>Status:</b> Live in group!"""
+        bot.send_message(admin_chat_id, admin_success_message, parse_mode="HTML")
 
     except Exception as e:
         tb_string = traceback.format_exc()
