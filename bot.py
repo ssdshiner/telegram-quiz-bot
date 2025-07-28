@@ -914,38 +914,42 @@ def handle_listpage_callback(call: types.CallbackQuery):
 def handle_help_command(msg: types.Message):
     """Sends a beautifully formatted and categorized list of admin commands using safe HTML."""
     # THE FIX: Converted the entire help message from Markdown to HTML for safety and consistency.
-    help_text = """
-<b>🤖 Admin Control Panel</b>
+    help_text = """🤖 <b>Admin Control Panel</b>
 Hello Admin! Here are your available tools.
 <code>Click any command to copy it.</code>
 ━━━━━━━━━━━━━━━━━━
 
-<b>📣 Content &amp; Engagement</b>
+<b>📣 Content & Engagement</b>
 <code>/motivate</code> - Send a motivational quote.
 <code>/studytip</code> - Share a useful study tip.
-<code>/announce</code> - Broadcast &amp; pin a message.
-<code>/message</code> - Send content to the group.
+<code>/announce</code> - Create & pin a message.
+<code>/message</code> - Send content to group.
 <code>/add_resource</code> - Add a file to the Vault.
 <code>/update_schedule</code> - Announce tomorrow's schedule.
+<code>/reset_content</code> - Reset quotes/tips usage.
 
-<b>🧠 Quiz &amp; Marathon</b>
+<b>🧠 Quiz & Marathon</b>
 <code>/quizmarathon</code> - Start a new marathon.
 <code>/randomquiz</code> - Post a single random quiz.
-<code>/fileid</code> - Get file_id for marathon images.
+<code>/randomquizvisual</code> - Post a visual random quiz.
 <code>/roko</code> - Force-stop a running marathon.
+<code>/fileid</code> - Get file_id for quiz images.
+<code>/notify</code> - Send a timed quiz alert.
 
-<b>📈 Ranking &amp; Practice</b>
+<b>📈 Ranking & Practice</b>
 <code>/rankers</code> - Post weekly marathon ranks.
 <code>/alltimerankers</code> - Post all-time marathon ranks.
 <code>/leaderboard</code> - Post random quiz leaderboard.
+<code>/bdhai</code> - Congratulate quiz winners.
 <code>/practice</code> - Start daily written practice.
 <code>/remind_checkers</code> - Remind for pending reviews.
 
-<b>👥 Member &amp; Role Management</b>
-<code>/promote</code> - Make a member a Contributor for resource.
-<code>/demote</code> - Remove Contributor role for resource.
+<b>👥 Member & Role Management</b>
+<code>/promote</code> - Make a member a Contributor.
+<code>/demote</code> - Remove Contributor role.
 <code>/dm</code> - Send a direct message to a user.
 <code>/activity_report</code> - Get a group activity report.
+<code>/run_checks</code> - Manually run warning/appreciation checks.
 <code>/sync_members</code> - Sync old members to tracker.
 <code>/prunedms</code> - Clean the inactive DM list.
 """
@@ -1257,37 +1261,71 @@ def process_fileid_image(msg: types.Message):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('add_fileid_'))
 def handle_fileid_confirmation(call: types.CallbackQuery):
-    """Handles the Yes/No confirmation for adding the file_id."""
+    """Handles the Yes/No confirmation and then asks for the quiz type."""
     admin_id = call.from_user.id
-    bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id) # Remove buttons
-
+    
     if call.data == 'add_fileid_yes':
-        # THE FIX: Converted to safe HTML
-        prompt_text = "Great. Please tell me the numeric <b>Question ID</b> (from the <code>quiz_questions</code> table) where you want to add this image."
-        prompt = bot.send_message(admin_id, prompt_text, parse_mode="HTML")
-        bot.register_next_step_handler(prompt, process_fileid_question_id)
+        # Ab hum direct ID poochne ke bajaye, quiz type poochenge
+        markup = types.InlineKeyboardMarkup()
+        markup.add(
+            types.InlineKeyboardButton("🎲 Random Quiz", callback_data="add_fileid_to_random"),
+            types.InlineKeyboardButton("🏁 Quiz Marathon", callback_data="add_fileid_to_marathon")
+        )
+        bot.edit_message_text(
+            text="Great! Which type of quiz is this image for?",
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            reply_markup=markup
+        )
     else: # 'add_fileid_no'
         if admin_id in user_states:
             del user_states[admin_id]
+        bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id)
         bot.send_message(admin_id, "👍 Okay, operation cancelled. You can copy the File ID above for manual use.")
 
 
+@bot.callback_query_handler(func=lambda call: call.data.startswith('add_fileid_to_'))
+def handle_fileid_quiz_type_choice(call: types.CallbackQuery):
+    """Handles the quiz type choice and then asks for the Question ID."""
+    admin_id = call.from_user.id
+    quiz_type = call.data.split('_')[-1] # 'random' or 'marathon'
+    
+    # Store the choice in the user's state
+    if admin_id in user_states:
+        user_states[admin_id]['quiz_type'] = quiz_type
+    else:
+        # Agar state exist nahi karta to error handle karein
+        bot.edit_message_text("❌ Sorry, your session expired. Please start over with /fileid.", call.message.chat.id, call.message.message_id)
+        return
+
+    table_name = "questions" if quiz_type == "random" else "quiz_questions"
+    
+    prompt_text = f"Okay, adding to <b>{quiz_type.title()} Quiz</b>.\n\nPlease tell me the numeric <b>Question ID</b> from the <code>{table_name}</code> table."
+    bot.edit_message_text(text=prompt_text, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="HTML")
+    bot.register_next_step_handler(call.message, process_fileid_question_id)
+
+
 def process_fileid_question_id(msg: types.Message):
-    """Receives the Question ID and updates the database."""
+    """Receives the Question ID and updates the correct database table based on the stored state."""
     admin_id = msg.from_user.id
     
     try:
+        state_data = user_states.get(admin_id, {})
         question_id = int(msg.text.strip())
-        file_id_to_add = user_states.get(admin_id, {}).get('image_file_id')
+        file_id_to_add = state_data.get('image_file_id')
+        quiz_type = state_data.get('quiz_type')
 
-        if not file_id_to_add:
-            bot.send_message(admin_id, "❌ Sorry, something went wrong. The file ID was lost. Please start over with /fileid.")
+        if not file_id_to_add or not quiz_type:
+            bot.send_message(admin_id, "❌ Sorry, something went wrong. Your session data was lost. Please start over with /fileid.")
             return
 
-        supabase.table('quiz_questions').update({'image_file_id': file_id_to_add}).eq('id', question_id).execute()
+        # Sahi table ka naam chunein
+        table_name = "questions" if quiz_type == "random" else "quiz_questions"
         
-        # THE FIX: Converted to safe HTML
-        success_message = f"✅ Success! The image has been linked to Question ID: <b>{question_id}</b>."
+        # Sahi table ko update karein
+        supabase.table(table_name).update({'image_file_id': file_id_to_add}).eq('id', question_id).execute()
+        
+        success_message = f"✅ Success! The image has been linked to Question ID <b>{question_id}</b> in the <b>{quiz_type.title()} Quiz</b> table."
         bot.send_message(admin_id, success_message, parse_mode="HTML")
 
     except ValueError:
@@ -2230,7 +2268,7 @@ def handle_mystats_command(msg: types.Message):
 
 ━━ 🎮 <b>Performance</b> ━━
 • <b>Quizzes Played:</b> {stats.get('total_quizzes_played', 0)}
-• <b>Random Score:</b> {stats.get('random_quiz_score', 0)} pts
+• <b>Random Quiz Score:</b> {stats.get('random_quiz_score', 0)} pts
 • <b>Current Streak:</b> 🔥 {stats.get('current_streak', 0)}
 
 ━━ 📝 <b>Practice</b> ━━
@@ -2239,22 +2277,45 @@ def handle_mystats_command(msg: types.Message):
 • <b>Copies Checked:</b> {stats.get('copies_checked', 0)}
 """
 
-        # --- Shortened Coach's Comment Logic ---
+        # --- ENHANCED Coach's Comment Logic with Hinglish ---
         coach_comment = ""
         APPRECIATION_STREAK = 8
         current_streak = stats.get('current_streak', 0)
         total_quizzes = stats.get('total_quizzes_played', 0)
-        
+        weekly_rank = stats.get('weekly_rank')
+        all_time_rank = stats.get('all_time_rank')
+        total_submissions = stats.get('total_submissions', 0)
+        avg_performance = stats.get('average_performance', 0)
+
+        # Priority 1: Streaks
         if current_streak >= APPRECIATION_STREAK:
-            coach_comment = f"Wow, a {current_streak}-quiz streak! Incredible consistency! 🔥"
+            coach_comment = f"Gazab ki consistency! 🔥 {current_streak}-quiz ki streak- pe ho, lage raho!"
         elif current_streak == (APPRECIATION_STREAK - 1):
-            coach_comment = "Just one more quiz for a new streak milestone! You can do it! 🚀"
-        elif stats.get('weekly_rank', 0) == 0 and total_quizzes > 0:
-            coach_comment = "You haven't ranked this week yet. The next quiz is your chance! 💪"
+            coach_comment = "Bas ek aur quiz aur aapka naya streak milestone poora ho jayega! You can do it! 🚀"
+        
+        # Priority 2: Top Rankings
+        elif weekly_rank == 1:
+            coach_comment = "Is hafte ke Topper! Aap toh leaderboard par aag laga rahe ho! Keep it up! 👑"
+        elif all_time_rank is not None and all_time_rank <= 10:
+            coach_comment = "All-Time Top 10 mein jagah banana aasan nahi. Aap toh legend ho! 🏛️"
+
+        # Priority 3: Specific Improvement Areas
+        elif total_submissions > 0 and avg_performance > 80:
+            coach_comment = "Aapki written practice performance outstanding hai! 80% se upar score karna kamaal hai. ✨"
+        elif total_quizzes > 10 and total_submissions == 0:
+            coach_comment = "Quiz performance acchi hai, ab writing practice mein bhi haath aazmaiye. /submit command try karein! ✍️"
+        elif weekly_rank is None or weekly_rank == 0 and total_quizzes > 0:
+            coach_comment = "Is hafte abhi tak rank nahi lagi. Agla quiz aapka ho sakta hai! 💪"
+        elif current_streak == 0 and total_quizzes > 5:
+            coach_comment = "Koi baat nahi, streak break hote rehte hain. Ek naya, lamba streak shuru karne ka time hai! 🎯"
+        
+        # Priority 4: New User Encouragement
         elif total_quizzes < 3:
-            coach_comment = "You're just getting started. Keep participating to see your stats grow! 🌱"
+            coach_comment = "Apke liye to abhi quiz shuru hui hai! Participate karte rahiye aur apne stats ko grow karte dekhein! 🌱"
+        
+        # Priority 5: Generic Fallback
         else:
-            coach_comment = "Consistent practice is the key to success. Keep going! ✨"
+            coach_comment = "Consistency hi success ki chaabi hai. Practice karte rahiye, aap aacha kar rahe hain! 👍"
 
         # --- Final message assembly ---
         final_stats_message = stats_message + f"\n\n💡 <b>Coach's Tip:</b> {coach_comment}"
@@ -2369,11 +2430,12 @@ def handle_notify_command(msg: types.Message):
 @admin_required
 def handle_random_quiz(msg: types.Message):
     """
-    Posts a polished 10-minute random quiz using safe HTML.
+    Posts a polished 10-minute random quiz. Now with optional image support.
     """
     admin_chat_id = msg.chat.id
     
     try:
+        # Naya Supabase function ab image_file_id bhi laayega
         response = supabase.rpc('get_random_quiz', {}).execute()
         
         if not response.data:
@@ -2409,6 +2471,9 @@ def handle_random_quiz(msg: types.Message):
         correct_index = quiz_data.get('correct_index')
         explanation_text = quiz_data.get('explanation')
         category = quiz_data.get('category', 'General Knowledge')
+        # --- NAYA CODE START ---
+        image_file_id = quiz_data.get('image_file_id') # Image ID nikalte hain
+        # --- NAYA CODE END ---
 
         # Validate quiz data integrity
         if not question_text or not isinstance(options_data, list) or len(options_data) != 4 or correct_index is None:
@@ -2428,33 +2493,39 @@ def handle_random_quiz(msg: types.Message):
             supabase.table('questions').update({'used': True}).eq('id', question_id).execute()
             return
 
+        # --- NAYA CODE START ---
+        # Agar image_file_id hai, toh poll se pehle image bhejte hain
+        if image_file_id:
+            try:
+                image_caption = f"🖼️ <b>Visual Clue for the upcoming quiz!</b>\n\n📸 <i>Study this image carefully...</i>"
+                bot.send_photo(GROUP_ID, image_file_id, caption=image_caption, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
+                time.sleep(3) # Users ko image dekhne ke liye thoda time dein
+            except Exception as e:
+                print(f"Error sending image for random quiz: {e}")
+                report_error_to_admin(f"Failed to send image {image_file_id} for random quiz QID {question_id}")
+                bot.send_message(admin_chat_id, f"⚠️ Warning: Could not send image for QID {question_id}, but sending the quiz anyway.")
+        # --- NAYA CODE END ---
+
         # Create engaging quiz presentation
         option_emojis = ['1️⃣', '2️⃣', '3️⃣', '4️⃣']
         formatted_options = [f"{option_emojis[i]} {str(opt)}" for i, opt in enumerate(options_data)]
         
-        # Dynamic engaging titles
         quiz_titles = [
-            "🧠 Brain Challenge!",
-            "💡 Knowledge Test!",
-            "🎯 Quick Quiz!",
-            "🔥 Think Fast!",
-            "⚡ Mind Bender!",
-            "🎪 Quiz Time!",
-            "🚀 Test Zone!",
-            "🎲 Challenge!"
+            "🧠 Brain Challenge!", "💡 Knowledge Test!", "🎯 Quick Quiz!",
+            "🔥 Think Fast!", "⚡ Mind Bender!", "🎪 Quiz Time!",
+            "🚀 Test Zone!", "🎲 Challenge!"
         ]
         
-        # Create mobile-optimized question format
+        # Agar image hai toh title badal dete hain
+        title = "🖼️ Visual Quiz!" if image_file_id else random.choice(quiz_titles)
+        
         formatted_question = (
-            f"{random.choice(quiz_titles)}\n"
+            f"{title}\n"
             f"📚 {escape(category)}\n\n"
             f"{escape(question_text)}"
         )
         
-        # Prepare safe explanation
         safe_explanation = escape(explanation_text) if explanation_text else None
-        
-        # Set quiz duration (10 minutes)
         open_period_seconds = 600
         
         # Send the quiz poll
@@ -2471,7 +2542,7 @@ def handle_random_quiz(msg: types.Message):
             explanation_parse_mode="HTML"
         )
         
-        # Create engaging timer message with motivation
+        # Baaki ka poora logic bilkul same rahega...
         current_hour = datetime.datetime.now(IST).hour
         
         if 6 <= current_hour < 12:
@@ -2503,7 +2574,6 @@ def handle_random_quiz(msg: types.Message):
             message_thread_id=QUIZ_TOPIC_ID
         )
         
-        # Track active poll
         active_polls.append({
             'poll_id': sent_poll.poll.id,
             'correct_option_id': correct_index,
@@ -2512,24 +2582,12 @@ def handle_random_quiz(msg: types.Message):
             'category': category
         })
         
-        # Mark question as used
         supabase.table('questions').update({'used': True}).eq('id', question_id).execute()
         print(f"✅ Marked question ID {question_id} as used.")
         
-        # Send success confirmation to admin
         admin_success_message = f"""✅ <b>Quiz Posted Successfully!</b>
-
-🎯 <b>Details:</b>
-• Question ID: <b>{question_id}</b>
-• Category: <b>{escape(category)}</b>
-• Duration: <b>10 minutes</b>
-• Options: <b>4 choices</b>
-
-🚀 <b>Status:</b> Live in group!
-📊 <b>Tracking:</b> Added to active polls
-
-🎪 <i>Let the quiz begin!</i>"""
-
+(Image was included: {"Yes" if image_file_id else "No"})
+"""
         bot.send_message(admin_chat_id, admin_success_message, parse_mode="HTML")
 
     except Exception as e:
@@ -2537,21 +2595,143 @@ def handle_random_quiz(msg: types.Message):
         print(f"CRITICAL Error in /randomquiz: {tb_string}")
         report_error_to_admin(f"Failed to post random quiz:\n{tb_string}")
         
-        admin_critical_error = f"""🚨 <b>Critical Quiz Error</b>
-
-❌ <b>Status:</b> Quiz posting failed
-
-🔍 <b>Details:</b>
-Unexpected system error occurred
-
-📝 <b>Action:</b>
-• Full error logged to admin
-• Check system logs
-• Investigate database connection
-
-⚠️ <i>Immediate attention required!</i>"""
-
+        admin_critical_error = """🚨 <b>Critical Quiz Error</b>
+(Could not post random quiz)"""
         bot.send_message(admin_chat_id, admin_critical_error, parse_mode="HTML")
+
+@bot.message_handler(commands=['randomquizvisual'])
+@admin_required
+def handle_randomquizvisual(msg: types.Message):
+    """
+    Posts a polished 10-minute random quiz that is GUARANTEED to have an image.
+    """
+    admin_chat_id = msg.chat.id
+    
+    try:
+        # Step 1: Naya Supabase function call karein jo sirf image waale question laata hai
+        response = supabase.rpc('get_random_visual_quiz', {}).execute()
+        
+        if not response.data:
+            no_quiz_message = """😔 <b>No Visual Quizzes Found</b>
+
+🎯 <i>No unused quizzes with images are available right now.</i>
+
+💡 <b>Next Steps:</b>
+• Add images to more questions using the /fileid command.
+• Add new questions with images.
+
+🖼️ <i>The visual quiz bank needs more content!</i>"""
+
+            bot.send_message(admin_chat_id, no_quiz_message, parse_mode="HTML")
+            return
+
+        quiz_data = response.data[0]
+        question_id = quiz_data.get('id')
+        question_text = quiz_data.get('question_text')
+        options_data = quiz_data.get('options')
+        correct_index = quiz_data.get('correct_index')
+        explanation_text = quiz_data.get('explanation')
+        category = quiz_data.get('category', 'General Knowledge')
+        image_file_id = quiz_data.get('image_file_id') # Image ID zaroor milega
+
+        # Validate quiz data integrity
+        if not all([question_text, isinstance(options_data, list), len(options_data) == 4, correct_index is not None, image_file_id]):
+            error_detail = f"Visual Question ID {question_id} has malformed or missing data."
+            report_error_to_admin(error_detail)
+            admin_error_message = f"❌ <b>Visual Quiz Data Error</b> for Question ID: {question_id}. Marked as used and skipped."
+            bot.send_message(admin_chat_id, admin_error_message, parse_mode="HTML")
+            supabase.table('questions').update({'used': True}).eq('id', question_id).execute()
+            return
+
+        # Step 2: Hamesha pehle image bhejein
+        try:
+            image_caption = f"🖼️ <b>Visual Clue for the upcoming quiz!</b>\n\n📸 <i>Study this image carefully...</i>"
+            bot.send_photo(GROUP_ID, image_file_id, caption=image_caption, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
+            time.sleep(3) # Users ko image dekhne ke liye thoda time dein
+        except Exception as e:
+            print(f"Error sending image for visual quiz: {e}")
+            report_error_to_admin(f"Failed to send image {image_file_id} for visual quiz QID {question_id}")
+            # Agar image fail ho jaye, toh bhi quiz aage bhej dein taaki flow na ruke
+            bot.send_message(admin_chat_id, f"⚠️ Warning: Could not send image for QID {question_id}, but sending the quiz anyway.")
+
+        # Create engaging quiz presentation
+        option_emojis = ['1️⃣', '2️⃣', '3️⃣', '4️⃣']
+        formatted_options = [f"{option_emojis[i]} {str(opt)}" for i, opt in enumerate(options_data)]
+        
+        # Step 3: Title ko "Visual Quiz" ke liye badlein
+        formatted_question = (
+            f"🖼️ Visual Quiz Challenge!\n"
+            f"📚 {escape(category)}\n\n"
+            f"{escape(question_text)}"
+        )
+        
+        safe_explanation = escape(explanation_text) if explanation_text else None
+        open_period_seconds = 600
+        
+        # Send the quiz poll
+        sent_poll = bot.send_poll(
+            chat_id=GROUP_ID,
+            message_thread_id=QUIZ_TOPIC_ID,
+            question=formatted_question,
+            options=formatted_options,
+            type='quiz',
+            correct_option_id=correct_index,
+            is_anonymous=False,
+            open_period=open_period_seconds,
+            explanation=safe_explanation,
+            explanation_parse_mode="HTML"
+        )
+        
+        # Baaki ka logic (timer message, tracking, etc.) same rahega
+        current_hour = datetime.datetime.now(IST).hour
+        
+        if 6 <= current_hour < 12:
+            time_greeting = "🌅 <b>Morning Challenge!</b>"
+            motivation = "Start your day with knowledge! ☕"
+        elif 12 <= current_hour < 17:
+            time_greeting = "☀️ <b>Afternoon Brain Boost!</b>"
+            motivation = "Power up your mind! 💪"
+        elif 17 <= current_hour < 21:
+            time_greeting = "🌆 <b>Evening Quiz Time!</b>"
+            motivation = "End your day smartly! 🎯"
+        else:
+            time_greeting = "🌙 <b>Night Owl Challenge!</b>"
+            motivation = "Late night learning! 🦉"
+        
+        timer_message = f"""{time_greeting}
+
+⏰ <b>10 Minutes</b> to showcase your knowledge!
+
+{motivation}
+
+🏆 <i>Every answer counts towards your leaderboard position!</i>"""
+
+        bot.send_message(
+            GROUP_ID, 
+            timer_message, 
+            reply_to_message_id=sent_poll.message_id, 
+            parse_mode="HTML", 
+            message_thread_id=QUIZ_TOPIC_ID
+        )
+        
+        active_polls.append({
+            'poll_id': sent_poll.poll.id,
+            'correct_option_id': correct_index,
+            'type': 'random_quiz',
+            'question_id': question_id,
+            'category': category
+        })
+        
+        supabase.table('questions').update({'used': True}).eq('id', question_id).execute()
+        print(f"✅ Marked question ID {question_id} as used.")
+        
+        bot.send_message(admin_chat_id, "✅ Visual Quiz posted successfully!", parse_mode="HTML")
+
+    except Exception as e:
+        tb_string = traceback.format_exc()
+        print(f"CRITICAL Error in /randomquizvisual: {tb_string}")
+        report_error_to_admin(f"Failed to post visual quiz:\n{tb_string}")
+        bot.send_message(admin_chat_id, "🚨 Critical Error: Could not post the visual quiz.", parse_mode="HTML")
 # =============================================================================
 # 8. TELEGRAM BOT HANDLERS - ADMIN & FEEDBACK
 # =============================================================================
@@ -3016,7 +3196,8 @@ def handle_activity_report(msg: types.Message):
 @bot.callback_query_handler(func=lambda call: call.data.startswith('post_public_report_'))
 def handle_public_report_confirmation(call: types.CallbackQuery):
     """
-    Handles the admin's choice to post the public summary, now using safe HTML.
+    Handles the admin's choice to post the public summary.
+    This version now INCLUDES inactive members in the public report.
     """
     admin_id = call.from_user.id
     bot.edit_message_text("Processing your choice...", admin_id, call.message.message_id)
@@ -3027,12 +3208,13 @@ def handle_public_report_confirmation(call: types.CallbackQuery):
             bot.send_message(admin_id, "❌ Sorry, the report data expired. Please run /activity_report again.")
             return
 
-        # THE FIX: Converted the entire public report to safe HTML.
-        public_report = "🏆 <b>Group Activity Wall of Fame!</b> 🏆\n\nA big shout-out to our most engaged members from the past week!\n\n"
+        public_report = "🏆 <b>Group Activity Wall of Fame & Health Report!</b> 🏆\n\nA big shout-out to our most engaged members and a gentle nudge for others!\n\n"
         
         core_active = report_data.get('core_active', [])
         quiz_champions = report_data.get('quiz_champions', [])
         silent_observers = report_data.get('silent_observers', [])
+        at_risk = report_data.get('at_risk', [])
+        ghosts = report_data.get('ghosts', [])
         
         if core_active:
             public_report += "🔥 <b>Core Active (Quiz + Chat):</b>\n" + format_user_list(core_active) + "\n"
@@ -3041,17 +3223,25 @@ def handle_public_report_confirmation(call: types.CallbackQuery):
         if silent_observers:
             public_report += "👀 <b>Silent Observers (Chat Only):</b>\n" + format_user_list(silent_observers) + "\n"
         
-        public_report += "<i>Keep up the fantastic participation! Let's see your name here next week!</i> 💪"
+        # Naya code jo inactive members ko public report mein add karega
+        inactive_members = at_risk + ghosts
+        if inactive_members:
+            inactive_members_formatted = format_user_list(inactive_members)
+            inactive_text = f"""⚠️ <b>Inactive Members</b>
+{inactive_members_formatted}
+<i>Guys, we miss you in the quizzes! Come back and join the fun!</i> 💖\n"""
+            public_report += inactive_text
+
+        public_report += "\n<i>Let's see everyone in the active lists next week!</i> 💪"
         
         bot.send_message(GROUP_ID, public_report, parse_mode="HTML", message_thread_id=UPDATES_TOPIC_ID)
-        bot.send_message(admin_id, "✅ Public summary has been posted to the group.")
+        bot.send_message(admin_id, "✅ Public summary (including inactive members) has been posted to the group.")
 
     else: # If the choice is 'no'
         bot.send_message(admin_id, "👍 Okay, no public message will be sent.")
 
     if admin_id in user_states and 'last_report_data' in user_states[admin_id]:
         del user_states[admin_id]['last_report_data']
-
 # --- Helper functions for parsing text ---
 
 def parse_time_to_seconds(time_str):
@@ -5794,7 +5984,7 @@ def handle_run_checks_confirmation(call: types.CallbackQuery):
 
         if actions['first_warnings']:
             # This message is already safe HTML from our previous fix
-            user_list = [f"@{escape(user['user_name'])}" for user in actions['first_warnings']]
+            user_list = [f"{escape(user['user_name'])}" for user in actions['first_warnings']]
             message = (f"⚠️ <b>Quiz Activity Warning!</b> ⚠️\n"
                        f"The following members have not participated in any quiz for the last 3 days: {', '.join(user_list)}.\n"
                        f"This is your final 24-hour notice.")
