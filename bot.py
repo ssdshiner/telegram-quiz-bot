@@ -1277,7 +1277,7 @@ bot.edit_message_text(
             reply_markup=markup,
             parse_mode="HTML"
         )
-    else: # 'add_fileid_no'
+    else: 
         if admin_id in user_states:
             del user_states[admin_id]
         bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id)
