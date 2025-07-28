@@ -4568,183 +4568,188 @@ def send_final_report_sequence(session_id):
         report_error_to_admin(f"CRITICAL: Failed during final report sequence for session {session_id}:\n{e}")
         # Even if sending fails, we MUST try to clean up.
         send_marathon_results(session_id)
+
 def send_marathon_results(session_id):
-session = QUIZ_SESSIONS.get(session_id)
-if not session:
-return  # Session already cleaned up or never existed
-try:
-    # This part contains all your original logic for processing results
-    session['is_active'] = False  # Prevent new questions from being sent
-    participants = QUIZ_PARTICIPANTS.get(session_id)
-    
-    total_questions_asked = session.get('current_question_index', 0)
-    total_planned_questions = len(session.get('questions', []))
+    """
+    Generates and sends comprehensive marathon results with legend tiers,
+    and guarantees session cleanup to prevent memory leaks.
+    """
+    session = QUIZ_SESSIONS.get(session_id)
+    if not session:
+        return  # Session already cleaned up or never existed
 
-    # Mark used questions in database
-    if session.get('questions') and total_questions_asked > 0:
-        try:
-            used_question_ids = [q['id'] for q in session['questions'][:total_questions_asked]]
-            if used_question_ids:
-                supabase.table('quiz_questions').update({'used': True}).in_('id', used_question_ids).execute()
-        except Exception as e:
-            report_error_to_admin(f"Failed to mark marathon questions as used.\n\nError: {traceback.format_exc()}")
-    
-    safe_quiz_title = escape(session.get('title', 'Quiz Marathon'))
+    try:
+        # This part contains all your original logic for processing results
+        session['is_active'] = False  # Prevent new questions from being sent
+        participants = QUIZ_PARTICIPANTS.get(session_id)
+        
+        total_questions_asked = session.get('current_question_index', 0)
+        total_planned_questions = len(session.get('questions', []))
 
-    if not participants:
-        # Logic for no participants...
-        duration = datetime.datetime.now() - session['stats']['start_time']
-        no_participants_message = f"""&lt;b&gt;MARATHON COMPLETED&lt;/b&gt;
-Quiz: '{safe_quiz_title}'
-Duration: {format_duration(duration.total_seconds())}
-Questions: {total_questions_asked}/{total_planned_questions} asked
+        # Mark used questions in database
+        if session.get('questions') and total_questions_asked > 0:
+            try:
+                used_question_ids = [q['id'] for q in session['questions'][:total_questions_asked]]
+                if used_question_ids:
+                    supabase.table('quiz_questions').update({'used': True}).in_('id', used_question_ids).execute()
+            except Exception as e:
+                report_error_to_admin(f"Failed to mark marathon questions as used.\n\nError: {traceback.format_exc()}")
+        
+        safe_quiz_title = escape(session.get('title', 'Quiz Marathon'))
 
-Participation: No warriors joined this battle!
+        if not participants:
+            # Logic for no participants...
+            duration = datetime.datetime.now() - session['stats']['start_time']
+            no_participants_message = f"""🏁 <b>MARATHON COMPLETED</b>
 
-Next Time Tips:
+🎯 <b>Quiz:</b> '{safe_quiz_title}'
+⏱️ <b>Duration:</b> {format_duration(duration.total_seconds())}
+📊 <b>Questions:</b> {total_questions_asked}/{total_planned_questions} asked
+
+😅 <b>Participation:</b> No warriors joined this battle!
+
+💡 <b>Next Time Tips:</b>
 • Share marathon announcements
-• Schedule during peak hours
-
+• Schedule during peak hours  
 • Create excitement with topics people love
 
-Every quiz is a learning opportunity!
+🚀 <b>Every quiz is a learning opportunity!</b>
 
-C.A.V.Y.A is here to make learning fun! """
-bot.send_message(GROUP_ID, no_participants_message, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
-
-    else:
-        # All your beautiful result processing logic goes here.
-        # This part is unchanged from your original code.
-        sorted_items = sorted(
-            participants.items(), 
-            key=lambda item: (item[1]['score'], -item[1]['total_time']), 
-            reverse=True
-        )
+<b>C.A.V.Y.A is here to make learning fun! 💝</b>"""
+            bot.send_message(GROUP_ID, no_participants_message, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
         
-        participant_ids = list(participants.keys())
-        
-        try:
-            pre_quiz_stats_response = supabase.rpc('get_pre_marathon_stats', {'p_user_ids': participant_ids}).execute()
-            pre_quiz_stats_dict = {item['user_id']: item for item in pre_quiz_stats_response.data}
-        except:
-            pre_quiz_stats_dict = {}
-
-        try:
-            total_active_members_response = supabase.rpc('get_total_active_members', {'days_interval': 7}).execute()
-            total_active_members = total_active_members_response.data or len(participants)
-        except:
-            total_active_members = len(participants)
-        
-        all_scores = [p['score'] for p in participants.values()]
-        
-        APPRECIATION_STREAK = 8
-        for user_id, p in sorted_items:
-            # Calculate legend tier
-            legend_tier = calculate_legend_tier(p['score'], total_questions_asked, all_scores)
-            p['legend_tier'] = legend_tier
-
-            # --- NEW: Call the single, powerful Supabase function ---
-            try:
-                # The performance_breakdown from poll handler is already in the correct JSON format
-                performance_data = p.get('performance_breakdown', {})
-                
-                supabase.rpc('finalize_marathon_user_data', {
-                    'p_user_id': user_id,
-                    'p_user_name': p.get('user_name', p.get('name')), # Use the more reliable username
-                    'p_score_achieved': p.get('score', 0),
-                    'p_time_taken_seconds': p.get('total_time', 0),
-                    'p_performance_breakdown': performance_data
-                }).execute()
-                
-            except Exception as e:
-                error_msg = f"Critical error finalizing data for user {user_id} via RPC."
-                print(f"{error_msg}\n{traceback.format_exc()}")
-                report_error_to_admin(f"{error_msg}\nError: {e}")
-
-            # Check for achievements
-            user_pre_stats = pre_quiz_stats_dict.get(user_id, {})
-            highest_before = user_pre_stats.get('highest_marathon_score') or 0
-            streak_before = user_pre_stats.get('current_streak') or 0
+        else:
+            # All your beautiful result processing logic goes here.
+            # This part is unchanged from your original code.
+            sorted_items = sorted(
+                participants.items(), 
+                key=lambda item: (item[1]['score'], -item[1]['total_time']), 
+                reverse=True
+            )
             
-            if p['score'] > highest_before:
-                p['pb_achieved'] = True
-            if (streak_before + 1) == APPRECIATION_STREAK:
-                p['streak_completed'] = True
-        
-        marathon_duration = datetime.datetime.now() - session['stats']['start_time']
-        
-        results_text = f"""&lt;b&gt;MARATHON RESULTS - '{safe_quiz_title}'&lt;/b&gt;
+            participant_ids = list(participants.keys())
+            
+            try:
+                pre_quiz_stats_response = supabase.rpc('get_pre_marathon_stats', {'p_user_ids': participant_ids}).execute()
+                pre_quiz_stats_dict = {item['user_id']: item for item in pre_quiz_stats_response.data}
+            except:
+                pre_quiz_stats_dict = {}
+
+            try:
+                total_active_members_response = supabase.rpc('get_total_active_members', {'days_interval': 7}).execute()
+                total_active_members = total_active_members_response.data or len(participants)
+            except:
+                total_active_members = len(participants)
+            
+            all_scores = [p['score'] for p in participants.values()]
+            
+            APPRECIATION_STREAK = 8
+            for user_id, p in sorted_items:
+                # Calculate legend tier
+                legend_tier = calculate_legend_tier(p['score'], total_questions_asked, all_scores)
+                p['legend_tier'] = legend_tier
+
+                # --- NEW: Call the single, powerful Supabase function ---
+                try:
+                    # The performance_breakdown from poll handler is already in the correct JSON format
+                    performance_data = p.get('performance_breakdown', {})
+                    
+                    supabase.rpc('finalize_marathon_user_data', {
+                        'p_user_id': user_id,
+                        'p_user_name': p.get('user_name', p.get('name')), # Use the more reliable username
+                        'p_score_achieved': p.get('score', 0),
+                        'p_time_taken_seconds': p.get('total_time', 0),
+                        'p_performance_breakdown': performance_data
+                    }).execute()
+                    
+                except Exception as e:
+                    error_msg = f"Critical error finalizing data for user {user_id} via RPC."
+                    print(f"{error_msg}\n{traceback.format_exc()}")
+                    report_error_to_admin(f"{error_msg}\nError: {e}")
+
+                # Check for achievements
+                user_pre_stats = pre_quiz_stats_dict.get(user_id, {})
+                highest_before = user_pre_stats.get('highest_marathon_score') or 0
+                streak_before = user_pre_stats.get('current_streak') or 0
+                
+                if p['score'] > highest_before:
+                    p['pb_achieved'] = True
+                if (streak_before + 1) == APPRECIATION_STREAK:
+                    p['streak_completed'] = True
+            
+            marathon_duration = datetime.datetime.now() - session['stats']['start_time']
+            
+            results_text = f"""🏁 <b>MARATHON RESULTS - '{safe_quiz_title}'</b> 🏁
 { "━"*25 }
-Marathon Statistics:
-• Questions: {total_questions_asked} asked ({total_planned_questions} planned)
-• Duration: {format_duration(marathon_duration.total_seconds())}
-• Warriors: {len(participants)} participants"""
-if total_active_members > 0:
-participation_percentage = (len(participants) / total_active_members) * 100
-results_text += f"\n• Participation: {participation_percentage:.0f}% of active members"
-results_text += f"\n\n{ '━'*25 }\n\n"
-
-        champion_id, champion_data = sorted_items[0]
-        champion_name = escape(champion_data['name'])
-        champion_score = champion_data['score']
-        champion_accuracy = (champion_score / total_questions_asked * 100) if total_questions_asked > 0 else 0
-        champion_time = format_duration(champion_data['total_time'])
-        results_text += f"""&lt;b&gt;MARATHON CHAMPION&lt;/b&gt;
-{champion_name}
-Score: {champion_score}/{total_questions_asked} ({champion_accuracy:.1f}%)
-Time: {champion_time}"""
-if champion_data.get('legend_tier'):
-tier_info = champion_data['legend_tier']
-results_text += f"\n{tier_info['title']}"
-achievements = []
-if champion_data.get('pb_achieved'): achievements.append(" Personal Best!")
-if champion_data.get('streak_completed'): achievements.append(" Streak Master!")
-if achievements: results_text += f"\n {' • '.join(achievements)}"
-results_text += f"\n\n{ '━'*25 }\n\n"
-
-        results_text += "&lt;b&gt;FINAL LEADERBOARD&lt;/b&gt;\n\n"
-        rank_emojis = ["🥇", "🥈", "🥉"]
-        for i, (user_id, p) in enumerate(sorted_items[:10]):
-            rank = rank_emojis[i] if i < 3 else f"  &lt;b&gt;{i + 1}.&lt;/b&gt;"
-            name = escape(p['name'])
-            percentage = (p['score'] / total_questions_asked * 100) if total_questions_asked > 0 else 0
-            formatted_time = format_duration(p['total_time'])
-            display_name = name[:22] + "..." if len(name) > 25 else name
-            line = f"{rank} &lt;b&gt;{display_name}&lt;/b&gt; – {p['score']} ({percentage:.0f}%) {formatted_time}"
-            if p.get('legend_tier'): line += f" {p['legend_tier']['emoji']}"
-            if p.get('pb_achieved'): line += " 🏆"
-            if p.get('streak_completed'): line += " 🔥"
-            results_text += line + "\n"
-        results_text += f"\n{ '━'*25 }\n\n"
-        
-        tier_counts = {}
-        for _, p in sorted_items:
-            if p.get('legend_tier'):
-                tier = p['legend_tier']['tier']
-                tier_counts[tier] = tier_counts.get(tier, 0) + 1
-        if tier_counts:
-            results_text += "&lt;b&gt;LEGEND TIER DISTRIBUTION&lt;/b&gt;\n\n"
-            tier_order = ['DIAMOND', 'GOLD', 'SILVER', 'BRONZE']
-            tier_emojis = {'DIAMOND': '💎', 'GOLD': '🏆', 'SILVER': '🥈', 'BRONZE': '🥉'}
-            for tier in tier_order:
-                if tier in tier_counts:
-                    results_text += f"{tier_emojis[tier]} {tier.title()}: &lt;b&gt;{tier_counts[tier]}&lt;/b&gt; legends\n"
+📊 <b>Marathon Statistics:</b>
+• Questions: <b>{total_questions_asked}</b> asked ({total_planned_questions} planned)
+• Duration: <b>{format_duration(marathon_duration.total_seconds())}</b>
+• Warriors: <b>{len(participants)}</b> participants"""
+            if total_active_members > 0:
+                participation_percentage = (len(participants) / total_active_members) * 100
+                results_text += f"\n• Participation: <b>{participation_percentage:.0f}%</b> of active members"
+            results_text += f"\n\n{ '━'*25 }\n\n"
+            
+            champion_id, champion_data = sorted_items[0]
+            champion_name = escape(champion_data['name'])
+            champion_score = champion_data['score']
+            champion_accuracy = (champion_score / total_questions_asked * 100) if total_questions_asked > 0 else 0
+            champion_time = format_duration(champion_data['total_time'])
+            results_text += f"""👑 <b>MARATHON CHAMPION</b> 👑
+🏆 <u><b>{champion_name}</b></u>
+📊 Score: <b>{champion_score}/{total_questions_asked}</b> ({champion_accuracy:.1f}%)
+⏱️ Time: <b>{champion_time}</b>"""
+            if champion_data.get('legend_tier'):
+                tier_info = champion_data['legend_tier']
+                results_text += f"\n{tier_info['emoji']} <b>{tier_info['title']}</b>"
+            achievements = []
+            if champion_data.get('pb_achieved'): achievements.append("🔥 Personal Best!")
+            if champion_data.get('streak_completed'): achievements.append("⚡ Streak Master!")
+            if achievements: results_text += f"\n🎯 {' • '.join(achievements)}"
+            results_text += f"\n\n{ '━'*25 }\n\n"
+            
+            results_text += "🏆 <b>FINAL LEADERBOARD</b>\n\n"
+            rank_emojis = ["🥇", "🥈", "🥉"]
+            for i, (user_id, p) in enumerate(sorted_items[:10]):
+                rank = rank_emojis[i] if i < 3 else f"  <b>{i + 1}.</b>"
+                name = escape(p['name'])
+                percentage = (p['score'] / total_questions_asked * 100) if total_questions_asked > 0 else 0
+                formatted_time = format_duration(p['total_time'])
+                display_name = name[:22] + "..." if len(name) > 25 else name
+                line = f"{rank} <b>{display_name}</b> – {p['score']} ({percentage:.0f}%) {formatted_time}"
+                if p.get('legend_tier'): line += f" {p['legend_tier']['emoji']}"
+                if p.get('pb_achieved'): line += " 🏆"
+                if p.get('streak_completed'): line += " 🔥"
+                results_text += line + "\n"
             results_text += f"\n{ '━'*25 }\n\n"
-        
-        results_text += "&lt;b&gt;Congratulations to all participants!&lt;/b&gt;"
-        
-        bot.send_message(GROUP_ID, results_text, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
-        
-
-finally:
-    # THIS BLOCK WILL *ALWAYS* RUN, even if errors happen above.
-    # This guarantees that we clean up the session data.
-    print(f"Cleaning up session data for session_id: {session_id}")
-    if session_id in QUIZ_SESSIONS: 
-        del QUIZ_SESSIONS[session_id]
-    if session_id in QUIZ_PARTICIPANTS: 
-        del QUIZ_PARTICIPANTS[session_id]
-
+            
+            tier_counts = {}
+            for _, p in sorted_items:
+                if p.get('legend_tier'):
+                    tier = p['legend_tier']['tier']
+                    tier_counts[tier] = tier_counts.get(tier, 0) + 1
+            if tier_counts:
+                results_text += "💎 <b>LEGEND TIER DISTRIBUTION</b>\n\n"
+                tier_order = ['DIAMOND', 'GOLD', 'SILVER', 'BRONZE']
+                tier_emojis = {'DIAMOND': '💎', 'GOLD': '🏆', 'SILVER': '🥈', 'BRONZE': '🥉'}
+                for tier in tier_order:
+                    if tier in tier_counts:
+                        results_text += f"{tier_emojis[tier]} {tier.title()}: <b>{tier_counts[tier]}</b> legends\n"
+                results_text += f"\n{ '━'*25 }\n\n"
+            
+            results_text += "🎉 <b>Congratulations to all participants!</b>"
+            
+            bot.send_message(GROUP_ID, results_text, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
+            
+    
+    finally:
+        # THIS BLOCK WILL *ALWAYS* RUN, even if errors happen above.
+        # This guarantees that we clean up the session data.
+        print(f"Cleaning up session data for session_id: {session_id}")
+        if session_id in QUIZ_SESSIONS: 
+            del QUIZ_SESSIONS[session_id]
+        if session_id in QUIZ_PARTICIPANTS: 
+            del QUIZ_PARTICIPANTS[session_id]
 
 def send_performance_analysis(session, participants):
     """
