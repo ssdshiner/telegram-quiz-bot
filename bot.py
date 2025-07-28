@@ -3829,7 +3829,6 @@ def process_marathon_question_count(msg: types.Message):
             bot.send_message(user_id, lost_data_message, parse_mode="HTML")
             return
 
-        # Show beautiful setup progress
         setup_message = f"""⚙️ <b>MARATHON SETUP IN PROGRESS</b>
 
 🎯 <b>Quiz Set:</b> {escape(selected_set)}
@@ -3842,10 +3841,8 @@ def process_marathon_question_count(msg: types.Message):
 • ⏳ Preparing quiz environment...
 
 <i>This will take just a moment...</i>"""
-
         setup_msg = bot.send_message(user_id, setup_message, parse_mode="HTML")
         
-        # Fetch preset details
         preset_details_res = supabase.table('quiz_presets').select('quiz_title, quiz_description').eq('set_name', selected_set).single().execute()
         
         if not preset_details_res.data:
@@ -3860,13 +3857,11 @@ def process_marathon_question_count(msg: types.Message):
 • Contact technical support
 
 🔄 <i>Please try with a different set...</i>"""
-
             bot.edit_message_text(preset_error_message, user_id, setup_msg.message_id, parse_mode="HTML")
             return
             
         preset_details = preset_details_res.data
         
-        # Update progress
         progress_message = f"""⚙️ <b>MARATHON SETUP IN PROGRESS</b>
 
 🎯 <b>Quiz Set:</b> {escape(selected_set)}
@@ -3879,10 +3874,8 @@ def process_marathon_question_count(msg: types.Message):
 • ⏳ Preparing quiz environment...
 
 <i>Loading {num_questions} questions...</i>"""
-
         bot.edit_message_text(progress_message, user_id, setup_msg.message_id, parse_mode="HTML")
         
-        # Fetch questions for the selected set
         questions_res = supabase.table('quiz_questions').select('*').eq('quiz_set', selected_set).eq('used', False).order('id').limit(num_questions).execute()
         
         if not questions_res.data:
@@ -3898,7 +3891,6 @@ def process_marathon_question_count(msg: types.Message):
 • Choose a different quiz set
 
 📚 <i>Question bank needs attention!</i>"""
-
             bot.edit_message_text(no_questions_message, user_id, setup_msg.message_id, parse_mode="HTML")
             return
 
@@ -3906,7 +3898,6 @@ def process_marathon_question_count(msg: types.Message):
         random.shuffle(questions_for_marathon)
         actual_count = len(questions_for_marathon)
         
-        # Show warning if fewer questions available
         if actual_count < num_questions:
             warning_message = f"""⚠️ <b>QUESTION COUNT ADJUSTED</b>
 
@@ -3916,11 +3907,9 @@ def process_marathon_question_count(msg: types.Message):
 ✅ <b>Action:</b> Marathon will run with {actual_count} questions
 
 🚀 <i>Proceeding with available questions...</i>"""
-
             bot.edit_message_text(warning_message, user_id, setup_msg.message_id, parse_mode="HTML")
             time.sleep(3)
         
-        # Final setup progress
         final_setup_message = f"""⚙️ <b>MARATHON SETUP FINALIZING</b>
 
 🎯 <b>Quiz Set:</b> {escape(selected_set)}
@@ -3933,10 +3922,8 @@ def process_marathon_question_count(msg: types.Message):
 • ⏳ Preparing group announcement...
 
 <i>Almost ready to launch!</i>"""
-
         bot.edit_message_text(final_setup_message, user_id, setup_msg.message_id, parse_mode="HTML")
         
-        # Initialize marathon session
         session_id = str(GROUP_ID)
         QUIZ_SESSIONS[session_id] = {
             'title': preset_details['quiz_title'],
@@ -3948,37 +3935,32 @@ def process_marathon_question_count(msg: types.Message):
                 'question_times': {},
                 'start_time': datetime.datetime.now(),
                 'total_questions': actual_count,
-                'current_phase': 'starting'  # starting, early, middle, final
+                'current_phase': 'starting'
             },
-            'leaderboard_updates': [],  # Track when to show leaderboard updates
+            'leaderboard_updates': [],
             'performance_tracker': {
-                'topics': {},
-                'question_types': {},
-                'difficulty_levels': {}
+                'topics': {}, 'question_types': {}, 'difficulty_levels': {}
             }
         }
         QUIZ_PARTICIPANTS[session_id] = {}
 
-        # Show mid-quiz leaderboard only once, after question 5 (before question 6)
-    # Show mid-quiz leaderboard at the 1/3 and 2/3 marks of the marathon
-    update_intervals = []
-    if actual_count >= 9: # Sirf 9+ questions waale quiz mein 2 baar dikhayega
-        q_third = actual_count // 3
-        update_intervals.append(q_third)
-        # Aakhri update end se bahut paas na ho, isliye check
-        if (q_third * 2) < (actual_count - 2):
-             update_intervals.append(q_third * 2)
-    elif actual_count >= 6: # 6-8 questions waale quiz mein 1 baar dikhayega
-        update_intervals.append(actual_count // 2)
+        # --- THE FIX IS HERE ---
+        # This whole block is now correctly indented inside the 'try' block.
+        update_intervals = []
+        if actual_count >= 9:
+            q_third = actual_count // 3
+            update_intervals.append(q_third)
+            if (q_third * 2) < (actual_count - 2):
+                 update_intervals.append(q_third * 2)
+        elif actual_count >= 6:
+            update_intervals.append(actual_count // 2)
+        QUIZ_SESSIONS[session_id]['leaderboard_updates'] = update_intervals
+        # --- END OF FIX ---
 
-    QUIZ_SESSIONS[session_id]['leaderboard_updates'] = update_intervals
-
-        # Send beautiful marathon announcement
         safe_title = escape(preset_details['quiz_title'])
         safe_description = escape(preset_details['quiz_description'])
         
-        # Estimate duration
-        estimated_minutes = actual_count * 1.5  # Rough estimate: 1.5 min per question
+        estimated_minutes = actual_count * 1.5
         duration_text = f"{int(estimated_minutes)} minutes" if estimated_minutes < 60 else f"{int(estimated_minutes/60)} hour{'s' if estimated_minutes >= 120 else ''}"
         
         marathon_announcement = f"""🏁 <b>QUIZ MARATHON BEGINS!</b> 🏁
@@ -4003,10 +3985,8 @@ def process_marathon_question_count(msg: types.Message):
 🎯 <i>First question coming up in 5 seconds...</i>
 
 💪 <b>May the best mind win!</b> 🏆"""
-
         bot.send_message(GROUP_ID, marathon_announcement, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
 
-        # Send admin confirmation
         admin_confirmation = f"""✅ <b>MARATHON LAUNCHED SUCCESSFULLY!</b>
 
 🎯 <b>Set:</b> {escape(selected_set)}
@@ -4021,14 +4001,11 @@ def process_marathon_question_count(msg: types.Message):
 • Marathon will auto-complete
 
 <i>Marathon is now active in the group!</i>"""
-
         bot.edit_message_text(admin_confirmation, user_id, setup_msg.message_id, parse_mode="HTML")
 
-        # Start the marathon after 5 seconds
         time.sleep(5)
         send_marathon_question(session_id)
         
-        # Clean up user state
         if user_id in user_states: 
             del user_states[user_id]
 
@@ -4044,7 +4021,6 @@ def process_marathon_question_count(msg: types.Message):
 • Type <code>50</code> for 50 questions
 
 <i>Please enter just the number...</i>"""
-
         prompt = bot.send_message(user_id, invalid_number_message, parse_mode="HTML")
         bot.register_next_step_handler(prompt, process_marathon_question_count)
         
@@ -4063,12 +4039,10 @@ def process_marathon_question_count(msg: types.Message):
 🔄 <b>Solution:</b> Please try again or contact support
 
 <i>We apologize for the inconvenience!</i>"""
-
         try:
             bot.edit_message_text(critical_error_message, user_id, setup_msg.message_id, parse_mode="HTML")
         except:
             bot.send_message(user_id, critical_error_message, parse_mode="HTML")
-
 
 def send_marathon_question(session_id):
     """
