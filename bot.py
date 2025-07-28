@@ -1783,7 +1783,6 @@ def handle_need_command(msg: types.Message):
         bot.reply_to(msg, "❌ An error occurred while searching for the file.")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('getfile_'))
-@bot.callback_query_handler(func=lambda call: call.data.startswith('getfile_'))
 def handle_getfile_callback(call: types.CallbackQuery):
     """
     Handles the button click. It now receives the short primary key 'id',
@@ -1812,7 +1811,11 @@ def handle_getfile_callback(call: types.CallbackQuery):
             file_name_to_send = response.data['file_name']
             
             # 1. Send the file to the user
-            bot.send_document(chat_id=call.message.chat.id, document=file_id_to_send)
+            bot.send_document(
+                chat_id=call.message.chat.id, 
+                document=file_id_to_send,
+                message_thread_id=call.message.message_thread_id
+            )
             
             # 2. **THE FIX**: Edit the original message to show a success confirmation.
             # This automatically removes the old buttons and prevents the error.
