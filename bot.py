@@ -612,10 +612,9 @@ def run_daily_checks():
         final_warnings, first_warnings = find_inactive_users()
 
         if first_warnings:
-            # Using HTML mentions which work for everyone
-            user_list = [f"<a href='tg://user?id={user['user_id']}'>{escape(user['user_name'])}</a>" for user in first_warnings]
+            user_list_str = format_user_mention_list(first_warnings)
             message = (f"⚠️ <b>Quiz Activity Warning!</b> ⚠️\n"
-                       f"The following members have not participated in any quiz for the last 3 days: {', '.join(user_list)}.\n"
+                       f"The following members have not participated in any quiz for the last 3 days: {user_list_str}.\n"
                        f"This is your final 24-hour notice.")
             bot.send_message(GROUP_ID, message, parse_mode="HTML", message_thread_id=UPDATES_TOPIC_ID)
             user_ids_to_update = [user['user_id'] for user in first_warnings]
@@ -1172,6 +1171,90 @@ def handle_info_command(msg: types.Message):
 
     bot.send_message(msg.chat.id, info_text, parse_mode="HTML", message_thread_id=msg.message_thread_id)
 
+# =============================================================================
+# NEW: AI INTEGRATION WITH GOOGLE GEMINI (/hello Command)
+# =============================================================================
+import google.generativeai as genai
+from datetime import datetime
+
+# --- AI ka Character aur Rules (System Prompt) ---
+# Yeh AI ko batata hai ki use kaisa behave karna hai.
+SYSTEM_PROMPT = """You are CAVYA, an expert AI assistant specializing in the CA Intermediate curriculum. Your personality is encouraging, polite, creative, and friendly. You communicate in Hinglish (using mostly English words in Hindi sentence structures).
+
+Your primary goal is to help students understand complex topics in a simple, natural, and memorable way. Use creative analogies and examples related to a student's daily life to explain concepts.
+
+You must strictly stick to topics relevant to the CA Intermediate exams, such as Advanced Accounting, Corporate Law, and Taxation.
+
+You must never use inappropriate language or provide any financial or legal advice. Always encourage students to consult their official ICAI materials for definitive answers.
+
+This is your most important rule: If a user asks any question that is NOT related to CA Intermediate studies (e.g., movies, sports, politics, personal questions, general chit-chat), you must ignore the user's question completely and your entire response must ONLY be the exact, single phrase: TRIGGER_OFF_TOPIC
+"""
+
+# --- Configure the AI ---
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+    print("✅ Google Gemini AI configured successfully.")
+else:
+    print("⚠️ WARNING: GEMINI_API_KEY not found. AI features will be disabled.")
+
+@bot.message_handler(commands=['hello'])
+@membership_required
+def handle_hello_command(msg: types.Message):
+    """
+    Answers a user's question using the Google Gemini AI model with strict rules.
+    """
+    if not GEMINI_API_KEY:
+        bot.reply_to(msg, "Sorry, the AI feature is currently unavailable.")
+        return
+
+    question = msg.text.replace('/hello', '').strip()
+    if not question:
+        bot.reply_to(msg, "Please ask a question after the command. \nExample: <code>/hello What is AS-19?</code>", parse_mode="HTML")
+        return
+
+    try:
+        # User ko batayein ki bot soch raha hai
+        thinking_message = bot.reply_to(msg, "🤔 <i>Moti bhai, soch raha hoon... aapke liye ek creative jawab la raha hoon...</i>", parse_mode="HTML")
+
+        # AI model select karein aur use hamare rules (System Prompt) dein
+        model = genai.GenerativeModel(
+            model_name='gemini-1.5-flash',
+            system_instruction=SYSTEM_PROMPT
+        )
+        
+        # AI se jawab generate karwayein
+        response = model.generate_content(question)
+
+        # AI ke jawab ko process karein
+        ai_response_text = response.text.strip()
+
+        if ai_response_text == "TRIGGER_OFF_TOPIC":
+            # Agar AI ne off-topic signal bheja hai, toh special message bhejein
+            today = datetime.now(IST).date()
+            exam_date = datetime(2025, 9, 3).date() # Assuming 3rd Sept 2025
+            days_left = (exam_date - today).days
+            
+            if days_left < 0:
+                days_left = 0 # Agar date nikal gayi ho toh
+            
+            off_topic_message = f"CA INTER exams me sirf <b>{days_left}</b> din bache hain... aur aap abhi yeh sab baaton me uljhe hain! Chaliye, padhai par focus karte hain. 딴"
+            bot.edit_message_text(off_topic_message, msg.chat.id, thinking_message.message_id, parse_mode="HTML")
+        else:
+            # Agar jawab on-topic hai, toh use bhejein
+            bot.edit_message_text(
+                text=ai_response_text, 
+                chat_id=msg.chat.id, 
+                message_id=thinking_message.message_id
+            )
+
+    except Exception as e:
+        print(f"Error in /hello command with Gemini: {e}")
+        report_error_to_admin(f"Error in /hello command: {traceback.format_exc()}")
+        try:
+            bot.edit_message_text("😵 Sorry, Moti Bhai! Thoda technical issue aa gaya. Please try again later.", msg.chat.id, thinking_message.message_id)
+        except:
+            bot.reply_to(msg, "😵 Sorry, Moti Bhai! Thoda technical issue aa gaya. Please try again later.")
 
 # --- Admin Command: /message ---
 
@@ -3131,6 +3214,26 @@ def format_user_list(user_list):
         formatted_list += f"<code>{i + 1}.</code> {user_name}\n"
         
     return formatted_list
+def format_user_mention_list(user_list):
+    """
+    Takes a list of users and formats them for mentioning.
+    Uses @username if available, otherwise uses first_name without @.
+    """
+    if not user_list:
+        return "<i>None</i>"
+    
+    mentions = []
+    for user in user_list:
+        # 'user_name' key now holds the real username from the database
+        username = user.get('user_name')
+        if username:
+            mentions.append(f"@{escape(username)}")
+        else:
+            # If no username, use the first name without the '@'
+            first_name = user.get('first_name', 'Unknown User')
+            mentions.append(escape(first_name))
+            
+    return ", ".join(mentions)
 # =============================================================================
 # 8. TELEGRAM BOT HANDLERS - ADMIN REPORTS
 # =============================================================================
@@ -5993,9 +6096,8 @@ def handle_run_checks_confirmation(call: types.CallbackQuery):
             supabase.table('quiz_activity').update({'warning_level': 1}).in_('user_id', user_ids_to_update).execute()
         
         if actions['final_warnings']:
-            # This message is also already safe HTML
-            user_list = [f"@{escape(user['user_name'])}" for user in actions['final_warnings']]
-            message = f"Admins, please take action. The following members did not participate even after a final warning:\n" + ", ".join(user_list)
+            user_list_str = format_user_mention_list(actions['final_warnings'])
+            message = f"Admins, please take action. The following members did not participate even after a final warning:\n" + user_list_str
             bot.send_message(GROUP_ID, message, parse_mode="HTML", message_thread_id=UPDATES_TOPIC_ID)
             user_ids_to_update = [user['user_id'] for user in actions['final_warnings']]
             supabase.table('quiz_activity').update({'warning_level': 2}).in_('user_id', user_ids_to_update).execute()
