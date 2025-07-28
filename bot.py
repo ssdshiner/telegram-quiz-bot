@@ -2513,11 +2513,15 @@ def handle_random_quiz(msg: types.Message):
         
         title = "🖼️ Visual Quiz!" if image_file_id else random.choice(quiz_titles)
         
-        # FIX #1 (continued): We also unescape the question text itself.
+        # First, clean the text from the database to remove any existing HTML codes.
+        clean_question_text = unescape(question_text)
+        clean_category = unescape(category)
+        
+        # Now, create the question string with PLAIN, CLEAN text for the poll question.
         formatted_question = (
             f"{title}\n"
-            f"📚 {escape(category)}\n\n"
-            f"{escape(unescape(question_text))}"
+            f"📚 {clean_category}\n\n"
+            f"{clean_question_text}"
         )
         
         safe_explanation = escape(unescape(explanation_text)) if explanation_text else None
@@ -2662,13 +2666,17 @@ def handle_randomquizvisual(msg: types.Message):
         # FIX #1: Apostrophe issue fix
         formatted_options = [f"{option_emojis[i]} {unescape(str(opt))}" for i, opt in enumerate(options_data)]
         
-        # Step 3: Title ko "Visual Quiz" ke liye badlein
-        # FIX #1 (continued): Apostrophe issue fix
+        # Step 3: Title ko "Visual Quiz" ke liye badlein aur text ko saaf karein
+        clean_question_text = unescape(question_text)
+        clean_category = unescape(category)
+
+        # Poll ke question field ke liye hamesha plain text use karein (bina escape kiye)
         formatted_question = (
             f"🖼️ Visual Quiz Challenge!\n"
-            f"📚 {escape(category)}\n\n"
-            f"{escape(unescape(question_text))}"
+            f"📚 {clean_category}\n\n"
+            f"{clean_question_text}"
         )
+
         
         safe_explanation = escape(unescape(explanation_text)) if explanation_text else None
         open_period_seconds = 600
@@ -3952,7 +3960,18 @@ def process_marathon_question_count(msg: types.Message):
         QUIZ_PARTICIPANTS[session_id] = {}
 
         # Show mid-quiz leaderboard only once, after question 5 (before question 6)
-        QUIZ_SESSIONS[session_id]['leaderboard_updates'] = [5]
+    # Show mid-quiz leaderboard at the 1/3 and 2/3 marks of the marathon
+    update_intervals = []
+    if actual_count >= 9: # Sirf 9+ questions waale quiz mein 2 baar dikhayega
+        q_third = actual_count // 3
+        update_intervals.append(q_third)
+        # Aakhri update end se bahut paas na ho, isliye check
+        if (q_third * 2) < (actual_count - 2):
+             update_intervals.append(q_third * 2)
+    elif actual_count >= 6: # 6-8 questions waale quiz mein 1 baar dikhayega
+        update_intervals.append(actual_count // 2)
+
+    QUIZ_SESSIONS[session_id]['leaderboard_updates'] = update_intervals
 
         # Send beautiful marathon announcement
         safe_title = escape(preset_details['quiz_title'])
@@ -4114,7 +4133,7 @@ def send_marathon_question(session_id):
             report_error_to_admin(f"Failed to send image for QID {question_data.get('id')}")
 
     # ... [The rest of the function for creating and sending the poll remains the same] ...
-    options = [str(question_data.get(f'Option {c}', '')) for c in ['A', 'B', 'C', 'D']]
+    options = [unescape(str(question_data.get(f'Option {c}', ''))) for c in ['A', 'B', 'C', 'D']]
     correct_answer_letter = str(question_data.get('Correct Answer', 'A')).upper()
     correct_option_index = ['A', 'B', 'C', 'D'].index(correct_answer_letter)
     
@@ -4133,14 +4152,14 @@ def send_marathon_question(session_id):
 
 {progress_bar}
 
-{escape(clean_question)}"""
+{clean_question}"""
     
     poll_message = bot.send_poll(
         chat_id=GROUP_ID, message_thread_id=QUIZ_TOPIC_ID,
         question=question_text, options=options, type='quiz',
         correct_option_id=correct_option_index, is_anonymous=False,
         open_period=timer_seconds,
-        explanation=escape(str(question_data.get('Explanation', ''))),
+        explanation=escape(unescape(str(question_data.get('Explanation', '')))),
         explanation_parse_mode="HTML"
     )
 
