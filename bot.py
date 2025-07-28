@@ -4524,25 +4524,50 @@ def calculate_legend_tier(user_score, total_questions, all_scores):
 
 def send_final_report_sequence(session_id):
     """
-    A new orchestrator function to send the final messages in the correct order:
-    1. Performance Analysis
-    2. Marathon Results (which also handles cleanup)
+    A new, bulletproof orchestrator function to send the final messages.
+    It uses a lock and a 'results_sent' flag to be 100% certain that this
+    entire sequence runs only ONCE per marathon.
     """
-    session = QUIZ_SESSIONS.get(session_id)
+    session = None # Initialize session to None first
+
+    # This is the most important part. We use the master lock here.
+    with session_lock:
+        session = QUIZ_SESSIONS.get(session_id)
+        
+        # If the session doesn't exist, or if we have ALREADY started sending results,
+        # then stop immediately. This is the new safety check.
+        if not session or session.get('results_sent'):
+            return
+            
+        # If we are the first to get here, immediately "claim" the session by setting a flag.
+        session['results_sent'] = True
+    
+    # Now that we have claimed the session, we can release the lock and do the slow work.
     participants = QUIZ_PARTICIPANTS.get(session_id)
 
-    if not session or not participants:
-        print(f"Aborting final report for session {session_id} due to missing data.")
+    # Check for participants *after* claiming the session.
+    if not participants:
+        print(f"No participants for session {session_id}. Proceeding to cleanup.")
+        # We still call send_marathon_results because it contains the cleanup logic.
+        send_marathon_results(session_id)
         return
 
-    # Step 1: Send the performance analysis first.
-    send_performance_analysis(session, participants)
-    
-    # Add a small delay for better user experience
-    time.sleep(3)
-    
-    # Step 2: Send the final results, which includes the session cleanup.
-    send_marathon_results(session_id)
+    # If there are participants, send the full report.
+    try:
+        # Step 1: Send the performance analysis first.
+        send_performance_analysis(session, participants)
+        
+        # Add a small delay for better user experience
+        time.sleep(3)
+        
+        # Step 2: Send the final results, which includes the session cleanup.
+        send_marathon_results(session_id)
+        
+    except Exception as e:
+        print(f"An error occurred during the final report sequence: {traceback.format_exc()}")
+        report_error_to_admin(f"CRITICAL: Failed during final report sequence for session {session_id}:\n{e}")
+        # Even if sending fails, we MUST try to clean up.
+        send_marathon_results(session_id)
 
 def send_marathon_results(session_id):
     """
