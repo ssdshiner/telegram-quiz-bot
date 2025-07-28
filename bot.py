@@ -1270,14 +1270,15 @@ def handle_fileid_confirmation(call: types.CallbackQuery):
             types.InlineKeyboardButton("🎲 Random Quiz", callback_data="add_fileid_to_random"),
             types.InlineKeyboardButton("🏁 Quiz Marathon", callback_data="add_fileid_to_marathon")
         )
-bot.edit_message_text(
+        # YEH PART GALAT INDENTED THA, AB THEEK HAI
+        bot.edit_message_text(
             text="✅ Okay, let's add this image to a question.\n\n<b>Which quiz system is this for?</b>",
             chat_id=call.message.chat.id,
             message_id=call.message.message_id,
             reply_markup=markup,
             parse_mode="HTML"
         )
-    else: 
+    else: # 'add_fileid_no'
         if admin_id in user_states:
             del user_states[admin_id]
         bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id)
