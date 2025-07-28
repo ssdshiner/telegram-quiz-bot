@@ -1771,7 +1771,7 @@ def handle_need_command(msg: types.Message):
             for resource in response.data[:10]: # Show max 10 results
                 button = types.InlineKeyboardButton(
                     text=f"📄 {resource['file_name']}",
-                    callback_data=f"getfile_{resource['file_id']}"
+                    callback_data=f"getfile_{resource['id']}"
                 )
                 markup.add(button)
             
@@ -1783,33 +1783,61 @@ def handle_need_command(msg: types.Message):
         bot.reply_to(msg, "❌ An error occurred while searching for the file.")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('getfile_'))
+@bot.callback_query_handler(func=lambda call: call.data.startswith('getfile_'))
 def handle_getfile_callback(call: types.CallbackQuery):
     """
     Handles the button click. It now receives the short primary key 'id',
     fetches the full file_id from Supabase, and then sends the document.
+    It also edits the original message to give confirmation.
     """
     try:
-        resource_id = int(call.data.split('_', 1)[1])
+        # This part gets the unique ID of the resource from the button press
+        resource_id_str = call.data.split('_', 1)[1]
         
-        # Acknowledge the button press
+        # Check if the ID is a valid number. This makes the code safer.
+        if not resource_id_str.isdigit():
+            bot.answer_callback_query(call.id, text="❌ Error: Invalid file reference.", show_alert=True)
+            return
+            
+        resource_id = int(resource_id_str)
+        
+        # Acknowledge the button press with a small pop-up
         bot.answer_callback_query(call.id, text="✅ Fetching your file from the Vault...")
         
         # Use the short 'id' to get the full file_id from the database
-        response = supabase.table('resources').select('file_id').eq('id', resource_id).single().execute()
+        response = supabase.table('resources').select('file_id, file_name').eq('id', resource_id).single().execute()
         
         if response.data:
             file_id_to_send = response.data['file_id']
+            file_name_to_send = response.data['file_name']
+            
+            # 1. Send the file to the user
             bot.send_document(chat_id=call.message.chat.id, document=file_id_to_send)
-            # Remove the buttons after selection
-            bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+            
+            # 2. **THE FIX**: Edit the original message to show a success confirmation.
+            # This automatically removes the old buttons and prevents the error.
+            confirmation_text = f"✅ Success! You have downloaded:\n<b>{escape(file_name_to_send)}</b>\n\nYou can continue browsing."
+            bot.edit_message_text(
+                confirmation_text, 
+                call.message.chat.id, 
+                call.message.message_id, 
+                reply_markup=None, # Explicitly remove any buttons
+                parse_mode="HTML"
+            )
         else:
+            # If the file is not found, also edit the message to inform the user.
             bot.answer_callback_query(call.id, text="❌ Error: Could not find this file.", show_alert=True)
-            bot.edit_message_text("Sorry, this file seems to have been removed.", call.message.chat.id, call.message.message_id)
+            bot.edit_message_text(
+                "❌ Sorry, this file seems to have been removed or is no longer available.", 
+                call.message.chat.id, 
+                call.message.message_id,
+                reply_markup=None
+            )
 
     except Exception as e:
         print(f"Error in handle_getfile_callback: {traceback.format_exc()}")
         report_error_to_admin(f"Error sending file from callback:\n{e}")
-
+        bot.answer_callback_query(call.id, text="❌ A critical error occurred.", show_alert=True)
 # --- Admin Command: Direct Messaging System (/dm) ---
 
 @bot.message_handler(commands=['dm'])
