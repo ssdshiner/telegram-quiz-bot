@@ -1258,7 +1258,7 @@ def process_fileid_image(msg: types.Message):
     bot.send_message(admin_id, message_text, reply_markup=markup, parse_mode="HTML")
 
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith('add_fileid_'))
+@bot.callback_query_handler(func=lambda call: call.data in ['add_fileid_yes', 'add_fileid_no'])
 def handle_fileid_confirmation(call: types.CallbackQuery):
     """Handles the Yes/No confirmation and then asks for the quiz type."""
     admin_id = call.from_user.id
@@ -1270,7 +1270,6 @@ def handle_fileid_confirmation(call: types.CallbackQuery):
             types.InlineKeyboardButton("🎲 Random Quiz", callback_data="add_fileid_to_random"),
             types.InlineKeyboardButton("🏁 Quiz Marathon", callback_data="add_fileid_to_marathon")
         )
-        # YEH PART GALAT INDENTED THA, AB THEEK HAI
         bot.edit_message_text(
             text="✅ Okay, let's add this image to a question.\n\n<b>Which quiz system is this for?</b>",
             chat_id=call.message.chat.id,
@@ -1837,7 +1836,7 @@ def handle_getfile_callback(call: types.CallbackQuery):
             bot.send_document(
                 chat_id=call.message.chat.id, 
                 document=file_id_to_send,
-                message_thread_id=call.message.message_thread_id
+                reply_to_message_id=call.message.message_id
             )
             
             # 2. **THE FIX**: Edit the original message to show a success confirmation.
