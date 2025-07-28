@@ -1270,11 +1270,12 @@ def handle_fileid_confirmation(call: types.CallbackQuery):
             types.InlineKeyboardButton("🎲 Random Quiz", callback_data="add_fileid_to_random"),
             types.InlineKeyboardButton("🏁 Quiz Marathon", callback_data="add_fileid_to_marathon")
         )
-        bot.edit_message_text(
-            text="Great! Which type of quiz is this image for?",
+bot.edit_message_text(
+            text="✅ Okay, let's add this image to a question.\n\n<b>Which quiz system is this for?</b>",
             chat_id=call.message.chat.id,
             message_id=call.message.message_id,
-            reply_markup=markup
+            reply_markup=markup,
+            parse_mode="HTML"
         )
     else: # 'add_fileid_no'
         if admin_id in user_states:
@@ -1285,7 +1286,9 @@ def handle_fileid_confirmation(call: types.CallbackQuery):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('add_fileid_to_'))
 def handle_fileid_quiz_type_choice(call: types.CallbackQuery):
-    """Handles the quiz type choice and then asks for the Question ID."""
+    """
+    Handles the quiz type choice, edits the old message, and sends a new one to ask for the Question ID.
+    """
     admin_id = call.from_user.id
     quiz_type = call.data.split('_')[-1] # 'random' or 'marathon'
     
@@ -1293,15 +1296,34 @@ def handle_fileid_quiz_type_choice(call: types.CallbackQuery):
     if admin_id in user_states:
         user_states[admin_id]['quiz_type'] = quiz_type
     else:
-        # Agar state exist nahi karta to error handle karein
+        # If state doesn't exist, handle the error gracefully
         bot.edit_message_text("❌ Sorry, your session expired. Please start over with /fileid.", call.message.chat.id, call.message.message_id)
         return
 
+    # Determine the correct table name based on the user's choice
     table_name = "questions" if quiz_type == "random" else "quiz_questions"
     
-    prompt_text = f"Okay, adding to <b>{quiz_type.title()} Quiz</b>.\n\nPlease tell me the numeric <b>Question ID</b> from the <code>{table_name}</code> table."
-    bot.edit_message_text(text=prompt_text, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="HTML")
-    bot.register_next_step_handler(call.message, process_fileid_question_id)
+    # ** THE FIX PART 1: **
+    # First, edit the previous message to confirm the choice and clean up the buttons.
+    confirmation_text = f"✅ Great! You've selected the <b>{quiz_type.title()} Quiz</b>."
+    bot.edit_message_text(
+        text=confirmation_text, 
+        chat_id=call.message.chat.id, 
+        message_id=call.message.message_id, 
+        parse_mode="HTML"
+    )
+
+    # ** THE FIX PART 2: **
+    # Now, send a NEW message to ask for the ID. This is more reliable.
+    prompt_text = f"Please tell me the numeric <b>Question ID</b> from the <code>{table_name}</code> table that you want to add this image to."
+    prompt_message = bot.send_message(
+        chat_id=call.message.chat.id,
+        text=prompt_text,
+        parse_mode="HTML"
+    )
+    
+    # Register the next step based on the NEW prompt message.
+    bot.register_next_step_handler(prompt_message, process_fileid_question_id)
 
 
 def process_fileid_question_id(msg: types.Message):
@@ -3973,10 +3995,10 @@ def process_marathon_question_count(msg: types.Message):
                 'topics': {}, 'question_types': {}, 'difficulty_levels': {}
             }
         }
-        QUIZ_PARTICIPANTS[session_id] = {}
+QUIZ_PARTICIPANTS[session_id] = {}
 
-        # --- THE FIX IS HERE ---
-        # This whole block is now correctly indented inside the 'try' block.
+        # This block calculates when to show mid-quiz leaderboard updates.
+        # Its indentation is now corrected to be inside the main 'try' block.
         update_intervals = []
         if actual_count >= 9:
             q_third = actual_count // 3
@@ -3986,7 +4008,6 @@ def process_marathon_question_count(msg: types.Message):
         elif actual_count >= 6:
             update_intervals.append(actual_count // 2)
         QUIZ_SESSIONS[session_id]['leaderboard_updates'] = update_intervals
-        # --- END OF FIX ---
 
         safe_title = escape(preset_details['quiz_title'])
         safe_description = escape(preset_details['quiz_description'])
