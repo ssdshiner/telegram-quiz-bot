@@ -2196,7 +2196,7 @@ def handle_my_analysis_command(msg: types.Message):
             bot.reply_to(msg, f"Sorry {user_name}, I don't have enough data for a deep analysis yet. Participate in more marathon quizzes to build your performance profile!")
             return
 
-        analysis_text = f" Moti Bhai! पेश है आपका Performance Deep Dive, {user_name}! 🚀\n\n"
+        analysis_text = f" Hello bro! पेश है आपका Performance Deep Dive, {user_name}! 🚀\n\n"
         
         # --- Data Processing ---
         analysis_data = {}
