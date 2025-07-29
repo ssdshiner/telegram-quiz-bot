@@ -21,6 +21,7 @@ IST = timezone(timedelta(hours=5, minutes=30))
 from supabase import create_client, Client
 from urllib.parse import quote
 from html import escape, unescape
+from postgrest.exceptions import APIError
 
 # =============================================================================
 # 2. CONFIGURATION & INITIALIZATION
@@ -1106,7 +1107,8 @@ def load_data():
 
 def save_data():
     """
-    Saves the current bot state to Supabase. This version is simplified and robust.
+    Saves the current bot state to Supabase.
+    This version is more resilient to temporary Supabase server errors.
     """
     if not supabase:
         return
@@ -1128,7 +1130,18 @@ def save_data():
 
         supabase.table('bot_state').upsert(data_to_save).execute()
         
+    except APIError as e:
+        # This block specifically catches Supabase/Postgrest errors.
+        # We check if it's a temporary server-side issue (like 500, 502, 503, 504).
+        if hasattr(e, 'code') and str(e.code).startswith('5'):
+            print(f"⚠️ Supabase is temporarily unavailable (Error: {e.code}). This is a server issue. Skipping state save.")
+        else:
+            # For other API errors (like 4xx), we still want a critical report.
+            print(f"❌ CRITICAL: A Supabase API error occurred while saving state: {e}")
+            report_error_to_admin(f"Failed to save bot state due to Supabase APIError:\n{traceback.format_exc()}")
+            
     except Exception as e:
+        # This catches any other non-API error.
         print(f"❌ CRITICAL: Failed to save bot state to Supabase. Error: {e}")
         report_error_to_admin(f"Failed to save bot state to Supabase:\n{traceback.format_exc()}")
 # =============================================================================
