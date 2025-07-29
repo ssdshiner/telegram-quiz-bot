@@ -2095,52 +2095,98 @@ def forward_user_reply_to_admin(msg: types.Message):
 # =============================================================================
 # 8. TELEGRAM BOT HANDLERS - ADVANCED ADMIN TOOLS
 # =============================================================================
+Saurabh, good evening! Dekha maine aapka log. Yeh ek Gunicorn (Render ka web server) ka classic error hai, WORKER TIMEOUT. Iska matlab simple hai, aur iska fix bhi hai hamare paas.
+
+Tension ki baat nahi hai, aapke code mein logic ki galti nahi hai, bas usko karne ka tareeka thoda lamba hai.
+
+What Happened? (Error Explained)
+Aapke bot ka jo worker hai, use sochiye ki wo ek employee hai jo ek baar mein ek hi kaam kar sakta hai.
+
+The Task: Jab aapne /prunedms command chalaya, to aapne us employee ko 63 users ko ek-ek karke check karne ka lamba kaam de diya.
+
+The Time: Har user ko check karne mein thoda time lagta hai (network call + 0.2 sec ka sleep). Aapke log ke hisaab se total time 30 second se zyada ho gaya (63 users * ~0.5s/user ≈ 31.5s).
+
+The Manager (Server): Server (manager) ne dekha ki employee 30 second se gayab hai aur koi response nahi de raha, to usko laga ki wo 'hang' ho gaya hai.
+
+The Result: Isliye manager ne us worker ko TIMEOUT karke nikaal diya (SIGKILL) aur uski jagah ek naya worker (pid: 108) bhej diya.
+
+In short: Aapka /prunedms command itna time le raha tha ki server ne usko beech mein hi band kar diya.
+
+How to Fix It? (The Solution)
+Solution yeh hai ki hum is lambe kaam ko background mein chalayenge. Isse bot ka main worker free rahega aur server ko lagega ki sab theek hai.
+
+Hum aapke handle_prune_dms function ko do hisson mein todenge: ek jo command start karega, aur doosra jo asli kaam background mein karega.
+
+Step 1: Find this Code Block (Ctrl+F)
+Aap apni bot.py file mein handle_prune_dms function ko find kijiye:
+
+Code snippet
 
 @bot.message_handler(commands=['prunedms'])
-@admin_required
-def handle_prune_dms(msg: types.Message):
-    """
-    Checks all users in the database and removes those who have blocked the bot.
-    """
-    if msg.chat.id != msg.from_user.id:
-        bot.reply_to(msg, "🤫 Please use this command in a private chat with me.")
-        return
+Step 2: Replace with this Correct Code
+Ab jo function aapne find kiya hai, uss ek function ko neeche diye gaye do naye functions se replace kar dijiye.
 
-    bot.send_message(msg.chat.id, "🔍 Starting to check for unreachable users... This may take a few minutes. I will send a report when finished.")
-    
+Python
+
+def _prune_dms_task(admin_id):
+    """
+    This function does the actual heavy lifting in the background.
+    It will not block the main web worker.
+    """
     try:
         response = supabase.table('group_members').select('user_id').execute()
         all_users = response.data
         unreachable_ids = []
 
+        if not all_users:
+            bot.send_message(admin_id, "✅ The group members list is currently empty. Nothing to prune.")
+            return
+
         for i, user in enumerate(all_users):
             user_id = user['user_id']
             try:
-                # The 'sendChatAction' method is a lightweight way to check if a user is reachable.
+                # The 'sendChatAction' method is a lightweight way to check.
                 bot.send_chat_action(user_id, 'typing')
             except Exception as e:
-                if 'Forbidden' in str(e): # If it fails with a 403 error, the user has blocked the bot.
+                # This error usually means the user has blocked the bot.
+                if 'Forbidden' in str(e) or 'user is deactivated' in str(e) or 'bot was blocked by the user' in str(e):
                     unreachable_ids.append(user_id)
             
             if (i + 1) % 20 == 0:
-                print(f"Prune check progress: {i+1}/{len(all_users)}")
-            time.sleep(0.2) # Be respectful of Telegram's API limits
+                print(f"Background Prune check progress: {i+1}/{len(all_users)}")
+            time.sleep(0.25) # Slightly increased to be safer with API limits
 
         if not unreachable_ids:
-            bot.send_message(msg.chat.id, "✅ All users in the database are reachable. No one was removed.")
+            bot.send_message(admin_id, "✅ Pruning complete! All users in the database are reachable. No one was removed.")
             return
 
         # Remove the unreachable users from the database
         supabase.table('group_members').delete().in_('user_id', unreachable_ids).execute()
         
-        # THE FIX: Converted to safe HTML
         success_message = f"✅ Pruning complete!\n\nRemoved <b>{len(unreachable_ids)}</b> unreachable users from the DM list."
-        bot.send_message(msg.chat.id, success_message, parse_mode="HTML")
+        bot.send_message(admin_id, success_message, parse_mode="HTML")
 
     except Exception as e:
-        print(f"Error during DM prune: {traceback.format_exc()}")
-        report_error_to_admin(f"Error in /prunedms command: {traceback.format_exc()}")
-        bot.send_message(msg.chat.id, "❌ An error occurred while pruning the user list.")
+        print(f"Error during background DM prune: {traceback.format_exc()}")
+        report_error_to_admin(f"Error in _prune_dms_task: {traceback.format_exc()}")
+        bot.send_message(admin_id, "❌ An error occurred while pruning the user list in the background.")
+
+@bot.message_handler(commands=['prunedms'])
+@admin_required
+def handle_prune_dms(msg: types.Message):
+    """
+    Starts the DM pruning process in a separate background thread
+    to avoid worker timeouts on Render.
+    """
+    if msg.chat.type != 'private':
+        bot.reply_to(msg, "🤫 Please use this command in a private chat with me.")
+        return
+
+    bot.send_message(msg.chat.id, "✅ Understood. I am starting the check for unreachable users in the background. This may take a few minutes. I will send a new message with the report when it's finished.")
+    
+    # Start the long-running task in a new thread
+    thread = threading.Thread(target=_prune_dms_task, args=(msg.from_user.id,))
+    thread.start()
 
 
 @bot.message_handler(
