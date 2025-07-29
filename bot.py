@@ -2095,39 +2095,6 @@ def forward_user_reply_to_admin(msg: types.Message):
 # =============================================================================
 # 8. TELEGRAM BOT HANDLERS - ADVANCED ADMIN TOOLS
 # =============================================================================
-Saurabh, good evening! Dekha maine aapka log. Yeh ek Gunicorn (Render ka web server) ka classic error hai, WORKER TIMEOUT. Iska matlab simple hai, aur iska fix bhi hai hamare paas.
-
-Tension ki baat nahi hai, aapke code mein logic ki galti nahi hai, bas usko karne ka tareeka thoda lamba hai.
-
-What Happened? (Error Explained)
-Aapke bot ka jo worker hai, use sochiye ki wo ek employee hai jo ek baar mein ek hi kaam kar sakta hai.
-
-The Task: Jab aapne /prunedms command chalaya, to aapne us employee ko 63 users ko ek-ek karke check karne ka lamba kaam de diya.
-
-The Time: Har user ko check karne mein thoda time lagta hai (network call + 0.2 sec ka sleep). Aapke log ke hisaab se total time 30 second se zyada ho gaya (63 users * ~0.5s/user ≈ 31.5s).
-
-The Manager (Server): Server (manager) ne dekha ki employee 30 second se gayab hai aur koi response nahi de raha, to usko laga ki wo 'hang' ho gaya hai.
-
-The Result: Isliye manager ne us worker ko TIMEOUT karke nikaal diya (SIGKILL) aur uski jagah ek naya worker (pid: 108) bhej diya.
-
-In short: Aapka /prunedms command itna time le raha tha ki server ne usko beech mein hi band kar diya.
-
-How to Fix It? (The Solution)
-Solution yeh hai ki hum is lambe kaam ko background mein chalayenge. Isse bot ka main worker free rahega aur server ko lagega ki sab theek hai.
-
-Hum aapke handle_prune_dms function ko do hisson mein todenge: ek jo command start karega, aur doosra jo asli kaam background mein karega.
-
-Step 1: Find this Code Block (Ctrl+F)
-Aap apni bot.py file mein handle_prune_dms function ko find kijiye:
-
-Code snippet
-
-@bot.message_handler(commands=['prunedms'])
-Step 2: Replace with this Correct Code
-Ab jo function aapne find kiya hai, uss ek function ko neeche diye gaye do naye functions se replace kar dijiye.
-
-Python
-
 def _prune_dms_task(admin_id):
     """
     This function does the actual heavy lifting in the background.
@@ -2171,6 +2138,7 @@ def _prune_dms_task(admin_id):
         report_error_to_admin(f"Error in _prune_dms_task: {traceback.format_exc()}")
         bot.send_message(admin_id, "❌ An error occurred while pruning the user list in the background.")
 
+
 @bot.message_handler(commands=['prunedms'])
 @admin_required
 def handle_prune_dms(msg: types.Message):
@@ -2187,7 +2155,6 @@ def handle_prune_dms(msg: types.Message):
     # Start the long-running task in a new thread
     thread = threading.Thread(target=_prune_dms_task, args=(msg.from_user.id,))
     thread.start()
-
 
 @bot.message_handler(
     func=lambda msg: msg.chat.type == 'private' and is_admin(msg.from_user.id) and msg.reply_to_message and msg.reply_to_message.forward_from,
