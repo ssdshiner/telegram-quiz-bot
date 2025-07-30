@@ -4200,7 +4200,7 @@ def send_marathon_question(session_id):
         progress_bar = "▓" * filled_chars + "░" * (25 - filled_chars)
     
     clean_question = unescape(question_data.get('Question', ''))
-    question_text = f"""📝 <b>Question {idx + 1} of {total_questions}</b>
+    question_text = f"""📝 Question {idx + 1} of {total_questions}
 
 {progress_bar}
 

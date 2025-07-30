@@ -1,0 +1,128 @@
+/* ====== Professional Design System ====== */
+/* Yahan hum poori app ke colors ek jagah define kar rahe hain. 
+   Future mein color change karna ho to bas yahan badalna padega. */
+:root {
+    --bg-color: #0d1117; /* GitHub Dark Mode jaisa background */
+    --card-color: #161b22; /* Card ka background, thoda halka */
+    --border-color: #30363d; /* Borders ke liye */
+    --primary-text-color: #c9d1d9; /* Main text */
+    --secondary-text-color: #8b949e; /* Halka text */
+    --accent-color: #58a6ff; /* Buttons aur highlights ke liye (Blue) */
+    --accent-hover-color: #388bfd; /* Button par mouse le jaane par */
+}
+
+/* ====== General Styling (Mobile First) ====== */
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji';
+    background-color: var(--bg-color);
+    color: var(--primary-text-color);
+    margin: 0;
+    padding: 24px;
+    display: flex;
+    justify-content: center;
+    min-height: 100vh;
+    box-sizing: border-box;
+}
+
+.app-container {
+    width: 100%;
+    max-width: 480px; /* Mini App ke liye perfect width */
+    text-align: center;
+}
+
+/* ====== Typography (Text ka style) ====== */
+h1 {
+    font-size: 26px;
+    font-weight: 600;
+    margin-bottom: 8px;
+}
+
+p {
+    color: var(--secondary-text-color);
+    line-height: 1.5;
+    margin-top: 0;
+}
+
+.tagline {
+    font-size: 16px;
+    margin-bottom: 32px;
+}
+
+/* ====== Button Styling (Minimalistic) ====== */
+button {
+    background-color: var(--accent-color);
+    color: #ffffff;
+    border: none;
+    padding: 14px 20px;
+    border-radius: 8px;
+    font-size: 16px;
+    font-weight: 500;
+    cursor: pointer;
+    width: 100%;
+    margin-top: 12px;
+    transition: background-color 0.2s ease-in-out;
+}
+
+button:hover {
+    background-color: var(--accent-hover-color);
+}
+
+/* ====== Utility Class ====== */
+.hidden {
+    display: none !important; /* !important to ensure it always hides */
+}
+
+
+/* ====== Tabs Redesigned (Well Structured) ====== */
+.tabs {
+    display: flex;
+    border-bottom: 1px solid var(--border-color);
+    margin-bottom: 24px;
+}
+
+.tab-link {
+    flex-grow: 1; /* Teeno tabs barabar space lenge */
+    padding: 12px 0;
+    background: none;
+    border: none;
+    color: var(--secondary-text-color);
+    font-size: 15px;
+    font-weight: 500;
+    cursor: pointer;
+    border-bottom: 3px solid transparent; /* Shuru mein neeche border nahi dikhega */
+    transition: color 0.2s, border-color 0.2s;
+}
+
+.tab-link:hover {
+    color: var(--primary-text-color);
+}
+
+.tab-link.active {
+    color: var(--accent-color);
+    border-bottom-color: var(--accent-color); /* Active tab par accent color ka border */
+}
+
+
+/* ====== Tab Content Styling ====== */
+.tab-content {
+    display: none;
+    text-align: left; /* Content ko left align rakhte hain */
+    background-color: var(--card-color);
+    padding: 20px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+}
+
+.tab-content.active {
+    display: block;
+}
+
+/* ====== Card Styling for Content ====== */
+/* Yeh hum aage use karenge content ko cards mein dalne ke liye */
+.card {
+    background-color: var(--card-color);
+    padding: 20px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    margin-bottom: 16px;
+}

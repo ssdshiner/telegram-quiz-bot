@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>C.A.V.Y.A. Performance Hub</title>
+    <link rel="stylesheet" href="style.css">
+    
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <div class="app-container">
+        <div id="welcome-screen">
+            <h1>Hello, <span id="user-name">...</span>! 👋</h1>
+            <p>Welcome to your Performance Hub.</p>
+            <p class="tagline">How would you like to view your analysis today?</p>
+            <div class="button-container">
+                <button id="start-guided-btn">✨ Start Guided Analysis</button>
+                <button id="skip-to-dashboard-btn">📊 Go to Full Dashboard</button>
+            </div>
+        </div>
+
+        <div id="conversational-view" class="hidden"></div>
+
+        <div id="dashboard-view" class="hidden">
+            <div class="tabs">
+                <button class="tab-link active" data-tab="dashboard-tab">📊 Dashboard</button>
+                <button class="tab-link" data-tab="deep-dive-tab">🔬 Deep Dive</button>
+                <button class="tab-link" data-tab="actions-tab">🚀 Quick Actions</button>
+            </div>
+
+            <div id="dashboard-tab" class="tab-content active">
+                <div class="card">
+                    <h2>Subject-wise Accuracy</h2>
+                    <canvas id="accuracyChart"></canvas>
+                </div>
+            </div>
+            <div id="deep-dive-tab" class="tab-content"></div>
+            <div id="actions-tab" class="tab-content"></div>
+        </div>
+    </div>
+    <script src="script.js"></script>
+</body>
+</html>
