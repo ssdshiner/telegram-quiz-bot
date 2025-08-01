@@ -1554,13 +1554,22 @@ def handle_today_quiz(msg: types.Message):
             bot.send_message(msg.chat.id, message_text, parse_mode="HTML", message_thread_id=msg.message_thread_id)
             return
         
-        # These greetings are safe as the user_name is already escaped.
-        all_greetings = [
-            f"Step by step rising, never looking back,\n{user_name}, today's quiz schedule keeps you on track! 🛤️",
-            f"Challenge accepted, ready to play,\n{user_name}, here's your quiz lineup for today! 🎮",
-            f"Audit ki kasam, Law ki dua,\n{user_name}, dekho aaj schedule mein kya-kya hua! ✨",
-            f"Confidence building, knowledge to test,\n{user_name}, today's quiz schedule brings out your best! 💪",
-        ]
+# These greetings are safe as the user_name is already escaped.
+all_greetings = [
+    # --- English Greetings ---
+    f"Ready to conquer the quizzes today, {user_name}?\nHere's the schedule to light up your way! 💡",
+    f"Set your own winning pace, {user_name}, it's time to ace!\nHere's the quiz schedule for today's race! 🏁",
+    f"It's your time to truly shine, {user_name}, the stars align!\nHere are today's quizzes, all in a line! ✨",
+    f"A new day of learning has begun, {user_name}, let's have some fun!\nHere's the quiz schedule, time for a run! 🏃‍♂️",
+    f"With C.A.V.Y.A. right by your side, {user_name}, there's nowhere to hide!\nCheck the quiz power packed inside! 💪",
+    f"It's your moment, it's your time, {user_name}, get ready for the climb!\nHere's the schedule, perfectly on time! 🧗‍♀️",
+    f"Let's make every single moment count, {user_name}, and reach the paramount!\nToday's quiz schedule is now out and about! 📣",
+    
+    # --- Hindi Greetings ---
+    f"Josh aur hosh, dono rakho saath,\n{user_name}, quiz schedule se karo din ki shuruaat! ☀️",
+    f"Mehnat se likhni hai apni kismat, {user_name}, dikhao aaj apni himmat!\nYeh raha aaj ka schedule💌",
+    f"Jeet ki tyari hai poori, ab nahi hogi koi doori,\n{user_name}, aaj ka schedule check karna hai isliye hai zaroori! 🏆",
+]
         message_text = f"<b>{time_of_day_greeting}</b>\n\n{random.choice(all_greetings)}\n"
         message_text += "———————————————\n\n"
         
