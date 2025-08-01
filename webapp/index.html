@@ -5,9 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>C.A.V.Y.A. Performance Hub</title>
     <link rel="stylesheet" href="style.css">
-    
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
@@ -32,13 +30,26 @@
             </div>
 
             <div id="dashboard-tab" class="tab-content active">
+                <div id="overall-stats-container"></div>
                 <div class="card">
-                    <h2>Subject-wise Accuracy</h2>
-                    <canvas id="accuracyChart"></canvas>
+                    <h2>Performance Radar</h2>
+                    <canvas id="radarChart"></canvas>
                 </div>
             </div>
-            <div id="deep-dive-tab" class="tab-content"></div>
-            <div id="actions-tab" class="tab-content"></div>
+
+            <div id="deep-dive-tab" class="tab-content">
+                <h2>Subject-wise Breakdown</h2>
+                <div id="subjects-table-container"></div>
+                <div class="card" style="margin-top: 20px;">
+                    <h2>Question Type Analysis</h2>
+                    <canvas id="doughnutChart"></canvas>
+                </div>
+            </div>
+
+            <div id="actions-tab" class="tab-content">
+                <h2>Quick Bot Actions</h2>
+                <div id="quick-actions-container"></div>
+            </div>
         </div>
     </div>
     <script src="script.js"></script>
