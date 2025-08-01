@@ -2284,13 +2284,13 @@ def handle_my_analysis_command(msg: types.Message):
         
         intro_text = "Click the button below to open your personalized performance dashboard! It's an interactive way to check your progress."
         
-        # === THE FIX IS HERE ===
-        # We are replacing bot.reply_to with the more explicit bot.send_message
+        # === THE FINAL FIX IS HERE ===
+        # Using the correct message_thread_id parameter
         bot.send_message(
             chat_id=msg.chat.id,
             text=intro_text,
             reply_to_message_id=msg.message_id,
-            message_thread_id=msg.message_thread_id,
+            message_thread_id=msg.message_thread_id, # This is now correct
             reply_markup=markup,
             allow_sending_without_reply=True 
         )
