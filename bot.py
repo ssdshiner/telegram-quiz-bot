@@ -922,6 +922,7 @@ Hello Admin! Here are your available tools.
 <b>📣 Content & Engagement</b>
 <code>/motivate</code> - Send a motivational quote.
 <code>/studytip</code> - Share a useful study tip.
+<code>/examcountdown</code> - Post exam countdown with stats.
 <code>/announce</code> - Create & pin a message.
 <code>/message</code> - Send content to group.
 <code>/add_resource</code> - Add a file to the Vault.
