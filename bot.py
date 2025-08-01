@@ -2199,12 +2199,56 @@ def handle_admin_reply_to_forward(msg: types.Message):
 # 8. TELEGRAM BOT HANDLERS - STATS & ANALYSIS
 # =============================================================================
 
+def format_analysis_for_webapp(analysis_data):
+    """
+    Takes raw Supabase data and structures it for the Mini App's JavaScript.
+    """
+    # Initialize the structure exactly like our JS mock data
+    formatted = {
+        'overallStats': {'totalQuizzes': 0, 'overallAccuracy': 0, 'bestSubject': 'N/A', 'currentStreak': 0},
+        'deepDive': {'subjects': [], 'questionTypes': {'practical': 0, 'theory': 0}},
+        'coachInsight': "Start playing to get your first insight!"
+    }
+
+    if not analysis_data:
+        return formatted
+
+    # Process the data (This is a simplified example, we can make it more detailed later)
+    total_accuracy_sum = 0
+    total_subjects = 0
+    
+    subjects_processed = {}
+    for item in analysis_data:
+        subject_name = item.get('topic', 'Unknown')
+        if subject_name not in subjects_processed:
+            subjects_processed[subject_name] = {'correct': 0, 'total': 0}
+        
+        subjects_processed[subject_name]['correct'] += item.get('user_correct', 0)
+        subjects_processed[subject_name]['total'] += item.get('user_total', 0)
+
+    for name, data in subjects_processed.items():
+        accuracy = (data['correct'] * 100 / data['total']) if data['total'] > 0 else 0
+        total_accuracy_sum += accuracy
+        total_subjects += 1
+        formatted['deepDive']['subjects'].append({'name': name, 'accuracy': round(accuracy)})
+
+    if total_subjects > 0:
+        formatted['overallStats']['overallAccuracy'] = round(total_accuracy_sum / total_subjects)
+        # Find best subject
+        best_sub = max(formatted['deepDive']['subjects'], key=lambda x: x['accuracy'])
+        formatted['overallStats']['bestSubject'] = best_sub['name']
+    
+    # We will add logic for totalQuizzes, streak, questionTypes, and coachInsight later from other tables.
+    # For now, this is a great start.
+    
+    return formatted
+
+
 @bot.message_handler(commands=['my_analysis'])
 @membership_required
 def handle_my_analysis_command(msg: types.Message):
     """
-    Provides a deep-dive analysis of a user's performance, now with
-    group comparison data fetched in a single, efficient RPC call.
+    Launches the Performance Dashboard Mini App with the user's data.
     """
     try:
         supabase.rpc('update_chat_activity', {'p_user_id': msg.from_user.id, 'p_user_name': msg.from_user.username or msg.from_user.first_name}).execute()
@@ -2215,80 +2259,43 @@ def handle_my_analysis_command(msg: types.Message):
     user_name = escape(msg.from_user.first_name)
     
     try:
-        # Call the new, more powerful function
+        # 1. Fetch REAL data from Supabase
         response = supabase.rpc('get_user_deep_analysis', {'p_user_id': user_id}).execute()
         
         if not response.data:
-            bot.reply_to(msg, f"Sorry {user_name}, I don't have enough data for a deep analysis yet. Participate in more marathon quizzes to build your performance profile!")
+            bot.reply_to(msg, f"Sorry {user_name}, I don't have enough data for a deep analysis yet. Participate in more quizzes to build your profile!")
             return
 
-        analysis_text = f" Hello bro! पेश है आपका Performance Deep Dive, {user_name}! 🚀\n\n"
+        # 2. Structure the data for our JavaScript app
+        analysis_payload = format_analysis_for_webapp(response.data)
+
+        # 3. Convert data to a URL-safe string
+        json_data_string = json.dumps(analysis_payload)
+        encoded_data = quote(json_data_string)
+
+        # 4. Get the Web App URL from environment variables
+        ANALYSIS_WEBAPP_URL = os.getenv('ANALYSIS_WEBAPP_URL')
+        if not ANALYSIS_WEBAPP_URL:
+            report_error_to_admin("CRITICAL: ANALYSIS_WEBAPP_URL environment variable is not set!")
+            bot.reply_to(msg, "Sorry, the analysis feature is currently under maintenance. Please contact an admin.")
+            return
+
+        # 5. Create the final URL with the data embedded in it
+        final_url = f"{ANALYSIS_WEBAPP_URL}?data={encoded_data}"
+
+        # 6. Create the button that opens the Mini App
+        markup = types.InlineKeyboardMarkup()
+        web_app_info = types.WebAppInfo(final_url)
+        button = types.InlineKeyboardButton("📊 View My Performance Dashboard", web_app=web_app_info)
+        markup.add(button)
         
-        # --- Data Processing ---
-        analysis_data = {}
-        for item in response.data:
-            topic = item.get('topic', 'Unknown')
-            if topic not in analysis_data:
-                analysis_data[topic] = []
-            
-            accuracy = (item['user_correct'] * 100.0 / item['user_total']) if item['user_total'] > 0 else 0
-            
-            item['user_accuracy'] = accuracy # Add user accuracy for later use
-            analysis_data[topic].append(item)
-        
-        # --- Display Matrix ---
-        analysis_text += "<b>📊 Accuracy & Speed Matrix</b>\n"
-        analysis_text += "<i>(Topic-wise performance breakdown)</i>\n\n"
-        for topic, items in analysis_data.items():
-            analysis_text += f"<b>{escape(topic)}:</b>\n"
-            for data in items:
-                q_type = data.get('question_type', 'Unknown')
-                emoji = "✅" if data['user_accuracy'] >= 75 else "🟠" if data['user_accuracy'] >= 50 else "⚠️"
-                analysis_text += f"  - <i>{escape(q_type)}:</i> {data['user_accuracy']:.0f}% ({data['user_correct']}/{data['user_total']}) {emoji} | Avg Speed: {data.get('user_avg_speed', 0):.1f}s\n"
-            analysis_text += "\n"
-
-        # --- Coach's Insights ---
-        kryptonite_type = {}
-        confusion_zone = []
-        speed_issues = []
-
-        # This loop is now much faster as it doesn't call the database anymore
-        for topic, items in analysis_data.items():
-            for data in items:
-                q_type = data.get('question_type', 'Unknown')
-                if data['user_accuracy'] < 50:
-                    kryptonite_type[q_type] = kryptonite_type.get(q_type, 0) + 1
-                if 40 <= data['user_accuracy'] < 60:
-                    confusion_zone.append(f"{topic} ({q_type})")
-                
-                group_avg_speed = data.get('group_avg_speed')
-                user_avg_speed = data.get('user_avg_speed')
-
-                if group_avg_speed and user_avg_speed:
-                    if user_avg_speed > group_avg_speed * 1.5 and data['user_accuracy'] > 70:
-                        speed_issues.append(f"Slow but Right in <b>{escape(topic)} ({escape(q_type)})</b>")
-                    elif user_avg_speed < group_avg_speed * 0.7 and data['user_accuracy'] < 60:
-                        speed_issues.append(f"Fast but Wrong in <b>{escape(topic)} ({escape(q_type)})</b>")
-
-        analysis_text += "<b>⭐ Coach's Actionable Insights</b>\n"
-        if kryptonite_type:
-            worst_type = max(kryptonite_type, key=kryptonite_type.get)
-            analysis_text += f"• <b>Your Kryptonite:</b> Aapko <b>{escape(worst_type)}</b> type ke sawaalon par khaas dhyaan dena chahiye.\n"
-        if confusion_zone:
-            analysis_text += f"• <b>Confusion Zone:</b> In topics ko revise karein - <b>{escape(', '.join(confusion_zone))}</b>. Yahan aap 50-50 rehte hain.\n"
-        if speed_issues:
-            analysis_text += "• <b>Speed Alerts:</b>\n"
-            for issue in speed_issues:
-                analysis_text += f"  - {issue}\n"
-        if not kryptonite_type and not confusion_zone and not speed_issues:
-            analysis_text += "• No major weak points detected! You have a balanced performance. Keep it up! 🔥"
-
-        bot.send_message(msg.chat.id, analysis_text, parse_mode="HTML", message_thread_id=msg.message_thread_id)
+        intro_text = "Click the button below to open your personalized performance dashboard! It's an interactive way to check your progress."
+        bot.reply_to(msg, intro_text, reply_markup=markup, message_thread_id=msg.message_thread_id)
 
     except Exception as e:
         print(f"Error in /my_analysis: {traceback.format_exc()}")
-        report_error_to_admin(f"Error generating dynamic analysis for {user_id}:\n{e}")
-        bot.reply_to(msg, "❌ Oops! Something went wrong while generating your deep-dive analysis.")
+        report_error_to_admin(f"Error generating analysis for {user_id}:\n{e}")
+        bot.reply_to(msg, "❌ Oops! Something went wrong while generating your analysis.")
 
 
 @bot.message_handler(commands=['mystats'])
