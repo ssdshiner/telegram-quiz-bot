@@ -1663,7 +1663,82 @@ def format_kalkaquiz_message(quizzes):
 # =============================================================================
 # 9. TELEGRAM BOT HANDLERS - UTILITY & INTERACTIVE
 # =============================================================================
+@bot.message_handler(commands=['examcountdown'])
+@admin_required
+def handle_exam_countdown(msg: types.Message):
+    """
+    Sends a motivational message with exam countdown and group performance insights using a refined HTML layout.
+    """
+    try:
+        # --- 1. More Accurate Countdown Calculation ---
+        IST = timezone(timedelta(hours=5, minutes=30))
+        exam_day = datetime.date(2025, 9, 4)
+        today = datetime.datetime.now(IST).date()
+        days_left = (exam_day - today).days
 
+        if days_left < 0:
+            bot.reply_to(msg, "The September 2025 exams are over!")
+            return
+
+        # --- 2. Fetch Dynamic & Randomized Content ---
+        # Dynamic phase-based greeting
+        if days_left > 30:
+            phase_comment = "This is the marathon phase. Time to build strong concepts! 🏃‍♂️"
+        elif 15 <= days_left <= 30:
+            phase_comment = "It's sprint time! Let's double down on revision and practice papers. ⚡"
+        else:
+            phase_comment = "This is the final lap! Prioritize mock tests and your health. 🙏"
+        
+        # Truly Random Study Tip
+        study_tip = "Remember to take short breaks to stay fresh!" # Default tip
+        try:
+            tip_response = supabase.table('study_tips').select('id, content').eq('used', False).execute()
+            if tip_response.data:
+                chosen_tip = random.choice(tip_response.data)
+                study_tip = chosen_tip['content']
+                # Mark the chosen tip as used so it doesn't repeat soon
+                supabase.table('study_tips').update({'used': True}).eq('id', chosen_tip['id']).execute()
+        except Exception as tip_error:
+            print(f"Could not fetch a random study tip: {tip_error}")
+
+        # Group Performance Insights
+        performance_response = supabase.rpc('get_group_performance_summary').execute()
+        perf_data = performance_response.data
+        
+        # --- 3. Format the Final Message using HTML ---
+        message_text = f"<b>⏳ CA Inter Exam Countdown ⏳</b>\n"
+        message_text += "━━━━━━━━━━━━━━━━━━\n\n"
+        message_text += f"Hello Champions! Sirf <b>{days_left} din</b> baaki hain final exams ke liye! 🗓️\n\n"
+        message_text += f"<i>{phase_comment}</i>\n\n"
+        
+        if perf_data:
+            message_text += "📊 <b><u>Group Performance Snapshot</u></b>\n"
+            
+            accuracy = perf_data.get('overall_accuracy')
+            accuracy_emoji = "🎯" if accuracy and accuracy >= 75 else "📈" if accuracy and accuracy >= 60 else "⚠️"
+            message_text += f"• <b>Overall Accuracy:</b> <code>{accuracy or 'N/A'}%</code> {accuracy_emoji}\n"
+            
+            message_text += f"• <b>Toughest Question Type:</b> {perf_data.get('weakest_type', 'N/A')}\n"
+            
+            weakest_topics = perf_data.get('weakest_topics')
+            if weakest_topics:
+                 message_text += "\n<b>Top 3 Focus Areas:</b>\n"
+                 for i, topic in enumerate(weakest_topics, 1):
+                     message_text += f"  {i}. {escape(topic)}\n"
+            
+            message_text += f"\n• <b>Most Active Day:</b> {perf_data.get('most_active_day', 'N/A').strip()}\n\n"
+
+        message_text += "⭐ <b>Aaj ka Study Tip</b>\n"
+        message_text += f"<blockquote>{escape(study_tip)}</blockquote>\n"
+        message_text += "Keep pushing! You've got this! 💪"
+
+        bot.send_message(GROUP_ID, message_text, parse_mode="HTML", message_thread_id=UPDATES_TOPIC_ID)
+        bot.send_message(msg.chat.id, "✅ Countdown and analysis message posted to the group!")
+
+    except Exception as e:
+        print(f"Error in /examcountdown: {traceback.format_exc()}")
+        report_error_to_admin(f"Error in /examcountdown:\n{e}")
+        bot.send_message(msg.chat.id, "❌ Could not generate the countdown message. An error occurred.")
 # --- Temporary Utility Command to get Topic IDs ---
 
 @bot.message_handler(commands=['get_topic_id'])
