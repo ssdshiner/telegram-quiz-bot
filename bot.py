@@ -2221,25 +2221,25 @@ def format_analysis_for_webapp(analysis_data):
     for item in analysis_data:
         subject_name = item.get('topic', 'Unknown')
         if subject_name not in subjects_processed:
-            subjects_processed[subject_name] = {'correct': 0, 'total': 0}
+            subjects_processed[subject_name] = {'correct': 0, 'total': 0, 'avgSpeed': 0, 'count': 0}
         
         subjects_processed[subject_name]['correct'] += item.get('user_correct', 0)
         subjects_processed[subject_name]['total'] += item.get('user_total', 0)
+        subjects_processed[subject_name]['avgSpeed'] += item.get('user_avg_speed', 0)
+        subjects_processed[subject_name]['count'] += 1
 
     for name, data in subjects_processed.items():
         accuracy = (data['correct'] * 100 / data['total']) if data['total'] > 0 else 0
+        avg_speed = (data['avgSpeed'] / data['count']) if data['count'] > 0 else 0
         total_accuracy_sum += accuracy
         total_subjects += 1
-        formatted['deepDive']['subjects'].append({'name': name, 'accuracy': round(accuracy)})
+        formatted['deepDive']['subjects'].append({'name': name, 'accuracy': round(accuracy), 'avgSpeed': round(avg_speed, 1)})
 
     if total_subjects > 0:
         formatted['overallStats']['overallAccuracy'] = round(total_accuracy_sum / total_subjects)
         # Find best subject
         best_sub = max(formatted['deepDive']['subjects'], key=lambda x: x['accuracy'])
         formatted['overallStats']['bestSubject'] = best_sub['name']
-    
-    # We will add logic for totalQuizzes, streak, questionTypes, and coachInsight later from other tables.
-    # For now, this is a great start.
     
     return formatted
 
@@ -2259,41 +2259,44 @@ def handle_my_analysis_command(msg: types.Message):
     user_name = escape(msg.from_user.first_name)
     
     try:
-        # 1. Fetch REAL data from Supabase
         response = supabase.rpc('get_user_deep_analysis', {'p_user_id': user_id}).execute()
         
         if not response.data:
             bot.reply_to(msg, f"Sorry {user_name}, I don't have enough data for a deep analysis yet. Participate in more quizzes to build your profile!")
             return
 
-        # 2. Structure the data for our JavaScript app
         analysis_payload = format_analysis_for_webapp(response.data)
-
-        # 3. Convert data to a URL-safe string
         json_data_string = json.dumps(analysis_payload)
         encoded_data = quote(json_data_string)
 
-        # 4. Get the Web App URL from environment variables
         ANALYSIS_WEBAPP_URL = os.getenv('ANALYSIS_WEBAPP_URL')
         if not ANALYSIS_WEBAPP_URL:
             report_error_to_admin("CRITICAL: ANALYSIS_WEBAPP_URL environment variable is not set!")
             bot.reply_to(msg, "Sorry, the analysis feature is currently under maintenance. Please contact an admin.")
             return
 
-        # 5. Create the final URL with the data embedded in it
         final_url = f"{ANALYSIS_WEBAPP_URL}?data={encoded_data}"
 
-        # 6. Create the button that opens the Mini App
         markup = types.InlineKeyboardMarkup()
         web_app_info = types.WebAppInfo(final_url)
         button = types.InlineKeyboardButton("📊 View My Performance Dashboard", web_app=web_app_info)
         markup.add(button)
         
         intro_text = "Click the button below to open your personalized performance dashboard! It's an interactive way to check your progress."
-        bot.reply_to(msg, intro_text, reply_markup=markup, message_thread_id=msg.message_thread_id)
+        
+        # === THE FIX IS HERE ===
+        # We are replacing bot.reply_to with the more explicit bot.send_message
+        bot.send_message(
+            chat_id=msg.chat.id,
+            text=intro_text,
+            reply_to_message_id=msg.message_id,
+            message_thread_id=msg.message_thread_id,
+            reply_markup=markup,
+            allow_sending_without_reply=True 
+        )
 
     except Exception as e:
-        print(f"Error in /my_analysis: {traceback.format_exc()}")
+        print(f"Error generating analysis for {user_id}:\n{traceback.format_exc()}")
         report_error_to_admin(f"Error generating analysis for {user_id}:\n{e}")
         bot.reply_to(msg, "❌ Oops! Something went wrong while generating your analysis.")
 
