@@ -1764,7 +1764,6 @@ def get_topic_id(message: types.Message):
         )
 
 # --- Core Command: /kalkaquiz ---
-
 @bot.message_handler(commands=['kalkaquiz'])
 @membership_required
 def handle_tomorrow_quiz(msg: types.Message):
@@ -1775,6 +1774,8 @@ def handle_tomorrow_quiz(msg: types.Message):
         supabase.rpc('update_chat_activity', {'p_user_id': msg.from_user.id, 'p_user_name': msg.from_user.username or msg.from_user.first_name}).execute()
     except Exception as e:
         print(f"Activity tracking failed for user {msg.from_user.id} in command: {e}")
+        
+    # This check for private messages remains the same
     if not is_group_message(msg):
         bot.send_message(msg.chat.id, "ℹ️ The `/kalkaquiz` command is designed to be used in the main group chat.")
         return
@@ -1787,20 +1788,21 @@ def handle_tomorrow_quiz(msg: types.Message):
         response = supabase.table('quiz_schedule').select('*').eq('quiz_date', tomorrow_date_str).order('quiz_no').execute()
 
         if not response.data:
-            # THE FIX: Added parse_mode="HTML" to this message for safety.
             message_text = f"✅ Hey {escape(msg.from_user.first_name)}, tomorrow's schedule has not been updated yet. Please check back later!"
-            bot.send_message(msg.chat.id, message_text, parse_mode="HTML", message_thread_id=msg.message_thread_id)
+            # --- THE FIX: Using reply_to instead of send_message ---
+            bot.reply_to(msg, message_text, parse_mode="HTML")
             return
         
-        # Use our helper function to generate the message
         message_text = format_kalkaquiz_message(response.data)
         
-        bot.send_message(msg.chat.id, message_text, parse_mode="HTML", message_thread_id=msg.message_thread_id)
+        # --- THE FIX: Using reply_to instead of send_message ---
+        bot.reply_to(msg, message_text, parse_mode="HTML")
 
     except Exception as e:
         print(f"CRITICAL Error in /kalkaquiz: {traceback.format_exc()}")
         report_error_to_admin(f"Failed to fetch tomorrow's quiz schedule:\n{traceback.format_exc()}")
-        bot.send_message(msg.chat.id, "😥 Oops! Something went wrong while fetching the schedule.", message_thread_id=msg.message_thread_id)
+        # --- THE FIX: Using reply_to instead of send_message ---
+        bot.reply_to(msg, "😥 Oops! Something went wrong while fetching the schedule.")
 
 # --- Callback Handler for Inline Buttons ---
 
