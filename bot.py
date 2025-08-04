@@ -2380,7 +2380,7 @@ def format_analysis_for_webapp(analysis_data):
 @membership_required
 def handle_my_analysis_command(msg: types.Message):
     """
-    Launches the Performance Dashboard Mini App with the user's data.
+    Launches the Performance Dashboard Mini App with a robust reply method.
     """
     try:
         supabase.rpc('update_chat_activity', {'p_user_id': msg.from_user.id, 'p_user_name': msg.from_user.username or msg.from_user.first_name}).execute()
@@ -2393,8 +2393,18 @@ def handle_my_analysis_command(msg: types.Message):
     try:
         response = supabase.rpc('get_user_deep_analysis', {'p_user_id': user_id}).execute()
         
+        # Define the robust reply parameters once
+        reply_params = types.ReplyParameters(
+            message_id=msg.message_id,
+            allow_sending_without_reply=True
+        )
+        
         if not response.data:
-            bot.reply_to(msg, f"Sorry {user_name}, I don't have enough data for a deep analysis yet. Participate in more quizzes to build your profile!")
+            bot.send_message(
+                msg.chat.id,
+                f"Sorry {user_name}, I don't have enough data for a deep analysis yet. Participate in more quizzes to build your profile!",
+                reply_parameters=reply_params
+            )
             return
 
         analysis_payload = format_analysis_for_webapp(response.data)
@@ -2404,7 +2414,7 @@ def handle_my_analysis_command(msg: types.Message):
         ANALYSIS_WEBAPP_URL = os.getenv('ANALYSIS_WEBAPP_URL')
         if not ANALYSIS_WEBAPP_URL:
             report_error_to_admin("CRITICAL: ANALYSIS_WEBAPP_URL environment variable is not set!")
-            bot.reply_to(msg, "Sorry, the analysis feature is currently under maintenance. Please contact an admin.")
+            bot.send_message(msg.chat.id, "Sorry, the analysis feature is currently under maintenance. Please contact an admin.", reply_parameters=reply_params)
             return
 
         final_url = f"{ANALYSIS_WEBAPP_URL}?data={encoded_data}"
@@ -2416,22 +2426,22 @@ def handle_my_analysis_command(msg: types.Message):
         
         intro_text = "Click the button below to open your personalized performance dashboard! It's an interactive way to check your progress."
         
-        # === THE FINAL FIX IS HERE ===
-        # Using the correct message_thread_id parameter
+        # Using the robust reply method
         bot.send_message(
             chat_id=msg.chat.id,
             text=intro_text,
-            reply_to_message_id=msg.message_id,
-            message_thread_id=msg.message_thread_id, # This is now correct
             reply_markup=markup,
-            allow_sending_without_reply=True 
+            reply_parameters=reply_params
         )
 
     except Exception as e:
         print(f"Error generating analysis for {user_id}:\n{traceback.format_exc()}")
         report_error_to_admin(f"Error generating analysis for {user_id}:\n{e}")
-        bot.reply_to(msg, "❌ Oops! Something went wrong while generating your analysis.")
-
+        try:
+            reply_params = types.ReplyParameters(message_id=msg.message_id, allow_sending_without_reply=True)
+            bot.send_message(msg.chat.id, "❌ Oops! Something went wrong while generating your analysis.", reply_parameters=reply_params)
+        except Exception as final_error:
+            print(f"Failed to even send the error message for /my_analysis: {final_error}")
 
 @bot.message_handler(commands=['mystats'])
 @membership_required
