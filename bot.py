@@ -1109,7 +1109,7 @@ def load_data():
 def save_data():
     """
     Saves the current bot state to Supabase.
-    This version is more resilient to temporary Supabase server errors.
+    This version gracefully handles temporary network connection errors.
     """
     if not supabase:
         return
@@ -1130,14 +1130,17 @@ def save_data():
         ]
 
         supabase.table('bot_state').upsert(data_to_save).execute()
-        
+
+    except httpx.ConnectError as e:
+        # --- THE FIX IS HERE ---
+        # This new block specifically catches the "Connection reset by peer" error.
+        print(f"⚠️ Supabase connection reset. This is a temporary network issue. Skipping this state save. Error: {e}")
+
     except APIError as e:
         # This block specifically catches Supabase/Postgrest errors.
-        # We check if it's a temporary server-side issue (like 500, 502, 503, 504).
         if hasattr(e, 'code') and str(e.code).startswith('5'):
             print(f"⚠️ Supabase is temporarily unavailable (Error: {e.code}). This is a server issue. Skipping state save.")
         else:
-            # For other API errors (like 4xx), we still want a critical report.
             print(f"❌ CRITICAL: A Supabase API error occurred while saving state: {e}")
             report_error_to_admin(f"Failed to save bot state due to Supabase APIError:\n{traceback.format_exc()}")
             
