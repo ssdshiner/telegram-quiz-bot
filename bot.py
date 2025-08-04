@@ -1767,14 +1767,13 @@ def get_topic_id(message: types.Message):
 @membership_required
 def handle_tomorrow_quiz(msg: types.Message):
     """
-    Shows the quiz schedule for the next day using the new mobile-first format.
+    Shows the quiz schedule for the next day using a robust reply method.
     """
     try:
         supabase.rpc('update_chat_activity', {'p_user_id': msg.from_user.id, 'p_user_name': msg.from_user.username or msg.from_user.first_name}).execute()
     except Exception as e:
         print(f"Activity tracking failed for user {msg.from_user.id} in command: {e}")
         
-    # This check for private messages remains the same
     if not is_group_message(msg):
         bot.send_message(msg.chat.id, "ℹ️ The `/kalkaquiz` command is designed to be used in the main group chat.")
         return
@@ -1786,23 +1785,35 @@ def handle_tomorrow_quiz(msg: types.Message):
         
         response = supabase.table('quiz_schedule').select('*').eq('quiz_date', tomorrow_date_str).order('quiz_no').execute()
 
+        # Define the reply parameters once. This tells Telegram to reply to the user's
+        # command, but if that command message is already deleted, just send it as a normal message.
+        reply_params = types.ReplyParameters(
+            message_id=msg.message_id,
+            allow_sending_without_reply=True
+        )
+
         if not response.data:
             message_text = f"✅ Hey {escape(msg.from_user.first_name)}, tomorrow's schedule has not been updated yet. Please check back later!"
-            # --- THE FIX: Using reply_to instead of send_message ---
-            bot.reply_to(msg, message_text, parse_mode="HTML")
+            bot.send_message(msg.chat.id, message_text, parse_mode="HTML", reply_parameters=reply_params)
             return
         
         message_text = format_kalkaquiz_message(response.data)
         
-        # --- THE FIX: Using reply_to instead of send_message ---
-        bot.reply_to(msg, message_text, parse_mode="HTML")
+        bot.send_message(msg.chat.id, message_text, parse_mode="HTML", reply_parameters=reply_params)
 
     except Exception as e:
         print(f"CRITICAL Error in /kalkaquiz: {traceback.format_exc()}")
         report_error_to_admin(f"Failed to fetch tomorrow's quiz schedule:\n{traceback.format_exc()}")
-        # --- THE FIX: Using reply_to instead of send_message ---
-        bot.reply_to(msg, "😥 Oops! Something went wrong while fetching the schedule.")
-
+        
+        # We still try to reply even in case of an error
+        try:
+            reply_params = types.ReplyParameters(
+                message_id=msg.message_id,
+                allow_sending_without_reply=True
+            )
+            bot.send_message(msg.chat.id, "😥 Oops! Something went wrong while fetching the schedule.", reply_parameters=reply_params)
+        except Exception as final_error:
+            print(f"Failed to even send the error message for /kalkaquiz: {final_error}")
 # --- Callback Handler for Inline Buttons ---
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('show_'))
