@@ -2310,46 +2310,69 @@ def handle_admin_reply_to_forward(msg: types.Message):
 
 def format_analysis_for_webapp(analysis_data):
     """
-    Takes raw Supabase data and structures it for the Mini App's JavaScript.
+    Takes raw Supabase data from the get_user_deep_analysis RPC
+    and structures it for the Mini App's JavaScript.
     """
     # Initialize the structure exactly like our JS mock data
     formatted = {
         'overallStats': {'totalQuizzes': 0, 'overallAccuracy': 0, 'bestSubject': 'N/A', 'currentStreak': 0},
-        'deepDive': {'subjects': [], 'questionTypes': {'practical': 0, 'theory': 0}},
+        'deepDive': {'subjects': [], 'questionTypes': {'practical': 0, 'theory': 0, 'case_study': 0}},
         'coachInsight': "Start playing to get your first insight!"
     }
 
     if not analysis_data:
         return formatted
 
-    # Process the data (This is a simplified example, we can make it more detailed later)
-    total_accuracy_sum = 0
-    total_subjects = 0
-    
-    subjects_processed = {}
+    # --- Temporary data storage for calculations ---
+    subject_agg = {}
+    type_agg = {'Practical': {'correct': 0, 'total': 0}, 'Theory': {'correct': 0, 'total': 0}, 'Case Study': {'correct': 0, 'total': 0}}
+    total_correct = 0
+    total_qs = 0
+
+    # --- Aggregate data from the Supabase function response ---
     for item in analysis_data:
-        subject_name = item.get('topic', 'Unknown')
-        if subject_name not in subjects_processed:
-            subjects_processed[subject_name] = {'correct': 0, 'total': 0, 'avgSpeed': 0, 'count': 0}
+        topic = item.get('topic', 'Unknown')
+        q_type = item.get('question_type', 'Theory')
+        correct = item.get('correct_answers', 0)
+        total = item.get('total_questions', 0)
+
+        total_correct += correct
+        total_qs += total
+
+        # Aggregate by subject/topic
+        if topic not in subject_agg:
+            subject_agg[topic] = {'correct': 0, 'total': 0, 'time': 0}
+        subject_agg[topic]['correct'] += correct
+        subject_agg[topic]['total'] += total
+        subject_agg[topic]['time'] += item.get('total_time_taken', 0)
         
-        subjects_processed[subject_name]['correct'] += item.get('user_correct', 0)
-        subjects_processed[subject_name]['total'] += item.get('user_total', 0)
-        subjects_processed[subject_name]['avgSpeed'] += item.get('user_avg_speed', 0)
-        subjects_processed[subject_name]['count'] += 1
+        # Aggregate by question type
+        if q_type in type_agg:
+            type_agg[q_type]['correct'] += correct
+            type_agg[q_type]['total'] += total
 
-    for name, data in subjects_processed.items():
+    # --- Populate the 'deepDive' section ---
+    for topic, data in subject_agg.items():
         accuracy = (data['correct'] * 100 / data['total']) if data['total'] > 0 else 0
-        avg_speed = (data['avgSpeed'] / data['count']) if data['count'] > 0 else 0
-        total_accuracy_sum += accuracy
-        total_subjects += 1
-        formatted['deepDive']['subjects'].append({'name': name, 'accuracy': round(accuracy), 'avgSpeed': round(avg_speed, 1)})
+        avg_speed = (data['time'] / data['total']) if data['total'] > 0 else 0
+        formatted['deepDive']['subjects'].append({'name': topic, 'accuracy': round(accuracy), 'avgSpeed': round(avg_speed, 1)})
+    
+    for q_type, data in type_agg.items():
+        accuracy = (data['correct'] * 100 / data['total']) if data['total'] > 0 else 0
+        # Use lowercase for JSON keys to match JS
+        formatted['deepDive']['questionTypes'][q_type.lower().replace(' ', '_')] = round(accuracy)
 
-    if total_subjects > 0:
-        formatted['overallStats']['overallAccuracy'] = round(total_accuracy_sum / total_subjects)
-        # Find best subject
+    # --- Populate the 'overallStats' section ---
+    if total_qs > 0:
+        formatted['overallStats']['overallAccuracy'] = round((total_correct * 100) / total_qs)
+    
+    if formatted['deepDive']['subjects']:
         best_sub = max(formatted['deepDive']['subjects'], key=lambda x: x['accuracy'])
         formatted['overallStats']['bestSubject'] = best_sub['name']
-    
+        
+    # Note: 'totalQuizzes' and 'currentStreak' would need separate queries to be accurate.
+    # We are leaving them as 0 for now to ensure the main feature works. We can add them later.
+
     return formatted
 
 
