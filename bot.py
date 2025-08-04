@@ -2383,7 +2383,8 @@ def format_analysis_for_webapp(analysis_data):
 @membership_required
 def handle_my_analysis_command(msg: types.Message):
     """
-    Launches the Performance Dashboard Mini App with the user's data.
+    Launches the Mini App and posts a public summary in the group,
+    while also sending a detailed notification to the admin.
     """
     try:
         supabase.rpc('update_chat_activity', {'p_user_id': msg.from_user.id, 'p_user_name': msg.from_user.username or msg.from_user.first_name}).execute()
@@ -2410,30 +2411,55 @@ def handle_my_analysis_command(msg: types.Message):
             return
 
         analysis_payload = format_analysis_for_webapp(response.data)
+        
+        # --- NEW FEATURE 1: Send a short summary to the admin ---
+        try:
+            admin_summary = (
+                f"📊 <b>Analysis Used by {user_name}</b>\n"
+                f"<b>Time:</b> {datetime.datetime.now(IST).strftime('%I:%M %p')}\n"
+                f"<b>Accuracy:</b> {analysis_payload['overallStats']['overallAccuracy']}% | "
+                f"<b>Best Subject:</b> {escape(analysis_payload['overallStats']['bestSubject'])}"
+            )
+            bot.send_message(ADMIN_USER_ID, admin_summary, parse_mode="HTML")
+        except Exception as admin_notify_error:
+            print(f"Failed to send admin notification for /my_analysis: {admin_notify_error}")
+
+        # --- NEW FEATURE 2: Post a public summary in the group chat ---
+        if is_group_message(msg):
+            public_summary = (
+                f"📊 <b>{user_name}'s Performance Snapshot</b>\n\n"
+                f"• <b>Overall Accuracy:</b> {analysis_payload['overallStats']['overallAccuracy']}%\n"
+                f"• <b>Strongest Area:</b> {escape(analysis_payload['overallStats']['bestSubject'])}\n\n"
+                f"<i>For a full deep-dive, click the <b>Menu Button [ / ]</b> on the left to open your personal dashboard!</i>"
+            )
+            bot.send_message(msg.chat.id, public_summary, parse_mode="HTML", reply_parameters=reply_params)
+
+        # --- The original functionality to send the Mini App button ---
         json_data_string = json.dumps(analysis_payload)
         encoded_data = quote(json_data_string)
 
         ANALYSIS_WEBAPP_URL = os.getenv('ANALYSIS_WEBAPP_URL')
         if not ANALYSIS_WEBAPP_URL:
+            # This error is critical and should be reported
             report_error_to_admin("CRITICAL: ANALYSIS_WEBAPP_URL environment variable is not set!")
-            bot.send_message(msg.chat.id, "Sorry, the analysis feature is currently under maintenance. Please contact an admin.", reply_parameters=reply_params)
             return
 
         final_url = f"{ANALYSIS_WEBAPP_URL}?data={encoded_data}"
 
         markup = types.InlineKeyboardMarkup()
         web_app_info = types.WebAppInfo(final_url)
-        button = types.InlineKeyboardButton("📊 View My Performance Dashboard", web_app=web_app_info)
+        button = types.InlineKeyboardButton("📊 Open My Full Dashboard", web_app=web_app_info)
         markup.add(button)
         
-        intro_text = "Click the button below to open your personalized performance dashboard! It's an interactive way to check your progress."
-        
-        bot.send_message(
-            chat_id=msg.chat.id,
-            text=intro_text,
-            reply_markup=markup,
-            reply_parameters=reply_params
-        )
+        # This message will now only be sent if the command is used in a private chat
+        if not is_group_message(msg):
+            intro_text = "Click the button below to open your personalized performance dashboard!"
+            bot.send_message(
+                chat_id=msg.chat.id,
+                text=intro_text,
+                reply_markup=markup,
+                reply_parameters=reply_params
+            )
 
     except Exception as e:
         print(f"Error generating analysis for {user_id}:\n{traceback.format_exc()}")
@@ -2443,6 +2469,34 @@ def handle_my_analysis_command(msg: types.Message):
             bot.send_message(msg.chat.id, "❌ Oops! Something went wrong while generating your analysis.", reply_parameters=reply_params)
         except Exception as final_error:
             print(f"Failed to even send the error message for /my_analysis: {final_error}")
+
+
+@bot.message_handler(content_types=['web_app_data'])
+@membership_required
+def handle_webapp_data(msg: types.Message):
+    """
+    Handles commands sent from the Mini App via tg.sendData().
+    This acts as a router to the appropriate command handler.
+    """
+    command_from_webapp = msg.web_app_data.data
+    print(f"Received command from Mini App: {command_from_webapp}")
+
+    # We will manually call the correct handler based on the command text.
+    # This is like the user typing the command themselves.
+    # We also update the message text to match the command for the handler.
+    msg.text = command_from_webapp
+
+    if command_from_webapp == "/todayquiz":
+        handle_today_quiz(msg)
+    elif command_from_webapp == "/listfile":
+        handle_listfile_command(msg)
+    # Add other commands from your Mini App's "Quick Actions" tab here as needed
+    # elif command_from_webapp == "/kalkaquiz":
+    #     handle_tomorrow_quiz(msg)
+    else:
+        # Fallback for unknown commands from the web app
+        bot.send_message(msg.chat.id, f"Received an unknown action from the dashboard: {escape(command_from_webapp)}")
+
 
 @bot.message_handler(commands=['mystats'])
 @membership_required
