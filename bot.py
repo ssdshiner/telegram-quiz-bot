@@ -2383,7 +2383,7 @@ def format_analysis_for_webapp(analysis_data):
 @membership_required
 def handle_my_analysis_command(msg: types.Message):
     """
-    Launches the Performance Dashboard Mini App with a robust reply method.
+    Launches the Performance Dashboard Mini App with the user's data.
     """
     try:
         supabase.rpc('update_chat_activity', {'p_user_id': msg.from_user.id, 'p_user_name': msg.from_user.username or msg.from_user.first_name}).execute()
@@ -2396,7 +2396,6 @@ def handle_my_analysis_command(msg: types.Message):
     try:
         response = supabase.rpc('get_user_deep_analysis', {'p_user_id': user_id}).execute()
         
-        # Define the robust reply parameters once
         reply_params = types.ReplyParameters(
             message_id=msg.message_id,
             allow_sending_without_reply=True
@@ -2429,7 +2428,6 @@ def handle_my_analysis_command(msg: types.Message):
         
         intro_text = "Click the button below to open your personalized performance dashboard! It's an interactive way to check your progress."
         
-        # Using the robust reply method
         bot.send_message(
             chat_id=msg.chat.id,
             text=intro_text,
