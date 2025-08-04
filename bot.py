@@ -1524,7 +1524,7 @@ def handle_quoted_reply_content(msg: types.Message):
 @membership_required
 def handle_today_quiz(msg: types.Message):
     """
-    Shows the quiz schedule with greetings, detailed info, and interactive buttons.
+    Shows the quiz schedule with a robust reply method to prevent errors.
     """
     try:
         supabase.rpc('update_chat_activity', {'p_user_id': msg.from_user.id, 'p_user_name': msg.from_user.username or msg.from_user.first_name}).execute()
@@ -1550,14 +1550,18 @@ def handle_today_quiz(msg: types.Message):
 
         user_name = escape(msg.from_user.first_name)
         
+        # Define the robust reply parameters once
+        reply_params = types.ReplyParameters(
+            message_id=msg.message_id,
+            allow_sending_without_reply=True
+        )
+        
         if not response.data:
             message_text = f"✅ Hey {user_name}, no quizzes are scheduled for today. It might be a rest day! 🧘"
-            bot.reply_to(msg, message_text, parse_mode="HTML")
+            bot.send_message(msg.chat.id, message_text, parse_mode="HTML", reply_parameters=reply_params)
             return
         
-        # These greetings are safe as the user_name is already escaped.
         all_greetings = [
-            # --- English Greetings ---
             f"Ready to conquer the quizzes today, {user_name}?\nHere's the schedule to light up your way! 💡",
             f"Set your own winning pace, {user_name}, it's time to ace!\nHere's the quiz schedule for today's race! 🏁",
             f"It's your time to truly shine, {user_name}, the stars align!\nHere are today's quizzes, all in a line! ✨",
@@ -1565,8 +1569,6 @@ def handle_today_quiz(msg: types.Message):
             f"With C.A.V.Y.A. right by your side, {user_name}, there's nowhere to hide!\nCheck the quiz power packed inside! 💪",
             f"It's your moment, it's your time, {user_name}, get ready for the climb!\nHere's the schedule, perfectly on time! 🧗‍♀️",
             f"Let's make every single moment count, {user_name}, and reach the paramount!\nToday's quiz schedule is now out and about! 📣",
-            
-            # --- Hindi Greetings ---
             f"Josh aur hosh, dono rakho saath,\n{user_name}, quiz schedule se karo din ki shuruaat! ☀️",
             f"Mehnat se likhni hai apni kismat, {user_name}, dikhao aaj apni himmat!\nYeh raha aaj ka schedule, aayi hai quiz ki daawat! 💌",
             f"Jeet ki tyari hai poori, ab nahi koi doori,\n{user_name}, aaj ka schedule check karna hai zaroori! 🏆",
@@ -1598,12 +1600,22 @@ def handle_today_quiz(msg: types.Message):
             types.InlineKeyboardButton("🤖 All Commands", callback_data="show_info")
         )
         
-        bot.reply_to(msg, message_text, parse_mode="HTML", reply_markup=markup)
+        bot.send_message(
+            msg.chat.id,
+            message_text,
+            parse_mode="HTML",
+            reply_markup=markup,
+            reply_parameters=reply_params
+        )
 
     except Exception as e:
         print(f"CRITICAL Error in /todayquiz: {traceback.format_exc()}")
         report_error_to_admin(f"Failed to fetch today's quiz schedule:\n{traceback.format_exc()}")
-        bot.reply_to(msg, "😥 Oops! Something went wrong while fetching the schedule.")
+        try:
+            reply_params = types.ReplyParameters(message_id=msg.message_id, allow_sending_without_reply=True)
+            bot.send_message(msg.chat.id, "😥 Oops! Something went wrong while fetching the schedule.", reply_parameters=reply_params)
+        except Exception as final_error:
+            print(f"Failed to even send the error message for /todayquiz: {final_error}")
 
 
 def format_kalkaquiz_message(quizzes):
