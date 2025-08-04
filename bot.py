@@ -1530,6 +1530,7 @@ def handle_today_quiz(msg: types.Message):
         supabase.rpc('update_chat_activity', {'p_user_id': msg.from_user.id, 'p_user_name': msg.from_user.username or msg.from_user.first_name}).execute()
     except Exception as e:
         print(f"Activity tracking failed for user {msg.from_user.id} in command: {e}")
+
     if not is_group_message(msg):
         bot.send_message(msg.chat.id, "ℹ️ The `/todayquiz` command is designed to be used in the main group chat.")
         return
@@ -1550,29 +1551,29 @@ def handle_today_quiz(msg: types.Message):
         user_name = escape(msg.from_user.first_name)
         
         if not response.data:
-            # THE FIX: Added parse_mode="HTML" to this message to ensure safety with usernames containing special characters.
             message_text = f"✅ Hey {user_name}, no quizzes are scheduled for today. It might be a rest day! 🧘"
-            bot.send_message(msg.chat.id, message_text, parse_mode="HTML", message_thread_id=msg.message_thread_id)
+            bot.reply_to(msg, message_text, parse_mode="HTML")
             return
         
-# These greetings are safe as the user_name is already escaped.
-all_greetings = [
-    # --- English Greetings ---
-    f"Ready to conquer the quizzes today, {user_name}?\nHere's the schedule to light up your way! 💡",
-    f"Set your own winning pace, {user_name}, it's time to ace!\nHere's the quiz schedule for today's race! 🏁",
-    f"It's your time to truly shine, {user_name}, the stars align!\nHere are today's quizzes, all in a line! ✨",
-    f"A new day of learning has begun, {user_name}, let's have some fun!\nHere's the quiz schedule, time for a run! 🏃‍♂️",
-    f"With C.A.V.Y.A. right by your side, {user_name}, there's nowhere to hide!\nCheck the quiz power packed inside! 💪",
-    f"It's your moment, it's your time, {user_name}, get ready for the climb!\nHere's the schedule, perfectly on time! 🧗‍♀️",
-    f"Let's make every single moment count, {user_name}, and reach the paramount!\nToday's quiz schedule is now out and about! 📣",
-    
-    # --- Hindi Greetings ---
-    f"Josh aur hosh, dono rakho saath,\n{user_name}, quiz schedule se karo din ki shuruaat! ☀️",
-    f"Mehnat se likhni hai apni kismat, {user_name}, dikhao aaj apni himmat!\nYeh raha aaj ka schedule💌",
-    f"Jeet ki tyari hai poori, ab nahi hogi koi doori,\n{user_name}, aaj ka schedule check karna hai isliye hai zaroori! 🏆",
-]
+        # These greetings are safe as the user_name is already escaped.
+        all_greetings = [
+            # --- English Greetings ---
+            f"Ready to conquer the quizzes today, {user_name}?\nHere's the schedule to light up your way! 💡",
+            f"Set your own winning pace, {user_name}, it's time to ace!\nHere's the quiz schedule for today's race! 🏁",
+            f"It's your time to truly shine, {user_name}, the stars align!\nHere are today's quizzes, all in a line! ✨",
+            f"A new day of learning has begun, {user_name}, let's have some fun!\nHere's the quiz schedule, time for a run! 🏃‍♂️",
+            f"With C.A.V.Y.A. right by your side, {user_name}, there's nowhere to hide!\nCheck the quiz power packed inside! 💪",
+            f"It's your moment, it's your time, {user_name}, get ready for the climb!\nHere's the schedule, perfectly on time! 🧗‍♀️",
+            f"Let's make every single moment count, {user_name}, and reach the paramount!\nToday's quiz schedule is now out and about! 📣",
+            
+            # --- Hindi Greetings ---
+            f"Josh aur hosh, dono rakho saath,\n{user_name}, quiz schedule se karo din ki shuruaat! ☀️",
+            f"Mehnat se likhni hai apni kismat, {user_name}, dikhao aaj apni himmat!\nYeh raha aaj ka schedule, aayi hai quiz ki daawat! 💌",
+            f"Jeet ki tyari hai poori, ab nahi koi doori,\n{user_name}, aaj ka schedule check karna hai zaroori! 🏆",
+        ]
+        
         message_text = f"<b>{time_of_day_greeting}</b>\n\n{random.choice(all_greetings)}\n"
-        message_text += "———————————————\n\n"
+        message_text += "━━━━━━━━━━━━\n\n"
         
         for quiz in response.data:
             try:
@@ -1586,25 +1587,23 @@ all_greetings = [
                 f"⏰ Time: {formatted_time}\n"
                 f"📝 Subject: {escape(str(quiz.get('subject', 'N/A')))}\n"
                 f"📖 Chapter: {escape(str(quiz.get('chapter_name', 'N/A')))}\n"
-                f"✏️ Part: {escape(str(quiz.get('quiz_type', 'N/A')))}\n"
                 f"🧩 Topics: {escape(str(quiz.get('topics_covered', 'N/A')))}\n\n"
             )
         
-        message_text += "———————————————"
+        message_text += "━━━━━━━━━━━━"
         
         markup = types.InlineKeyboardMarkup(row_width=2)
         markup.add(
             types.InlineKeyboardButton("📊 My Stats", callback_data=f"show_mystats_{msg.from_user.id}"),
-            types.InlineKeyboardButton("🤖 All Commands", callback_data="show_info"),
-            types.InlineKeyboardButton("📅 View Full Schedule", url=WEBAPP_URL)
+            types.InlineKeyboardButton("🤖 All Commands", callback_data="show_info")
         )
         
-        bot.send_message(msg.chat.id, message_text, parse_mode="HTML", reply_markup=markup, message_thread_id=msg.message_thread_id)
+        bot.reply_to(msg, message_text, parse_mode="HTML", reply_markup=markup)
 
     except Exception as e:
         print(f"CRITICAL Error in /todayquiz: {traceback.format_exc()}")
         report_error_to_admin(f"Failed to fetch today's quiz schedule:\n{traceback.format_exc()}")
-        bot.send_message(msg.chat.id, "😥 Oops! Something went wrong while fetching the schedule.", message_thread_id=msg.message_thread_id)
+        bot.reply_to(msg, "😥 Oops! Something went wrong while fetching the schedule.")
 
 
 def format_kalkaquiz_message(quizzes):
