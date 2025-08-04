@@ -2481,18 +2481,17 @@ def handle_webapp_data(msg: types.Message):
     command_from_webapp = msg.web_app_data.data
     print(f"Received command from Mini App: {command_from_webapp}")
 
-    # We will manually call the correct handler based on the command text.
-    # This is like the user typing the command themselves.
-    # We also update the message text to match the command for the handler.
+    # This is the key part: we update the message object so the
+    # downstream handlers think it's a normal text message.
     msg.text = command_from_webapp
 
+    # --- UPDATED ROUTING LOGIC ---
     if command_from_webapp == "/todayquiz":
         handle_today_quiz(msg)
     elif command_from_webapp == "/listfile":
         handle_listfile_command(msg)
-    # Add other commands from your Mini App's "Quick Actions" tab here as needed
-    # elif command_from_webapp == "/kalkaquiz":
-    #     handle_tomorrow_quiz(msg)
+    elif command_from_webapp.startswith("/need"):
+        handle_need_command(msg)
     else:
         # Fallback for unknown commands from the web app
         bot.send_message(msg.chat.id, f"Received an unknown action from the dashboard: {escape(command_from_webapp)}")
