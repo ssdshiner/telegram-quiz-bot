@@ -2354,93 +2354,94 @@ def handle_admin_reply_to_forward(msg: types.Message):
 
 def format_analysis_for_webapp(analysis_data, user_name):
     """
-    Supabase se aaye raw data ko Web App ke liye ek detailed JSON mein structure karta hai.
+    Supabase se aaye raw data ko ek extensive JSON mein structure karta hai
+    jo naye interactive Web App (Charts, Tables, etc.) ke liye taiyaar hai.
     """
     if not analysis_data:
+        # Agar koi data nahi hai to ek default structure bhejein
         return {
             'userName': user_name,
-            'overallStats': {'totalQuizzes': 0, 'overallAccuracy': 0, 'bestSubject': 'N/A', 'totalQuestions': 0},
-            'performanceByTopic': [],
-            'coachInsight': "Apna performance profile banane ke liye quizzes khelna shuru karein!"
+            'isDataAvailable': False,
+            'coachInsight': "Aapka performance profile abhi khaali hai. Quizzes khelna shuru karein!"
         }
 
+    # Data ko process karne ke liye dictionaries
     topic_performance = {}
+    question_type_stats = {'Practical': {'correct': 0, 'total': 0}, 'Theory': {'correct': 0, 'total': 0}, 'Case Study': {'correct': 0, 'total': 0}}
     total_correct_glob = 0
     total_questions_glob = 0
 
     for item in analysis_data:
-        topic = item.get('topic', 'Unknown Topic')
-        q_type = item.get('question_type', 'Theory')
+        topic = item.get('topic', 'Unknown Topic').strip()
+        q_type = item.get('question_type', 'Theory').strip()
         correct = item.get('correct_answers', 0)
         total = item.get('total_questions', 0)
-        time = item.get('total_time_taken', 0)
-
+        
         total_correct_glob += correct
         total_questions_glob += total
 
+        # Question type ke stats update karein
+        if q_type in question_type_stats:
+            question_type_stats[q_type]['correct'] += correct
+            question_type_stats[q_type]['total'] += total
+
+        # Topic-wise performance process karein
         if topic not in topic_performance:
-            topic_performance[topic] = {
-                'topicName': topic,
-                'totalCorrect': 0,
-                'totalQuestions': 0,
-                'totalTime': 0,
-                'breakdown': {}
-            }
-        
-        topic_performance[topic]['totalCorrect'] += correct
-        topic_performance[topic]['totalQuestions'] += total
-        topic_performance[topic]['totalTime'] += time
+            topic_performance[topic] = {'correct': 0, 'total': 0}
+        topic_performance[topic]['correct'] += correct
+        topic_performance[topic]['total'] += total
 
-        if q_type not in topic_performance[topic]['breakdown']:
-            topic_performance[topic]['breakdown'][q_type] = {
-                'type': q_type,
-                'correct': 0,
-                'total': 0,
-                'time': 0
-            }
-        
-        topic_performance[topic]['breakdown'][q_type]['correct'] += correct
-        topic_performance[topic]['breakdown'][q_type]['total'] += total
-        topic_performance[topic]['breakdown'][q_type]['time'] += time
-
-    # Final processing
-    performance_list = []
-    for topic, data in topic_performance.items():
-        data['accuracy'] = round((data['totalCorrect'] * 100) / data['totalQuestions']) if data['totalQuestions'] > 0 else 0
-        data['avgSpeed'] = round(data['totalTime'] / data['totalQuestions'], 1) if data['totalQuestions'] > 0 else 0
-        
-        breakdown_list = []
-        for q_type, type_data in data['breakdown'].items():
-            type_data['accuracy'] = round((type_data['correct'] * 100) / type_data['total']) if type_data['total'] > 0 else 0
-            type_data['avgSpeed'] = round(type_data['time'] / type_data['total'], 1) if type_data['total'] > 0 else 0
-            breakdown_list.append(type_data)
-        
-        data['breakdown'] = sorted(breakdown_list, key=lambda x: x['total'], reverse=True)
-        performance_list.append(data)
-
-    sorted_performance = sorted(performance_list, key=lambda x: x['totalQuestions'], reverse=True)
-
+    # Overall stats calculate karein
     overall_accuracy = round((total_correct_glob * 100) / total_questions_glob) if total_questions_glob > 0 else 0
-    best_subject = max(sorted_performance, key=lambda x: x['accuracy'])['topicName'] if sorted_performance else 'N/A'
+    
+    # Deep dive ke liye subjects ki list banayein
+    deep_dive_subjects = []
+    for topic, data in topic_performance.items():
+        accuracy = round((data['correct'] * 100) / data['total']) if data['total'] > 0 else 0
+        deep_dive_subjects.append({
+            'name': topic,
+            'accuracy': accuracy,
+            'score': f"{data['correct']}/{data['total']}"
+        })
 
-    # Coach Insight Logic
-    coach_insight = "Aap aacha kar rahe hain! Istarah mehnat karte rahein."
-    if overall_accuracy < 60:
-        coach_insight = "Concepts ko mazboot banane par focus karein. Quiz se pehle revise karna madad karega!"
-    elif sorted_performance and sorted_performance[-1]['accuracy'] < 50:
-        weakest_topic = sorted_performance[-1]['topicName']
-        coach_insight = f"Aapki overall performance aachi hai, lekin aapko {weakest_topic} par thoda aur focus karna chahiye."
+    # Best subject nikaalein
+    best_subject = max(deep_dive_subjects, key=lambda x: x['accuracy'])['name'] if deep_dive_subjects else 'N/A'
 
+    # Radar chart ke liye data taiyaar karein (top 5 subjects)
+    sorted_subjects_for_radar = sorted(deep_dive_subjects, key=lambda x: topic_performance[x['name']]['total'], reverse=True)[:5]
+    radar_labels = [s['name'] for s in sorted_subjects_for_radar]
+    radar_data = [s['accuracy'] for s in sorted_subjects_for_radar]
 
+    # Doughnut chart ke liye data
+    doughnut_labels = [k for k, v in question_type_stats.items() if v['total'] > 0]
+    doughnut_data = [v['total'] for k, v in question_type_stats.items() if v['total'] > 0]
+
+    # Coach Insight
+    coach_insight = "Aapki performance solid hai. Keep it up!"
+    if overall_accuracy < 50:
+        coach_insight = "Foundation par focus karein. Concepts ko revise karna zaroori hai."
+    elif deep_dive_subjects:
+        weakest_subject = min(deep_dive_subjects, key=lambda x: x['accuracy'])
+        if weakest_subject['accuracy'] < 60:
+            coach_insight = f"Overall performance aachi hai, lekin {weakest_subject['name']} par extra dhyaan dene ki zaroorat hai."
+
+    # Final JSON structure
     return {
         'userName': user_name,
+        'isDataAvailable': True,
         'overallStats': {
-            'totalQuizzes': len(sorted_performance),
+            'totalQuizzes': len(topic_performance),
             'overallAccuracy': overall_accuracy,
             'bestSubject': best_subject,
             'totalQuestions': total_questions_glob
         },
-        'performanceByTopic': sorted_performance,
+        'deepDive': {
+            'subjects': deep_dive_subjects,
+        },
+        'charts': {
+            'radar': {'labels': radar_labels, 'data': radar_data},
+            'doughnut': {'labels': doughnut_labels, 'data': doughnut_data}
+        },
         'coachInsight': coach_insight
     }
 

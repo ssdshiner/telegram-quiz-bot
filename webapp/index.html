@@ -2,58 +2,59 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>My Performance Analysis</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>C.A.V.Y.A. Performance Hub</title>
     <link rel="stylesheet" href="style.css">
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
     <div id="loader" class="loader-container">
         <div class="loader"></div>
-        <p>Analyzing your performance...</p>
+        <p>Crunching the numbers...</p>
     </div>
 
-    <div id="main-content" class="container hidden">
-        <header>
-            <h1>Performance Dashboard</h1>
-            <h2 id="user-name">For You</h2>
+    <div id="app-container" class="app-container hidden">
+        <header class="app-header">
+            <h1>Hello, <span id="user-name">...</span>! 👋</h1>
+            <p id="coach-insight">Loading your personalized insights...</p>
         </header>
 
-        <section class="card" id="overall-stats">
-            <h3>Overall Stats</h3>
-            <div class="stats-grid">
-                <div class="stat-item">
-                    <span class="stat-value" id="overall-accuracy">0%</span>
-                    <span class="stat-label">Overall Accuracy</span>
-                </div>
-                <div class="stat-item">
-                    <span class="stat-value" id="total-questions">0</span>
-                    <span class="stat-label">Total Questions</span>
-                </div>
-                <div class="stat-item">
-                    <span class="stat-value" id="best-subject">N/A</span>
-                    <span class="stat-label">Best Subject</span>
-                </div>
-            </div>
-        </section>
+        <div class="tabs">
+            <button class="tab-link active" data-tab="dashboard-tab">📊 Dashboard</button>
+            <button class="tab-link" data-tab="deep-dive-tab">🌊 Deep Dive</button>
+            <button class="tab-link" data-tab="actions-tab">⚡ Quick Actions</button>
+        </div>
 
-        <section class="card" id="coach-insight">
-            <h3>💡 Coach's Insight</h3>
-            <p id="insight-text">Loading insights...</p>
-        </section>
-
-        <section id="topic-performance">
-            <h3>Performance by Topic</h3>
-            <div id="topic-list">
-                <!-- Topic cards yahan dynamically insert honge -->
+        <div id="dashboard-tab" class="tab-content active">
+            <div id="overall-stats-container" class="stats-grid"></div>
+            <div class="card">
+                <h2>Performance Radar</h2>
+                <p class="chart-subtitle">Your accuracy across top subjects</p>
+                <canvas id="radarChart"></canvas>
             </div>
-        </section>
-        
-        <footer>
-            <p>Powered by C.A.V.Y.A Bot</p>
-        </footer>
+        </div>
+
+        <div id="deep-dive-tab" class="tab-content">
+            <div class="card">
+                <h2>Subject-wise Breakdown</h2>
+                <div id="subjects-table-container"></div>
+            </div>
+            <div class="card">
+                <h2>Question Type Analysis</h2>
+                <p class="chart-subtitle">Your performance in different question formats</p>
+                <canvas id="doughnutChart"></canvas>
+            </div>
+        </div>
+
+        <div id="actions-tab" class="tab-content">
+            <div class="card">
+                <h2>Quick Bot Actions</h2>
+                <p>Use these actions to interact with the bot directly in the group chat.</p>
+                <div id="quick-actions-container" class="actions-grid"></div>
+            </div>
+        </div>
     </div>
-
     <script src="script.js"></script>
 </body>
 </html>
