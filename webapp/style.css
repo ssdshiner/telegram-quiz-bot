@@ -1,128 +1,182 @@
-/* ====== Professional Design System ====== */
-/* Yahan hum poori app ke colors ek jagah define kar rahe hain. 
-   Future mein color change karna ho to bas yahan badalna padega. */
+@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap');
+
 :root {
-    --bg-color: #0d1117; /* GitHub Dark Mode jaisa background */
-    --card-color: #161b22; /* Card ka background, thoda halka */
-    --border-color: #30363d; /* Borders ke liye */
-    --primary-text-color: #c9d1d9; /* Main text */
-    --secondary-text-color: #8b949e; /* Halka text */
-    --accent-color: #58a6ff; /* Buttons aur highlights ke liye (Blue) */
-    --accent-hover-color: #388bfd; /* Button par mouse le jaane par */
+    --bg-color: #1a1a2e;
+    --card-bg: #16213e;
+    --primary-text: #e0fbfc;
+    --secondary-text: #93b5c6;
+    --accent-color: #0f3460;
+    --highlight-color: #53a8b6;
+    --border-color: #e94560;
 }
 
-/* ====== General Styling (Mobile First) ====== */
 body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji';
+    font-family: 'Roboto', sans-serif;
     background-color: var(--bg-color);
-    color: var(--primary-text-color);
+    color: var(--primary-text);
     margin: 0;
-    padding: 24px;
-    display: flex;
-    justify-content: center;
-    min-height: 100vh;
-    box-sizing: border-box;
+    padding: 20px;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
 }
 
-.app-container {
-    width: 100%;
-    max-width: 480px; /* Mini App ke liye perfect width */
+.hidden {
+    display: none;
+}
+
+/* Loader Styles */
+.loader-container {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    height: 80vh;
+}
+.loader {
+    border: 6px solid var(--accent-color);
+    border-top: 6px solid var(--highlight-color);
+    border-radius: 50%;
+    width: 50px;
+    height: 50px;
+    animation: spin 1s linear infinite;
+}
+.loader-container p {
+    margin-top: 20px;
+    font-size: 1.1em;
+    color: var(--secondary-text);
+}
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+/* Main Content Styles */
+.container {
+    max-width: 800px;
+    margin: 0 auto;
+}
+
+header {
+    text-align: center;
+    margin-bottom: 30px;
+    border-bottom: 2px solid var(--border-color);
+    padding-bottom: 15px;
+}
+
+header h1 {
+    margin: 0;
+    color: var(--highlight-color);
+    font-weight: 700;
+}
+
+header h2 {
+    margin: 5px 0 0;
+    font-weight: 400;
+    color: var(--secondary-text);
+}
+
+.card {
+    background-color: var(--card-bg);
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 20px;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+    border-left: 5px solid var(--highlight-color);
+}
+
+h3 {
+    margin-top: 0;
+    color: var(--primary-text);
+    border-bottom: 1px solid var(--accent-color);
+    padding-bottom: 10px;
+    margin-bottom: 20px;
+}
+
+/* Overall Stats Grid */
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+    gap: 20px;
     text-align: center;
 }
-
-/* ====== Typography (Text ka style) ====== */
-h1 {
-    font-size: 26px;
-    font-weight: 600;
-    margin-bottom: 8px;
-}
-
-p {
-    color: var(--secondary-text-color);
-    line-height: 1.5;
-    margin-top: 0;
-}
-
-.tagline {
-    font-size: 16px;
-    margin-bottom: 32px;
-}
-
-/* ====== Button Styling (Minimalistic) ====== */
-button {
-    background-color: var(--accent-color);
-    color: #ffffff;
-    border: none;
-    padding: 14px 20px;
-    border-radius: 8px;
-    font-size: 16px;
-    font-weight: 500;
-    cursor: pointer;
-    width: 100%;
-    margin-top: 12px;
-    transition: background-color 0.2s ease-in-out;
-}
-
-button:hover {
-    background-color: var(--accent-hover-color);
-}
-
-/* ====== Utility Class ====== */
-.hidden {
-    display: none !important; /* !important to ensure it always hides */
-}
-
-
-/* ====== Tabs Redesigned (Well Structured) ====== */
-.tabs {
-    display: flex;
-    border-bottom: 1px solid var(--border-color);
-    margin-bottom: 24px;
-}
-
-.tab-link {
-    flex-grow: 1; /* Teeno tabs barabar space lenge */
-    padding: 12px 0;
-    background: none;
-    border: none;
-    color: var(--secondary-text-color);
-    font-size: 15px;
-    font-weight: 500;
-    cursor: pointer;
-    border-bottom: 3px solid transparent; /* Shuru mein neeche border nahi dikhega */
-    transition: color 0.2s, border-color 0.2s;
-}
-
-.tab-link:hover {
-    color: var(--primary-text-color);
-}
-
-.tab-link.active {
-    color: var(--accent-color);
-    border-bottom-color: var(--accent-color); /* Active tab par accent color ka border */
-}
-
-
-/* ====== Tab Content Styling ====== */
-.tab-content {
-    display: none;
-    text-align: left; /* Content ko left align rakhte hain */
-    background-color: var(--card-color);
-    padding: 20px;
-    border-radius: 8px;
-    border: 1px solid var(--border-color);
-}
-
-.tab-content.active {
+.stat-item .stat-value {
     display: block;
+    font-size: 2em;
+    font-weight: 700;
+    color: var(--highlight-color);
+}
+.stat-item .stat-label {
+    font-size: 0.9em;
+    color: var(--secondary-text);
 }
 
-/* ====== Card Styling for Content ====== */
-/* Yeh hum aage use karenge content ko cards mein dalne ke liye */
-.card {
-    background-color: var(--card-color);
-    padding: 20px;
+/* Coach Insight */
+#insight-text {
+    font-style: italic;
+    color: var(--secondary-text);
+    line-height: 1.6;
+}
+
+/* Topic Performance */
+.topic-card {
+    margin-bottom: 15px;
+    padding: 15px;
+    background-color: var(--accent-color);
     border-radius: 8px;
-    border: 1px solid var(--border-color);
-    margin-bottom: 16px;
+}
+.topic-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 15px;
+}
+.topic-header h4 {
+    margin: 0;
+    font-size: 1.2em;
+}
+.topic-header .topic-accuracy {
+    font-size: 1.5em;
+    font-weight: 700;
+    color: var(--highlight-color);
+}
+.topic-summary {
+    display: flex;
+    justify-content: space-around;
+    font-size: 0.9em;
+    color: var(--secondary-text);
+    margin-bottom: 15px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--card-bg);
+}
+
+.breakdown-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9em;
+}
+.breakdown-table th, .breakdown-table td {
+    padding: 8px;
+    text-align: left;
+}
+.breakdown-table th {
+    color: var(--secondary-text);
+}
+.breakdown-table .accuracy-bar-bg {
+    background-color: var(--card-bg);
+    border-radius: 5px;
+    overflow: hidden;
+    height: 10px;
+    width: 80px;
+}
+.accuracy-bar {
+    background-color: var(--highlight-color);
+    height: 100%;
+    border-radius: 5px;
+}
+
+footer {
+    text-align: center;
+    margin-top: 30px;
+    color: var(--secondary-text);
+    font-size: 0.8em;
 }

@@ -525,7 +525,7 @@ def find_users_to_appreciate():
     # This first part is a data operation, so it stays here.
     supabase.rpc('reset_missed_streaks').execute()
     
-    APPRECIATION_STREAK = 8
+    APPRECIATION_STREAK = 3
     users_to_appreciate = supabase.rpc('get_users_to_appreciate', {'streak_target': APPRECIATION_STREAK}).execute().data or []
     return users_to_appreciate
 
@@ -1631,6 +1631,13 @@ def handle_today_quiz(msg: types.Message):
         message_text += "━━━━━━━━━━━━"
         
         markup = types.InlineKeyboardMarkup(row_width=2)
+        
+        # --- NEW: Web App Button added on its own row ---
+        markup.add(
+            types.InlineKeyboardButton("📅 View Full Schedule", web_app=types.WebAppInfo("https://studyprosync.web.app/"))
+        )
+        
+        # Existing buttons remain below it
         markup.add(
             types.InlineKeyboardButton("📊 My Stats", callback_data=f"show_mystats_{msg.from_user.id}"),
             types.InlineKeyboardButton("🤖 All Commands", callback_data="show_info")
@@ -2344,80 +2351,106 @@ def handle_admin_reply_to_forward(msg: types.Message):
 # 8. TELEGRAM BOT HANDLERS - STATS & ANALYSIS
 # =============================================================================
 
-def format_analysis_for_webapp(analysis_data):
+def format_analysis_for_webapp(analysis_data, user_name):
     """
-    Takes raw Supabase data from the get_user_deep_analysis RPC
-    and structures it for the Mini App's JavaScript.
+    Takes raw Supabase data and structures it into a detailed JSON for the Web App.
     """
-    # Initialize the structure exactly like our JS mock data
-    formatted = {
-        'overallStats': {'totalQuizzes': 0, 'overallAccuracy': 0, 'bestSubject': 'N/A', 'currentStreak': 0},
-        'deepDive': {'subjects': [], 'questionTypes': {'practical': 0, 'theory': 0, 'case_study': 0}},
-        'coachInsight': "Start playing to get your first insight!"
-    }
-
     if not analysis_data:
-        return formatted
+        return {
+            'userName': user_name,
+            'overallStats': {'totalQuizzes': 0, 'overallAccuracy': 0, 'bestSubject': 'N/A', 'totalQuestions': 0},
+            'performanceByTopic': [],
+            'coachInsight': "Start playing quizzes to build your performance profile!"
+        }
 
-    # --- Temporary data storage for calculations ---
-    subject_agg = {}
-    type_agg = {'Practical': {'correct': 0, 'total': 0}, 'Theory': {'correct': 0, 'total': 0}, 'Case Study': {'correct': 0, 'total': 0}}
-    total_correct = 0
-    total_qs = 0
+    topic_performance = {}
+    total_correct_glob = 0
+    total_questions_glob = 0
 
-    # --- Aggregate data from the Supabase function response ---
     for item in analysis_data:
-        topic = item.get('topic', 'Unknown')
+        topic = item.get('topic', 'Unknown Topic')
         q_type = item.get('question_type', 'Theory')
         correct = item.get('correct_answers', 0)
         total = item.get('total_questions', 0)
+        time = item.get('total_time_taken', 0)
 
-        total_correct += correct
-        total_qs += total
+        total_correct_glob += correct
+        total_questions_glob += total
 
-        # Aggregate by subject/topic
-        if topic not in subject_agg:
-            subject_agg[topic] = {'correct': 0, 'total': 0, 'time': 0}
-        subject_agg[topic]['correct'] += correct
-        subject_agg[topic]['total'] += total
-        subject_agg[topic]['time'] += item.get('total_time_taken', 0)
+        if topic not in topic_performance:
+            topic_performance[topic] = {
+                'topicName': topic,
+                'totalCorrect': 0,
+                'totalQuestions': 0,
+                'totalTime': 0,
+                'breakdown': {}
+            }
         
-        # Aggregate by question type
-        if q_type in type_agg:
-            type_agg[q_type]['correct'] += correct
-            type_agg[q_type]['total'] += total
+        topic_performance[topic]['totalCorrect'] += correct
+        topic_performance[topic]['totalQuestions'] += total
+        topic_performance[topic]['totalTime'] += time
 
-    # --- Populate the 'deepDive' section ---
-    for topic, data in subject_agg.items():
-        accuracy = (data['correct'] * 100 / data['total']) if data['total'] > 0 else 0
-        avg_speed = (data['time'] / data['total']) if data['total'] > 0 else 0
-        formatted['deepDive']['subjects'].append({'name': topic, 'accuracy': round(accuracy), 'avgSpeed': round(avg_speed, 1)})
-    
-    for q_type, data in type_agg.items():
-        accuracy = (data['correct'] * 100 / data['total']) if data['total'] > 0 else 0
-        # Use lowercase for JSON keys to match JS
-        formatted['deepDive']['questionTypes'][q_type.lower().replace(' ', '_')] = round(accuracy)
-
-    # --- Populate the 'overallStats' section ---
-    if total_qs > 0:
-        formatted['overallStats']['overallAccuracy'] = round((total_correct * 100) / total_qs)
-    
-    if formatted['deepDive']['subjects']:
-        best_sub = max(formatted['deepDive']['subjects'], key=lambda x: x['accuracy'])
-        formatted['overallStats']['bestSubject'] = best_sub['name']
+        if q_type not in topic_performance[topic]['breakdown']:
+            topic_performance[topic]['breakdown'][q_type] = {
+                'type': q_type,
+                'correct': 0,
+                'total': 0,
+                'time': 0
+            }
         
-    # Note: 'totalQuizzes' and 'currentStreak' would need separate queries to be accurate.
-    # We are leaving them as 0 for now to ensure the main feature works. We can add them later.
+        topic_performance[topic]['breakdown'][q_type]['correct'] += correct
+        topic_performance[topic]['breakdown'][q_type]['total'] += total
+        topic_performance[topic]['breakdown'][q_type]['time'] += time
 
-    return formatted
+    # Final processing
+    performance_list = []
+    for topic, data in topic_performance.items():
+        data['accuracy'] = round((data['totalCorrect'] * 100) / data['totalQuestions']) if data['totalQuestions'] > 0 else 0
+        data['avgSpeed'] = round(data['totalTime'] / data['totalQuestions'], 1) if data['totalQuestions'] > 0 else 0
+        
+        # Convert breakdown dict to list
+        breakdown_list = []
+        for q_type, type_data in data['breakdown'].items():
+            type_data['accuracy'] = round((type_data['correct'] * 100) / type_data['total']) if type_data['total'] > 0 else 0
+            type_data['avgSpeed'] = round(type_data['time'] / type_data['total'], 1) if type_data['total'] > 0 else 0
+            breakdown_list.append(type_data)
+        
+        data['breakdown'] = sorted(breakdown_list, key=lambda x: x['total'], reverse=True)
+        performance_list.append(data)
 
+    # Sort topics by total questions attempted
+    sorted_performance = sorted(performance_list, key=lambda x: x['totalQuestions'], reverse=True)
+
+    overall_accuracy = round((total_correct_glob * 100) / total_questions_glob) if total_questions_glob > 0 else 0
+    best_subject = max(sorted_performance, key=lambda x: x['accuracy'])['topicName'] if sorted_performance else 'N/A'
+
+    # Coach Insight Logic
+    coach_insight = "You're doing great! Keep up the consistent effort."
+    if overall_accuracy < 60:
+        coach_insight = "Focus on building a stronger foundation. Reviewing concepts before quizzes can help!"
+    elif sorted_performance and sorted_performance[-1]['accuracy'] < 50:
+        weakest_topic = sorted_performance[-1]['topicName']
+        coach_insight = f"Your overall performance is good, but you might want to focus a bit more on {weakest_topic}."
+
+
+    return {
+        'userName': user_name,
+        'overallStats': {
+            'totalQuizzes': len(sorted_performance), # Approximation
+            'overallAccuracy': overall_accuracy,
+            'bestSubject': best_subject,
+            'totalQuestions': total_questions_glob
+        },
+        'performanceByTopic': sorted_performance,
+        'coachInsight': coach_insight
+    }
 
 @bot.message_handler(commands=['my_analysis'])
 @membership_required
 def handle_my_analysis_command(msg: types.Message):
     """
-    Launches the Mini App and posts a public summary in the group,
-    while also sending a detailed notification to the admin.
+    Sends a summarized analysis in the chat and provides a button 
+    for the full, detailed Web App dashboard in a private message.
     """
     try:
         supabase.rpc('update_chat_activity', {'p_user_id': msg.from_user.id, 'p_user_name': msg.from_user.username or msg.from_user.first_name}).execute()
@@ -2443,37 +2476,23 @@ def handle_my_analysis_command(msg: types.Message):
             )
             return
 
-        analysis_payload = format_analysis_for_webapp(response.data)
+        # --- NEW TWO-STEP LOGIC ---
         
-        # --- NEW FEATURE 1: Send a short summary to the admin ---
-        try:
-            admin_summary = (
-                f"📊 <b>Analysis Used by {user_name}</b>\n"
-                f"<b>Time:</b> {datetime.datetime.now(IST).strftime('%I:%M %p')}\n"
-                f"<b>Accuracy:</b> {analysis_payload['overallStats']['overallAccuracy']}% | "
-                f"<b>Best Subject:</b> {escape(analysis_payload['overallStats']['bestSubject'])}"
-            )
-            bot.send_message(ADMIN_USER_ID, admin_summary, parse_mode="HTML")
-        except Exception as admin_notify_error:
-            print(f"Failed to send admin notification for /my_analysis: {admin_notify_error}")
+        # 1. Generate both full payload and summary text
+        full_analysis_payload = format_analysis_for_webapp(response.data, user_name)
+        summary_text = format_summary_for_telegram(full_analysis_payload, user_name)
 
-        # --- NEW FEATURE 2: Post a public summary in the group chat ---
-        if is_group_message(msg):
-            public_summary = (
-                f"📊 <b>{user_name}'s Performance Snapshot</b>\n\n"
-                f"• <b>Overall Accuracy:</b> {analysis_payload['overallStats']['overallAccuracy']}%\n"
-                f"• <b>Strongest Area:</b> {escape(analysis_payload['overallStats']['bestSubject'])}\n\n"
-                f"<i>For a full deep-dive, click the <b>Menu Button [ / ]</b> on the left to open your personal dashboard!</i>"
-            )
-            bot.send_message(msg.chat.id, public_summary, parse_mode="HTML", reply_parameters=reply_params)
+        # 2. Add instructions to the summary
+        summary_text += "\n\n*For a full deep-dive, open your personal dashboard from the **Menu Button [ / ]** in your private chat with me!*"
 
-        # --- The original functionality to send the Mini App button ---
-        json_data_string = json.dumps(analysis_payload)
+        # 3. Send the summary to the group/chat
+        bot.send_message(msg.chat.id, summary_text, parse_mode="HTML", reply_parameters=reply_params)
+
+        # 4. Prepare and send the private message with the Web App button
+        json_data_string = json.dumps(full_analysis_payload)
         encoded_data = quote(json_data_string)
 
-        ANALYSIS_WEBAPP_URL = os.getenv('ANALYSIS_WEBAPP_URL')
         if not ANALYSIS_WEBAPP_URL:
-            # This error is critical and should be reported
             report_error_to_admin("CRITICAL: ANALYSIS_WEBAPP_URL environment variable is not set!")
             return
 
@@ -2484,25 +2503,60 @@ def handle_my_analysis_command(msg: types.Message):
         button = types.InlineKeyboardButton("📊 Open My Full Dashboard", web_app=web_app_info)
         markup.add(button)
         
-        # This message will now only be sent if the command is used in a private chat
-        if not is_group_message(msg):
-            intro_text = "Click the button below to open your personalized performance dashboard!"
+        try:
+            intro_text = "Here is your personalized performance dashboard! Click the button below to open it."
             bot.send_message(
-                chat_id=msg.chat.id,
+                chat_id=user_id, # Send to user's private chat
                 text=intro_text,
-                reply_markup=markup,
-                reply_parameters=reply_params
+                reply_markup=markup
             )
+        except Exception as dm_error:
+            print(f"Could not send DM with webapp button to {user_id}: {dm_error}")
+            # Inform user in the group if DM fails
+            bot.send_message(msg.chat.id, f"@{user_name}, I tried to send you the link to your full dashboard, but it seems I can't DM you. Please start a private chat with me and try again!", reply_parameters=reply_params)
 
     except Exception as e:
         print(f"Error generating analysis for {user_id}:\n{traceback.format_exc()}")
         report_error_to_admin(f"Error generating analysis for {user_id}:\n{e}")
         try:
-            reply_params = types.ReplyParameters(message_id=msg.message_id, allow_sending_without_reply=True)
             bot.send_message(msg.chat.id, "❌ Oops! Something went wrong while generating your analysis.", reply_parameters=reply_params)
         except Exception as final_error:
             print(f"Failed to even send the error message for /my_analysis: {final_error}")
 
+# --- NEW HELPER FUNCTION FOR TELEGRAM SUMMARY ---
+def format_summary_for_telegram(analysis_data, user_name):
+    """
+    Creates a concise, text-based summary of the user's performance for a Telegram message.
+    """
+    stats = analysis_data.get('overallStats', {})
+    topics = analysis_data.get('performanceByTopic', [])
+
+    if not topics:
+        return f"📊 <b>{user_name}'s Performance Snapshot</b>\n\nNo quiz data found yet. Participate in quizzes to build your profile!"
+
+    # Sort topics by accuracy to find strengths and weaknesses
+    sorted_by_accuracy = sorted(topics, key=lambda x: x['accuracy'])
+    
+    summary = f"📊 <b>{user_name}'s Performance Snapshot</b>\n\n"
+    summary += f"🎯 <b>Overall Accuracy:</b> {stats.get('overallAccuracy', 0)}% across {stats.get('totalQuestions', 0)} questions.\n"
+    summary += f"🚀 <b>Strongest Area:</b> {stats.get('bestSubject', 'N/A')}\n\n"
+
+    if len(sorted_by_accuracy) > 0:
+        summary += "⭐ <b>Top 3 Strongest Topics:</b>\n"
+        # Take top 3 from the end (highest accuracy)
+        for topic in sorted_by_accuracy[-1:-4:-1]:
+            summary += f"  - {escape(topic['topicName'])} ({topic['accuracy']}%)\n"
+    
+    weak_topics = [t for t in sorted_by_accuracy if t['accuracy'] < 75]
+    if weak_topics:
+        summary += "\n⚠️ <b>Top 3 Areas for Improvement:</b>\n"
+        # Take bottom 3 from the list of weak topics
+        for topic in weak_topics[:3]:
+            summary += f"  - {escape(topic['topicName'])} ({topic['accuracy']}%)\n"
+
+    summary += f"\n💡 <b>Coach's Tip:</b> {escape(analysis_data.get('coachInsight', 'Keep practicing!'))}"
+    
+    return summary
 
 @bot.message_handler(content_types=['web_app_data'])
 @membership_required
