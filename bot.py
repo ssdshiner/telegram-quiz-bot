@@ -506,13 +506,15 @@ last_schedule_announce_day = -1
 
 def find_inactive_users():
     """
-    Finds users who need warnings but does NOT send any messages.
-    Returns two lists: (final_warning_users, first_warning_users)
+    Finds users for all daily notifications: warnings, reminders, and removal notices.
     """
-    print("Finding inactive users...")
+    print("Finding users for daily notifications...")
     final_warning_users = supabase.rpc('get_users_for_final_warning').execute().data or []
     first_warning_users = supabase.rpc('get_users_to_warn').execute().data or []
-    return final_warning_users, first_warning_users
+    reminder_users = supabase.rpc('get_users_for_daily_reminder').execute().data or []
+    removal_users = supabase.rpc('get_users_for_removal_notice').execute().data or []
+    
+    return final_warning_users, first_warning_users, reminder_users, removal_users
 
 def find_users_to_appreciate():
     """
@@ -604,14 +606,14 @@ def handle_update_schedule_command(msg: types.Message):
 
 def run_daily_checks():
     """
-    Runs all daily automated tasks using robust HTML parsing
-    to prevent errors with special characters in usernames.
+    Runs all daily automated tasks including warnings, reminders, and removal notices.
     """
     try:
         print("Starting daily automated checks...")
         
-        final_warnings, first_warnings = find_inactive_users()
+        final_warnings, first_warnings, reminder_users, removal_users = find_inactive_users()
 
+        # --- Stage 1: First Warning ---
         if first_warnings:
             user_list_str = format_user_mention_list(first_warnings)
             message = (f"⚠️ <b>Quiz Activity Warning!</b> ⚠️\n"
@@ -619,16 +621,47 @@ def run_daily_checks():
                        f"This is your final 24-hour notice.")
             bot.send_message(GROUP_ID, message, parse_mode="HTML", message_thread_id=UPDATES_TOPIC_ID)
             user_ids_to_update = [user['user_id'] for user in first_warnings]
-            supabase.table('quiz_activity').update({'warning_level': 1}).in_('user_id', user_ids_to_update).execute()
+            # Set warning level and timestamp
+            supabase.table('quiz_activity').update({
+                'warning_level': 1,
+                'last_warning_sent_at': datetime.datetime.now(timezone.utc).isoformat()
+            }).in_('user_id', user_ids_to_update).execute()
 
+        # --- Stage 2: Final Warning ---
         if final_warnings:
-            # Using HTML mentions which work for everyone
-            user_list = [f"<a href='tg://user?id={user['user_id']}'>{escape(user['user_name'])}</a>" for user in final_warnings]
-            message = f"Admins, please take action. The following members did not participate even after a final warning:\n" + ", ".join(user_list)
+            user_list_str = format_user_mention_list(final_warnings)
+            message = f"Admins, please take action. The following members did not participate even after a final warning:\n{user_list_str}"
             bot.send_message(GROUP_ID, message, parse_mode="HTML", message_thread_id=UPDATES_TOPIC_ID)
             user_ids_to_update = [user['user_id'] for user in final_warnings]
-            supabase.table('quiz_activity').update({'warning_level': 2}).in_('user_id', user_ids_to_update).execute()
+            # Set final warning level and update timestamp
+            supabase.table('quiz_activity').update({
+                'warning_level': 2,
+                'last_warning_sent_at': datetime.datetime.now(timezone.utc).isoformat()
+            }).in_('user_id', user_ids_to_update).execute()
 
+        # --- Stage 3: Daily Reminders (via DM) ---
+        if reminder_users:
+            print(f"Sending daily reminders to {len(reminder_users)} users.")
+            for user in reminder_users:
+                try:
+                    day_count = user.get('days_since_warning', 1)
+                    reminder_text = (f"👋 Hello {escape(user['user_name'])},\n\n"
+                                     f"This is a gentle reminder from the CAVYA Quiz Hub. You are on a <b>final warning</b> for quiz inactivity.\n\n"
+                                     f"This is your additional <b>day {day_count} of not attending</b> the quiz. We miss your participation! 😥")
+                    bot.send_message(user['user_id'], reminder_text, parse_mode="HTML")
+                except Exception as dm_error:
+                    print(f"Could not send reminder DM to {user['user_id']}: {dm_error}")
+
+        # --- Stage 4: Removal Notice for Admins ---
+        if removal_users:
+            user_list_str = format_user_mention_list(removal_users)
+            message = (f"🚨 <b>Action Required: Member Removal</b> 🚨\n\n"
+                       f"To maintain group consistency, please consider removing the following members. They have been inactive for more than 7 days, even after multiple warnings:\n\n"
+                       f"{user_list_str}")
+            bot.send_message(GROUP_ID, message, parse_mode="HTML", message_thread_id=UPDATES_TOPIC_ID)
+            # We don't change their status, admin has the final say.
+
+        # --- Appreciation Logic (Unchanged) ---
         appreciations = find_users_to_appreciate()
         if appreciations:
             for user in appreciations:
