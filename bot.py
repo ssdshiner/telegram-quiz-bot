@@ -49,6 +49,7 @@ GOOGLE_SHEETS_CREDENTIALS_PATH = os.getenv('GOOGLE_SHEETS_CREDENTIALS_PATH')
 GOOGLE_SHEET_KEY = os.getenv('GOOGLE_SHEET_KEY')
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+ANALYSIS_WEBAPP_URL = os.getenv('ANALYSIS_WEBAPP_URL')
 
 # --- Type Casting with Error Handling ---
 try:
@@ -1632,9 +1633,9 @@ def handle_today_quiz(msg: types.Message):
         
         markup = types.InlineKeyboardMarkup(row_width=2)
         
-        # --- NEW: Web App Button added on its own row ---
+        # --- FIX: Changed web_app to a simple url button to prevent errors ---
         markup.add(
-            types.InlineKeyboardButton("📅 View Full Schedule", web_app=types.WebAppInfo("https://studyprosync.web.app/"))
+            types.InlineKeyboardButton("📅 View Full Schedule", url="https://studyprosync.web.app/")
         )
         
         # Existing buttons remain below it
@@ -2483,7 +2484,7 @@ def handle_my_analysis_command(msg: types.Message):
         summary_text = format_summary_for_telegram(full_analysis_payload, user_name)
 
         # 2. Add instructions to the summary
-        summary_text += "\n\n*For a full deep-dive, open your personal dashboard from the **Menu Button [ / ]** in your private chat with me!*"
+        summary_text += "\n\n<i>For a full deep-dive, open your personal dashboard from the <b>Menu Button [ / ]</b> in your private chat with me!</i>"
 
         # 3. Send the summary to the group/chat
         bot.send_message(msg.chat.id, summary_text, parse_mode="HTML", reply_parameters=reply_params)
