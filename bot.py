@@ -253,7 +253,33 @@ def live_countdown(chat_id, message_id, duration_seconds):
 
     except Exception as e:
         print(f"Error in countdown thread: {e}")
+# --- NEW PERMISSION SYSTEM DECORATOR ---
+def permission_required(command_name: str):
+    """
+    Decorator to check for specific command permissions.
+    Full admins always have access.
+    """
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(msg: types.Message, *args, **kwargs):
+            user_id = msg.from_user.id
+            # Full admins can bypass this check
+            if is_admin(user_id):
+                return func(msg, *args, **kwargs)
+            
+            # Check for specific permission in the database
+            try:
+                res = supabase.rpc('check_user_permission', {'p_user_id': user_id, 'p_command_name': command_name}).execute()
+                if res.data:
+                    return func(msg, *args, **kwargs)
+            except Exception as e:
+                print(f"Error checking permission for {user_id} on '{command_name}': {e}")
 
+            # If all checks fail, deny access
+            bot.reply_to(msg, "❌ You do not have permission to use this command.")
+            return
+        return wrapper
+    return decorator
 def admin_required(func):
     """Decorator to restrict a command to the admin."""
     @functools.wraps(func)
@@ -758,6 +784,7 @@ def check_uploader_role(user_id):
 
 
 @bot.message_handler(commands=['add_resource'])
+@permission_required('add_resource')
 def handle_add_resource(msg: types.Message):
     """
     Starts the conversational flow for adding a new resource to the Vault.
@@ -767,10 +794,7 @@ def handle_add_resource(msg: types.Message):
         bot.reply_to(msg, "🤫 Please use this command in a private chat with me.")
         return
 
-    user_id = msg.from_user.id
-    if not check_uploader_role(user_id):
-        bot.send_message(user_id, "❌ Access Denied. You are not authorized to add resources.")
-        return
+
 
     user_states[user_id] = {}  # Clear any previous state
     
@@ -1412,51 +1436,85 @@ def process_fileid_question_id(msg: types.Message):
 # =============================================================================
 # 8. TELEGRAM BOT HANDLERS - MEMBER & ROLE MANAGEMENT
 # =============================================================================
+# --- List of commands that can be delegated ---
+DELEGATABLE_COMMANDS = {
+    'add_resource': '📄 Add Resources',
+    'randomquiz': '🎲 Random Quiz',
+    'randomquizvisual': '🖼️ Visual Quiz',
+    'quizmarathon': '🏁 Start Marathon',
+    'roko': '🛑 Stop Marathon',
+    'notify': '🔔 Send Notify'
+}
 
 @bot.message_handler(commands=['promote'])
 @admin_required
 def handle_promote_command(msg: types.Message):
     """
-    Promotes a user to the 'contributor' role using safe HTML for replies.
-    Usage: /promote @username
+    Starts the interactive flow to grant specific permissions to a user.
     """
     try:
         parts = msg.text.split(' ')
         if len(parts) < 2 or not parts[1].startswith('@'):
-            # THE FIX: Converted to safe HTML
-            bot.reply_to(msg, "Please provide a username. \n<b>Usage:</b> <code>/promote @username</code>", parse_mode="HTML")
+            bot.reply_to(msg, "Please provide a username.\n<b>Usage:</b> <code>/promote @username</code>", parse_mode="HTML")
             return
 
         username_to_promote = parts[1].lstrip('@')
-        safe_username = escape(username_to_promote)
-        
-        # Find the user in the database
         user_response = supabase.table('group_members').select('user_id, first_name').eq('username', username_to_promote).single().execute()
         
         if not user_response.data:
-            # THE FIX: Converted to safe HTML
-            bot.reply_to(msg, f"❌ User <code>@{safe_username}</code> not found in my records. Please make sure they have sent a message in the group before.", parse_mode="HTML")
+            bot.reply_to(msg, f"❌ User <code>@{escape(username_to_promote)}</code> not found.", parse_mode="HTML")
             return
             
         target_user = user_response.data
-        target_user_id = target_user['user_id']
+        
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        buttons = []
+        for command_name, button_label in DELEGATABLE_COMMANDS.items():
+            # Pass admin_id, target_id, and command_name in callback
+            callback_data = f"grant_{msg.from_user.id}_{target_user['user_id']}_{command_name}"
+            buttons.append(types.InlineKeyboardButton(button_label, callback_data=callback_data))
+        
+        # Arrange buttons in pairs
+        for i in range(0, len(buttons), 2):
+            if i + 1 < len(buttons):
+                markup.row(buttons[i], buttons[i+1])
+            else:
+                markup.row(buttons[i])
 
-        # Update their role in the quiz_activity table
-        supabase.table('quiz_activity').update({'user_role': 'contributor'}).eq('user_id', target_user_id).execute()
-        
-        # THE FIX: Converted to safe HTML
-        bot.reply_to(msg, f"✅ Success! <b>@{safe_username}</b> has been promoted to a <b>Contributor</b> role.", parse_mode="HTML")
-        
-        # Notify the user via DM (plain text is safe)
-        try:
-            notification_text = "🎉 Congratulations! You have been promoted to a 'Contributor'.\nYou can now add new files to the CA Vault using the /add_resource command in a private chat with me."
-            bot.send_message(target_user_id, notification_text)
-        except Exception as dm_error:
-            print(f"Could not send promotion DM to {target_user_id}: {dm_error}")
+        bot.reply_to(msg, f"Choose a permission to grant to <b>{escape(target_user['first_name'])}</b>:", reply_markup=markup, parse_mode="HTML")
 
     except Exception as e:
-        print(f"Error in /promote command: {traceback.format_exc()}")
-        bot.reply_to(msg, "❌ An error occurred while promoting the user.")
+        print(f"Error in /promote: {traceback.format_exc()}")
+        bot.reply_to(msg, "❌ An error occurred.")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('grant_'))
+def handle_grant_permission_callback(call: types.CallbackQuery):
+    """
+    Handles the permission granting button click.
+    """
+    try:
+        _, admin_id, target_user_id, command_name = call.data.split('_')
+
+        # Security Check: Only the admin who initiated the command can grant permission
+        if call.from_user.id != int(admin_id):
+            bot.answer_callback_query(call.id, "You are not authorized to perform this action.", show_alert=True)
+            return
+
+        # Grant the permission in the database
+        supabase.table('user_permissions').upsert({
+            'user_id': int(target_user_id),
+            'command_name': command_name,
+            'granted_by': int(admin_id)
+        }).execute()
+        
+        button_label = DELEGATABLE_COMMANDS.get(command_name, command_name)
+        bot.answer_callback_query(call.id, f"✅ Permission '{button_label}' granted!", show_alert=True)
+        # Clean up the original message by removing the buttons
+        bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+
+    except Exception as e:
+        print(f"Error in permission callback: {traceback.format_exc()}")
+        bot.answer_callback_query(call.id, "❌ An error occurred while granting permission.", show_alert=True)
 
 
 @bot.message_handler(commands=['demote'])
@@ -2742,7 +2800,7 @@ Technical issue with data retrieval.
 # =============================================================================
 
 @bot.message_handler(commands=['notify'])
-@admin_required
+@permission_required('notify')
 def handle_notify_command(msg: types.Message):
     """
     Sends a quiz notification and schedules a follow-up, now using safe HTML.
@@ -2798,7 +2856,7 @@ def handle_notify_command(msg: types.Message):
 
 
 @bot.message_handler(commands=['randomquiz'])
-@admin_required
+@permission_required('randomquiz')
 def handle_random_quiz(msg: types.Message):
     """
     Posts a polished 10-minute random quiz. Now with optional image support.
@@ -2980,7 +3038,7 @@ def handle_random_quiz(msg: types.Message):
         bot.send_message(admin_chat_id, admin_critical_error, parse_mode="HTML")
 
 @bot.message_handler(commands=['randomquizvisual'])
-@admin_required
+@permission_required('randomquizvisual')
 def handle_randomquizvisual(msg: types.Message):
     """
     Posts a polished 10-minute random quiz that is GUARANTEED to have an image.
@@ -3981,7 +4039,7 @@ def handle_section_command(msg: types.Message):
 # =============================================================================
 
 @bot.message_handler(commands=['quizmarathon'])
-@admin_required
+@permission_required('quizmarathon')
 def start_marathon_setup(msg: types.Message):
     """Starts the streamlined setup for a quiz marathon with beautiful preset selection."""
     try:
@@ -4756,7 +4814,7 @@ def send_final_suspense_message(session_id):
 
 # Enhanced Stop Marathon Command
 @bot.message_handler(commands=['roko'])
-@admin_required
+@permission_required('roko')
 def handle_stop_marathon_command(msg: types.Message):
     """Forcefully stops a running Quiz Marathon with admin feedback and shows results."""
     session_id = str(GROUP_ID)
