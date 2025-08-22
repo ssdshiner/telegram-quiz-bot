@@ -2354,14 +2354,14 @@ def handle_admin_reply_to_forward(msg: types.Message):
 
 def format_analysis_for_webapp(analysis_data, user_name):
     """
-    Takes raw Supabase data and structures it into a detailed JSON for the Web App.
+    Supabase se aaye raw data ko Web App ke liye ek detailed JSON mein structure karta hai.
     """
     if not analysis_data:
         return {
             'userName': user_name,
             'overallStats': {'totalQuizzes': 0, 'overallAccuracy': 0, 'bestSubject': 'N/A', 'totalQuestions': 0},
             'performanceByTopic': [],
-            'coachInsight': "Start playing quizzes to build your performance profile!"
+            'coachInsight': "Apna performance profile banane ke liye quizzes khelna shuru karein!"
         }
 
     topic_performance = {}
@@ -2409,7 +2409,6 @@ def format_analysis_for_webapp(analysis_data, user_name):
         data['accuracy'] = round((data['totalCorrect'] * 100) / data['totalQuestions']) if data['totalQuestions'] > 0 else 0
         data['avgSpeed'] = round(data['totalTime'] / data['totalQuestions'], 1) if data['totalQuestions'] > 0 else 0
         
-        # Convert breakdown dict to list
         breakdown_list = []
         for q_type, type_data in data['breakdown'].items():
             type_data['accuracy'] = round((type_data['correct'] * 100) / type_data['total']) if type_data['total'] > 0 else 0
@@ -2419,25 +2418,24 @@ def format_analysis_for_webapp(analysis_data, user_name):
         data['breakdown'] = sorted(breakdown_list, key=lambda x: x['total'], reverse=True)
         performance_list.append(data)
 
-    # Sort topics by total questions attempted
     sorted_performance = sorted(performance_list, key=lambda x: x['totalQuestions'], reverse=True)
 
     overall_accuracy = round((total_correct_glob * 100) / total_questions_glob) if total_questions_glob > 0 else 0
     best_subject = max(sorted_performance, key=lambda x: x['accuracy'])['topicName'] if sorted_performance else 'N/A'
 
     # Coach Insight Logic
-    coach_insight = "You're doing great! Keep up the consistent effort."
+    coach_insight = "Aap aacha kar rahe hain! Istarah mehnat karte rahein."
     if overall_accuracy < 60:
-        coach_insight = "Focus on building a stronger foundation. Reviewing concepts before quizzes can help!"
+        coach_insight = "Concepts ko mazboot banane par focus karein. Quiz se pehle revise karna madad karega!"
     elif sorted_performance and sorted_performance[-1]['accuracy'] < 50:
         weakest_topic = sorted_performance[-1]['topicName']
-        coach_insight = f"Your overall performance is good, but you might want to focus a bit more on {weakest_topic}."
+        coach_insight = f"Aapki overall performance aachi hai, lekin aapko {weakest_topic} par thoda aur focus karna chahiye."
 
 
     return {
         'userName': user_name,
         'overallStats': {
-            'totalQuizzes': len(sorted_performance), # Approximation
+            'totalQuizzes': len(sorted_performance),
             'overallAccuracy': overall_accuracy,
             'bestSubject': best_subject,
             'totalQuestions': total_questions_glob
@@ -2500,8 +2498,8 @@ def handle_my_analysis_command(msg: types.Message):
         final_url = f"{ANALYSIS_WEBAPP_URL}?data={encoded_data}"
 
         markup = types.InlineKeyboardMarkup()
-        web_app_info = types.WebAppInfo(final_url)
-        button = types.InlineKeyboardButton("📊 Open My Full Dashboard", web_app=web_app_info)
+        # --- FIX: Changed web_app to a simple url button for reliability ---
+        button = types.InlineKeyboardButton("📊 Open My Full Dashboard", url=final_url)
         markup.add(button)
         
         try:

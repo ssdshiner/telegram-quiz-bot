@@ -1,48 +1,51 @@
+'use strict';
+
 document.addEventListener('DOMContentLoaded', function () {
     const tg = window.Telegram.WebApp;
-    tg.expand(); // Expand the web app to full height
+    tg.expand(); // Web App ko poori height tak expand karega
 
+    // Zaroori elements ko select karna
     const loader = document.getElementById('loader');
     const mainContent = document.getElementById('main-content');
 
-    // 1. Get Data from URL
+    // Function 1: URL se data nikalna
     function getUrlData() {
         try {
             const urlParams = new URLSearchParams(window.location.search);
             const dataParam = urlParams.get('data');
             if (!dataParam) {
-                console.error("No data found in URL.");
-                displayError("Could not load performance data.");
+                console.error("URL mein data nahi mila.");
+                displayError("Performance data load nahi ho saka.");
                 return null;
             }
-            // Decode and parse the JSON data
+            // Data ko decode karke JSON mein badalna
             return JSON.parse(decodeURIComponent(dataParam));
         } catch (error) {
-            console.error("Error parsing data from URL:", error);
-            displayError("There was an error processing your data. It might be corrupted.");
+            console.error("URL se data parse karne mein error:", error);
+            displayError("Aapka data process karne mein error aa gaya. Shayad data corrupt hai.");
             return null;
         }
     }
 
-    // 2. Populate the UI with data
+    // Function 2: UI ko data se bharna
     function populateUI(data) {
         if (!data) return;
 
-        // Populate Header
+        // Header mein user ka naam daalna
         document.getElementById('user-name').textContent = `For ${data.userName || 'You'}`;
 
-        // Populate Overall Stats
+        // Overall Stats bharna
         const stats = data.overallStats;
         document.getElementById('overall-accuracy').textContent = `${stats.overallAccuracy}%`;
         document.getElementById('total-questions').textContent = stats.totalQuestions;
         document.getElementById('best-subject').textContent = stats.bestSubject;
         
-        // Populate Coach's Insight
+        // Coach's Insight bharna
         document.getElementById('insight-text').textContent = data.coachInsight;
 
-        // Populate Performance by Topic
+        // Topic-wise performance bharna
         const topicList = document.getElementById('topic-list');
-        topicList.innerHTML = ''; // Clear any existing content
+        topicList.innerHTML = ''; // Pehle se मौजूद content ko saaf karna
 
         if (data.performanceByTopic && data.performanceByTopic.length > 0) {
             data.performanceByTopic.forEach(topic => {
@@ -88,10 +91,10 @@ document.addEventListener('DOMContentLoaded', function () {
                 topicList.appendChild(topicCard);
             });
         } else {
-            topicList.innerHTML = '<p>No topic-wise performance data available yet. Keep playing!</p>';
+            topicList.innerHTML = '<p>Abhi tak topic-wise performance data nahi hai. Quizzes khelte rahein!</p>';
         }
 
-        // Hide loader and show content
+        // Loader chhupana aur content dikhana
         loader.classList.add('hidden');
         mainContent.classList.remove('hidden');
     }
@@ -100,7 +103,7 @@ document.addEventListener('DOMContentLoaded', function () {
         loader.innerHTML = `<p style="color: #e94560;">${message}</p>`;
     }
 
-    // Main execution
+    // Main script ka execution
     const performanceData = getUrlData();
     populateUI(performanceData);
 });
