@@ -1074,172 +1074,103 @@ def process_photo_batch(batch_key, user_id):
         if user_id in user_states and user_states[user_id].get('action') in ['adding_rq_photos', 'adding_qm_photos']:
             del user_states[user_id]
 @bot.message_handler(commands=['teambattle'])
-@permission_required('quizmarathon') # Hum 'quizmarathon' permission use kar rahe hain
+@permission_required('quizmarathon')
 def handle_team_battle_command(message):
+    """
+    STEP 1: Starts the Team Battle setup by asking the admin to choose a quiz preset.
+    """
+    global team_battle_session
+    team_battle_session = {} # Purana session clear karna
+
+    try:
+        # Supabase se saare available quiz sets fetch karna
+        response = supabase.table('quiz_presets').select('set_name, button_label').order('id').execute()
+
+        if not response.data:
+            bot.reply_to(message, "❌ Database mein koi Quiz Marathon set nahi mila. Please pehle presets add karein.")
+            return
+
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        buttons = [types.InlineKeyboardButton(
+            text=preset['button_label'],
+            callback_data=f"tb_select_set_{preset['set_name']}"
+        ) for preset in response.data]
+        
+        for i in range(0, len(buttons), 2):
+            if i + 1 < len(buttons):
+                markup.row(buttons[i], buttons[i+1])
+            else:
+                markup.row(buttons[i])
+        
+        markup.add(types.InlineKeyboardButton("❌ Cancel Battle", callback_data="tb_cancel"))
+        bot.reply_to(message, "⚔️ **Team Battle Setup** ⚔️\n\nPlease choose a Quiz Set for this battle:", reply_markup=markup)
+
+    except Exception as e:
+        report_error_to_admin(f"Error in /teambattle setup: {traceback.format_exc()}")
+        bot.reply_to(message, "❌ An error occurred while fetching quiz sets.")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('tb_select_set_'))
+def handle_tb_set_selection(call: types.CallbackQuery):
+    """
+    STEP 2: Handles the admin's quiz set selection and then shows the joining screen.
+    """
     global team_battle_session
     
-    # Purana session clear karna
-    team_battle_session = {}
-    
-    session_id = str(message.message_id)
-    admin_id = message.from_user.id
+    selected_set = call.data.split('_', 2)[-1]
+    admin_id = call.from_user.id
+    session_id = str(call.message.message_id)
 
     team_battle_session = {
         'session_id': session_id,
         'status': 'joining',
         'admin_id': admin_id,
-        'participants': {} # user_id: user_name
+        'selected_set': selected_set, # Important: Selected set ko save karna
+        'participants': {}
     }
-    
+
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton("✅ Click Here to Join!", callback_data=f"tb_join_{session_id}"))
     markup.add(types.InlineKeyboardButton("🚀 Start the Battle! (Admin Only)", callback_data=f"tb_start_{session_id}"))
 
-    bot.send_message(
-        message.chat.id,
-        "⚔️ **A New Team Battle is starting!** ⚔️\n\nReady for the challenge? Click the button below to join the fight!\n\n**Players Joined:**\n_(None yet)_",
-        reply_markup=markup,
-        parse_mode="HTML"
+    join_text = (
+        f"⚔️ **A New Team Battle is starting!** ⚔️\n\n"
+        f"🎯 **Topic:** {escape(selected_set)}\n\n"
+        f"Ready for the challenge? Click the button below to join!\n\n"
+        f"**Players Joined:**\n_(None yet)_"
     )
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('tb_join_'))
-def handle_team_battle_join(call: types.CallbackQuery):
-    global team_battle_session
     
-    session_id = call.data.split('_')[-1]
-    user_id = call.from_user.id
-    user_name = call.from_user.first_name
+    # Purane message ko edit karke joining screen dikhana
+    bot.edit_message_text(join_text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
+    bot.answer_callback_query(call.id)
 
-    # Check if this is the correct active session
-    if not team_battle_session or team_battle_session.get('session_id') != session_id or team_battle_session.get('status') != 'joining':
-        bot.answer_callback_query(call.id, "This quiz joining period has expired.", show_alert=True)
-        return
+# handle_team_battle_join function remains the same, no changes needed there.
 
-    # Check if user has already joined
-    if user_id in team_battle_session['participants']:
-        bot.answer_callback_query(call.id, "You have already joined the battle!")
-        return
-    
-    # Add user to participants
-    team_battle_session['participants'][user_id] = user_name
-    bot.answer_callback_query(call.id, "You're in! Good luck!")
+# handle_team_battle_start function remains the same, no changes needed there.
 
-    # Update the original message with the new participant list
-    participants_list = "\n".join([f"• {name}" for name in team_battle_session['participants'].values()])
-    
-    new_text = (
-        "⚔️ **A New Team Battle is starting!** ⚔️\n\n"
-        "Ready for the challenge? Click the button below to join the fight!\n\n"
-        "**Players Joined:**\n"
-        f"{participants_list}"
-    )
-
-    try:
-        bot.edit_message_text(new_text, call.message.chat.id, call.message.message_id, reply_markup=call.message.reply_markup, parse_mode="HTML")
-    except ApiTelegramException as e:
-        if "message is not modified" in e.description:
-            pass # Ignore this error, it's harmless
-        else:
-            raise e
-@bot.callback_query_handler(func=lambda call: call.data.startswith('tb_start_'))
-def handle_team_battle_start(call: types.CallbackQuery):
-    global team_battle_session
-    
-    session_id = call.data.split('_')[-1]
-    user_id = call.from_user.id
-
-    # Security Check: Sirf admin hi start kar sakta hai
-    if not team_battle_session or user_id != team_battle_session.get('admin_id'):
-        bot.answer_callback_query(call.id, "Only the admin who started the quiz can begin the battle.", show_alert=True)
-        return
-
-    # Player Count Check: Kam se kam 2 player hone chahiye
-    if len(team_battle_session.get('participants', {})) < 2:
-        bot.answer_callback_query(call.id, "Not enough players to start a battle. At least 2 players are needed.", show_alert=True)
-        return
-        
-    try:
-        # Purane message se buttons hata do
-        bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id)
-        bot.answer_callback_query(call.id, "Let the battle begin! Forming teams...")
-
-        # --- Team Formation Logic ---
-        participants_dict = team_battle_session['participants']
-        participants_list = list(participants_dict.items()) # [(user_id, user_name), ...]
-        random.shuffle(participants_list)
-
-        mid_point = len(participants_list) // 2
-        team1_list = participants_list[:mid_point]
-        team2_list = participants_list[mid_point:]
-
-        # --- Team Naming Ceremony ---
-        adjectives = ["Dhaakad", "Rowdy", "Mighty", "Fearless", "Cosmic", "Galactic", "Blazing"]
-        nouns = ["Dragons 🐲", "Raptors 🦅", "Titans 🔥", "Wizards 🧙", "Ninjas 🥷", "Samurais 🗡️", "Commandos 🎖️"]
-        
-        team1_name = f"{random.choice(adjectives)} {random.choice(nouns)}"
-        team2_name = f"{random.choice(adjectives)} {random.choice(nouns)}"
-        while team1_name == team2_name: # Ensure names are different
-            team2_name = f"{random.choice(adjectives)} {random.choice(nouns)}"
-
-        # --- Captain Selection ---
-        captain1_id, captain1_name = random.choice(team1_list)
-        captain2_id, captain2_name = random.choice(team2_list)
-
-        # --- Update Session State ---
-        team_battle_session['status'] = 'active'
-        team_battle_session['team1'] = {'name': team1_name, 'members': dict(team1_list), 'captain_id': captain1_id, 'score': 0}
-        team_battle_session['team2'] = {'name': team2_name, 'members': dict(team2_list), 'captain_id': captain2_id, 'score': 0}
-
-        # --- Final Team Announcement ---
-        team1_members_str = "\n".join([f"• {name} {'👑' if uid == captain1_id else ''}" for uid, name in team1_list])
-        team2_members_str = "\n".join([f"• {name} {'👑' if uid == captain2_id else ''}" for uid, name in team2_list])
-        
-        announcement = (
-            "**The teams are set and the battle is about to begin!**\n\n"
-            f"**TEAM 1: {team1_name}**\n"
-            f"{team1_members_str}\n\n"
-            f"**TEAM 2: {team2_name}**\n"
-            f"{team2_members_str}\n\n"
-            "_(👑 denotes the Team Captain)_\n\n"
-            "Get ready! The first question is coming up..."
-        )
-        
-        bot.send_message(call.message.chat.id, announcement, parse_mode="HTML")
-        
-        # TODO: Start the quiz loop in the next step
-        # For now, we'll just log that it's ready
-        print("Quiz is ready to start with teams:", team_battle_session)
-        # Wait 5 seconds before starting the quiz
-        time.sleep(5)
-        start_quiz_game_loop(call.message.chat.id, session_id)
-    except Exception as e:
-        bot.answer_callback_query(call.id, "An error occurred while starting the battle.", show_alert=True)
-        report_error_to_admin(f"Error in handle_team_battle_start: {traceback.format_exc()}")
 def start_quiz_game_loop(chat_id, session_id):
+    """
+    UPGRADED: Dynamically fetches questions based on the admin's selection.
+    """
     global team_battle_session
     try:
-        # Step 1: Database se questions fetch karna
-        # Abhi ke liye, hum maan rahe hain ki team battle ke questions 'General_Battle' set se aayenge.
-        # Isko hum baad mein dynamic bana sakte hain.
-        QUIZ_SET_FOR_BATTLE = "Idt-8" # <<--- AAP ISKO APNE QUIZ SET NAAM SE BADAL SAKTE HAIN
-        NUMBER_OF_QUESTIONS = 15 # Aap yahan question count badal sakte hain
+        session = team_battle_session
+        selected_set = session['selected_set'] # Hardcoded set ki jagah session se lena
+        NUMBER_OF_QUESTIONS = 15 # Aap isey abhi bhi yahan se control kar sakte hain
 
-        response = supabase.table('quiz_questions').select('*').eq('quiz_set', QUIZ_SET_FOR_BATTLE).limit(NUMBER_OF_QUESTIONS).execute()
+        response = supabase.table('quiz_questions').select('*').eq('quiz_set', selected_set).limit(NUMBER_OF_QUESTIONS).execute()
         
         if not response.data:
-            bot.send_message(chat_id, "❌ Error: Is quiz ke liye database mein questions nahi mile. Battle cannot start.")
+            bot.send_message(chat_id, f"❌ Error: '{escape(selected_set)}' set ke liye database mein questions nahi mile.", parse_mode="HTML")
             return
 
         questions = response.data
         random.shuffle(questions)
         
-        # Session mein questions aur scores save karna
-        team_battle_session['questions'] = questions
-        team_battle_session['current_question_index'] = 0
+        session['questions'] = questions
+        session['current_question_index'] = 0
         
-        # Step 2: Live Dashboard banana
-        team1 = team_battle_session['team1']
-        team2 = team_battle_session['team2']
+        team1 = session['team1']
+        team2 = session['team2']
         
         dashboard_text = (
             f"**{team1['name']}** vs **{team2['name']}**\n\n"
@@ -1248,10 +1179,9 @@ def start_quiz_game_loop(chat_id, session_id):
             "Waiting for the first question..."
         )
         
-        dashboard_message = bot.send_message(chat_id, dashboard_text, parse_mode="HTML")
-        team_battle_session['dashboard_message_id'] = dashboard_message.message_id
+        dashboard_message = bot.send_message(chat_id, dashboard_text, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
+        session['dashboard_message_id'] = dashboard_message.message_id
 
-        # Step 3: Pehla question bhejna
         send_next_battle_question(chat_id, session_id)
 
     except Exception as e:
@@ -1260,42 +1190,54 @@ def start_quiz_game_loop(chat_id, session_id):
 
 
 def send_next_battle_question(chat_id, session_id):
+    """
+    UPGRADED: Now also handles and displays case study text before questions.
+    """
     global team_battle_session
     try:
         session = team_battle_session
         idx = session['current_question_index']
-        
-        # --- POWER-UP EFFECT LOGIC (BEFORE SENDING QUESTION) ---
-        # Check if the other team used 'Double Trouble' on us
-        opponent_team_key = 'team2' if session['team1']['name'] in session.get('last_event', '') else 'team1'
-        if session.get(opponent_team_key, {}).get('active_powerup') == 'DoubleTrouble':
-            # Find a 'hard' question if possible
-            hard_question = next((q for q in session['questions'][idx:] if q.get('difficulty') == 'hard'), None)
-            if hard_question:
-                # Swap current question with the hard one
-                hard_question_index = session['questions'].index(hard_question)
-                session['questions'][idx], session['questions'][hard_question_index] = session['questions'][hard_question_index], session['questions'][idx]
-                print("Double Trouble Activated! Swapped with a hard question.")
-            session[opponent_team_key]['active_powerup'] = None # Use power-up
-
         question = session['questions'][idx]
         
+        # --- NEW: Case Study Text Logic ---
+        case_study_text = question.get('case_study_text')
+        if case_study_text:
+            try:
+                header = f"📖 <b>Case Study for Question {idx + 1}</b>\n<pre>------------------</pre>\n"
+                full_message = header + case_study_text # escape() yahan se bhi hata diya gaya hai
+                bot.send_message(chat_id, full_message, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
+                time.sleep(5) # Give users time to read
+            except Exception as e:
+                print(f"Error sending case study text for Team Battle QID {question.get('id')}: {e}")
+        # --- End of Case Study Logic ---
+        
+        image_file_id = question.get('image_file_id')
+        if image_file_id:
+            try:
+                image_caption = f"🖼️ <b>Visual Clue for Question {idx + 1}!</b>"
+                bot.send_photo(chat_id, image_file_id, caption=image_caption, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
+                time.sleep(3)
+            except Exception as img_error:
+                print(f"Error sending image for team battle QID {question.get('id')}: {img_error}")
+
         options = [unescape(str(question.get(f'Option {c}', ''))) for c in ['A', 'B', 'C', 'D']]
         correct_answer_letter = str(question.get('Correct Answer', 'A')).upper()
         correct_option_index = ['A', 'B', 'C', 'D'].index(correct_answer_letter)
         
-        poll_question = f"Q{idx + 1}/{len(session['questions'])}: {unescape(question.get('Question', ''))}"
+        poll_question_text = f"Q{idx + 1}/{len(session['questions'])}: {unescape(question.get('Question', ''))}"
         
         poll_message = bot.send_poll(
-            chat_id=chat_id, question=poll_question, options=options, type='quiz',
-            correct_option_id=correct_option_index, is_anonymous=False,
-            open_period=int(question.get('time_allotted', 30)),
-            explanation=escape(unescape(str(question.get('Explanation', '')))), explanation_parse_mode="HTML"
+            chat_id=chat_id, message_thread_id=QUIZ_TOPIC_ID,
+            question=poll_question_text.replace("'", "&#39;"), # Apostrophe fix
+            options=options, type='quiz', correct_option_id=correct_option_index,
+            is_anonymous=False, open_period=int(question.get('time_allotted', 30)),
+            explanation=escape(unescape(str(question.get('Explanation', '')))),
+            explanation_parse_mode="HTML"
         )
         
         session['current_poll_id'] = poll_message.poll.id
         session['question_start_time'] = datetime.datetime.now(IST)
-        session['first_correct_user'] = None # Reset for Speed Demon bonus
+        session['first_correct_user'] = None
 
     except Exception as e:
         report_error_to_admin(f"Error in send_next_battle_question: {traceback.format_exc()}")
@@ -1305,111 +1247,141 @@ def update_battle_dashboard(chat_id, session_id, last_event=""):
     team1 = session['team1']
     team2 = session['team2']
     
+    # --- NEW: Get quiz progress ---
+    current_q = session.get('current_question_index', 0)
+    total_q = len(session.get('questions', []))
+    progress_text = f"Q. {current_q}/{total_q}" if total_q > 0 else "Starting..."
+
     dashboard_text = (
         f"**{team1['name']}** vs **{team2['name']}**\n\n"
-        f"SCORE: **{team1['score']}** - **{team2['score']}**\n"
+        f"📊 **SCORE: {team1['score']} - {team2['score']}**\n"
+        f" progressing... {progress_text} Progressing...\n"
         "------------------------------------\n"
         f"🔥 {last_event}"
     )
     
     try:
-        bot.edit_message_text(dashboard_text, chat_id, session['dashboard_message_id'], parse_mode="HTML")
+        # Use a lock to prevent race conditions when editing the message
+        with session_lock:
+            bot.edit_message_text(dashboard_text, chat_id, session['dashboard_message_id'], parse_mode="HTML")
     except ApiTelegramException as e:
         if "message is not modified" not in e.description:
             print(f"Could not edit dashboard: {e}")
 
-def add_late_joiner(user_id, user_name):
-    global team_battle_session
-    team1_size = len(team_battle_session['team1']['members'])
-    team2_size = len(team_battle_session['team2']['members'])
-
-    # Kam members waali team mein add karo
-    if team1_size <= team2_size:
-        team_battle_session['team1']['members'][user_id] = user_name
-        return team_battle_session['team1']
-    else:
-        team_battle_session['team2']['members'][user_id] = user_name
-        return team_battle_session['team2']
 
 @bot.poll_answer_handler()
 def handle_team_battle_poll_answer(poll_answer: types.PollAnswer):
     global team_battle_session
     try:
-        if not team_battle_session or poll_answer.poll_id != team_battle_session.get('current_poll_id'):
-            return
+        # Use a lock to handle multiple answers at once safely
+        with session_lock:
+            if not team_battle_session or poll_answer.poll_id != team_battle_session.get('current_poll_id'):
+                return
 
-        user_id = poll_answer.user.id
-        user_name = poll_answer.user.first_name
-        selected_option = poll_answer.option_ids[0]
-        
-        session = team_battle_session
-        chat_id = GROUP_ID
+            session = team_battle_session
+            user_id = poll_answer.user.id
+            user_name = poll_answer.user.first_name
+            selected_option = poll_answer.option_ids[0]
+            chat_id = GROUP_ID
 
-        player_team_key = None
-        if user_id in session['team1']['members']:
-            player_team_key = 'team1'
-        elif user_id in session['team2']['members']:
-            player_team_key = 'team2'
-        else:
-            added_team = add_late_joiner(user_id, user_name)
-            player_team_key = 'team1' if added_team['name'] == session['team1']['name'] else 'team2'
-            bot.send_message(chat_id, f"A new challenger appears! **{escape(user_name)}** joins **{escape(added_team['name'])}**!", parse_mode="HTML")
+            # Find player's team or add them as a late joiner
+            player_team_key = None
+            if user_id in session['team1']['members']:
+                player_team_key = 'team1'
+            elif user_id in session['team2']['members']:
+                player_team_key = 'team2'
+            else:
+                added_team = add_late_joiner(user_id, user_name)
+                player_team_key = 'team1' if added_team['name'] == session['team1']['name'] else 'team2'
+                bot.send_message(chat_id, f"A new challenger appears! **{escape(user_name)}** joins **{escape(added_team['name'])}**!", parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
 
-        player_team = session[player_team_key]
-        
-        # Individual stats track karna shuru karein
-        if 'player_stats' not in player_team: player_team['player_stats'] = {}
-        if user_id not in player_team['player_stats']:
-            player_team['player_stats'][user_id] = {'score': 0, 'total_time': 0, 'correct_answers': 0}
-        
-        player_stats = player_team['player_stats'][user_id]
-        time_taken = (datetime.datetime.now(IST) - session['question_start_time']).total_seconds()
-        player_stats['total_time'] += time_taken
-
-        idx = session['current_question_index']
-        question = session['questions'][idx]
-        correct_option_index = ['A', 'B', 'C', 'D'].index(str(question.get('Correct Answer', 'A')).upper())
-        
-        last_event = ""
-        points_awarded = 0
-        
-        if selected_option == correct_option_index:
-            points_awarded = 10 # Base points
-            player_stats['score'] += points_awarded
-            player_stats['correct_answers'] += 1
-
-            # --- POWER-UP & BONUS LOGIC ---
-            # Bonus Points Power-up
-            if player_team.get('active_powerup') == 'BonusPoints':
-                points_awarded *= 2 # Double the points
-                player_team['active_powerup'] = None # Power-up use ho gaya
+            player_team = session[player_team_key]
             
-            # Speed Demon Bonus (first correct answer)
-            if not session.get('first_correct_user'):
-                session['first_correct_user'] = user_id
-                points_awarded += 5 # Bonus points
-                last_event += "⚡ Speed Demon! +5 bonus! "
+            # Initialize or get player stats
+            if 'player_stats' not in player_team: player_team['player_stats'] = {}
+            if user_id not in player_team['player_stats']:
+                player_team['player_stats'][user_id] = {'name': user_name, 'score': 0, 'total_time': 0, 'correct_answers': 0}
+            
+            player_stats = player_team['player_stats'][user_id]
+            time_taken = (datetime.datetime.now(IST) - session['question_start_time']).total_seconds()
+            player_stats['total_time'] += time_taken
 
-            last_event += f"{escape(user_name)} from {escape(player_team['name'])} answered correctly! **+{points_awarded} points!**"
-        else:
-            last_event = f"{escape(user_name)} from {escape(player_team['name'])} answered."
+            # Check correctness and calculate points
+            idx = session['current_question_index']
+            question = session['questions'][idx]
+            correct_option_index = ['A', 'B', 'C', 'D'].index(str(question.get('Correct Answer', 'A')).upper())
+            
+            last_event = ""
+            points_awarded = 0
+            
+            if selected_option == correct_option_index:
+                points_awarded = 10 # Base points
+
+                # Apply Bonus Points Power-up
+                if player_team.get('active_powerup') == 'BonusPoints':
+                    points_awarded *= 2
+                    player_team['active_powerup'] = None # Consume power-up
+                
+                # Apply Speed Demon Bonus
+                if not session.get('first_correct_user'):
+                    session['first_correct_user'] = user_id
+                    points_awarded += 5
+                    last_event += "⚡ Speed Demon! +5 bonus! "
+
+                player_stats['correct_answers'] += 1
+                last_event += f"{escape(user_name)} from {escape(player_team['name'])} answered correctly! **+{points_awarded} points!**"
+            else:
+                last_event = f"{escape(user_name)} from {escape(player_team['name'])} answered."
+            
+            # Update individual score and then recalculate team score
+            player_stats['score'] += points_awarded
+            player_team['score'] = sum(p.get('score', 0) for p in player_team['player_stats'].values())
+            
+            # Update Dashboard
+            update_battle_dashboard(chat_id, session['session_id'], last_event)
+            
+            # Increment question index
+            session['current_question_index'] += 1
+            
+            # --- TRIGGER POWER-UPS AT MID-QUIZ ---
+        MID_QUIZ_CHECKPOINT = 6 # Aap isko change kar sakte hain (e.g., 5, 10)
         
-        player_team['score'] += points_awarded
-        update_battle_dashboard(chat_id, session['session_id'], last_event)
-        
-        session['current_question_index'] += 1
-        
-        if session['current_question_index'] == 6: # Mid-quiz checkpoint
-            # Logic remains same as before...
-            pass
-        
-        if session['current_question_index'] < len(session['questions']):
-            time.sleep(3)
-            send_next_battle_question(chat_id, session['session_id'])
-        else:
-            # Quiz Khatam!
-            send_final_battle_report(chat_id, session)
-            team_battle_session = {}
+        # Check if it's time for the mid-quiz report
+        if session['current_question_index'] == MID_QUIZ_CHECKPOINT:
+            time.sleep(2) # Short pause for drama
+            team1 = session['team1']
+            team2 = session['team2']
+            
+            # Decide leading and lagging teams
+            leading_team = team1 if team1['score'] > team2['score'] else team2 if team2['score'] > team1['score'] else None
+            lagging_team = team2 if leading_team == team1 else team1 if leading_team == team2 else None
+
+            report_text = (
+                f"**---------- MID-QUIZ REPORT ----------**\n\n"
+                f"**{escape(team1['name'])}**: {team1['score']} points\n"
+                f"**{escape(team2['name'])}**: {team2['score']} points\n\n"
+            )
+            
+            if leading_team:
+                report_text += f"Looks like **{escape(leading_team['name'])}** is in the lead! Time for power-ups... ⚡"
+            else:
+                report_text += "It's a TIE! The battle is intense! Time for power-ups... ⚡"
+
+            # Send the report and delete it after 60 seconds to reduce clutter
+            sent_report = bot.send_message(chat_id, report_text, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
+            delete_message_in_thread(chat_id, sent_report.message_id, 60)
+            
+            # Yahan hum naye function ko call kar rahe hain
+            trigger_powerup_selection(chat_id, leading_team, lagging_team) 
+            time.sleep(5) # Pause before the next question
+
+            # Check if quiz is over and proceed
+            if session['current_question_index'] < len(session['questions']):
+                time.sleep(3)
+                send_next_battle_question(chat_id, session['session_id'])
+            else:
+                send_final_battle_report(chat_id, session)
+                team_battle_session = {} # Clear session
 
     except Exception as e:
         report_error_to_admin(f"Error in handle_team_battle_poll_answer: {traceback.format_exc()}")
@@ -1421,23 +1393,26 @@ def send_final_battle_report(chat_id, session):
         winning_team = team1 if team1['score'] > team2['score'] else team2 if team2['score'] > team1['score'] else None
         losing_team = team2 if winning_team == team1 else team1 if winning_team == team2 else None
 
-        # --- Calculate Hall of Fame Stats ---
+        # --- UPGRADED: Calculate Hall of Fame Stats ---
         all_players = list(team1.get('player_stats', {}).values()) + list(team2.get('player_stats', {}).values())
         if not all_players: return
 
-        # MVP (Most Valuable Player) - Highest individual score
-        mvp = max(all_players, key=lambda p: p.get('score', 0)) if all_players else None
+        # MVP (Most Valuable Player) - Highest score, with time as a tie-breaker
+        mvp = max(all_players, key=lambda p: (p.get('score', 0), -p.get('total_time', 999)))
 
-        # Fastest Finger - Lowest average time for correct answers
-        fastest_finger = min([p for p in all_players if p['correct_answers'] > 0], key=lambda p: p['total_time'] / p['correct_answers'], default=None)
+        # Fastest Finger - Must have at least 3 correct answers to qualify
+        MIN_ANSWERS_FOR_FASTEST = 3
+        eligible_for_fastest = [p for p in all_players if p.get('correct_answers', 0) >= MIN_ANSWERS_FOR_FASTEST]
+        fastest_finger = min(eligible_for_fastest, key=lambda p: p['total_time'] / p['correct_answers'], default=None)
 
         # Clutch Player - Best performer from the losing team
         clutch_player = None
         if losing_team:
             losing_team_players = list(losing_team.get('player_stats', {}).values())
-            clutch_player = max(losing_team_players, key=lambda p: p.get('score', 0)) if losing_team_players else None
+            if losing_team_players:
+                clutch_player = max(losing_team_players, key=lambda p: p.get('score', 0))
 
-        # --- Format the Final Message ---
+        # --- UPGRADED: Format the Final Message ---
         report = "--- 🏆 **BATTLE REPORT** 🏆 ---\n\n"
         if winning_team:
             report += f"**WINNER: {escape(winning_team['name'])}** with **{winning_team['score']}** points!\n\n"
@@ -1447,56 +1422,245 @@ def send_final_battle_report(chat_id, session):
         report += f"**Final Score:**\n"
         report += f"• {escape(team1['name'])}: {team1['score']} points\n"
         report += f"• {escape(team2['name'])}: {team2['score']} points\n\n"
-        
-        report += "--- **HALL OF FAME** ---\n"
+
+        # --- NEW: Individual Player Leaderboard ---
+        report += "--- 👤 **INDIVIDUAL RANKING** ---\n"
+        # Sort players by score (desc) and time (asc)
+        sorted_players = sorted(all_players, key=lambda p: (p.get('score', 0), p.get('total_time', 999)), reverse=True)
+        rank_emojis = ["🥇", "🥈", "🥉"]
+        for i, player in enumerate(sorted_players[:5]): # Show Top 5
+            rank = rank_emojis[i] if i < 3 else f"<b>{i + 1}.</b>"
+            report += f"{rank} {escape(player.get('name', 'N/A'))} - {player.get('score', 0)} points\n"
+        report += "\n"
+
+        report += "--- ⭐ **HALL OF FAME** ⭐ ---\n"
         if mvp: report += f"🎖️ **MVP:** {escape(mvp.get('name', 'N/A'))} ({mvp.get('score', 0)} points)\n"
         if fastest_finger:
             avg_time = fastest_finger['total_time'] / fastest_finger['correct_answers']
             report += f"⚡ **Fastest Finger:** {escape(fastest_finger.get('name', 'N/A'))} ({avg_time:.2f}s avg)\n"
-        if clutch_player: report += f"💪 **Clutch Player:** {escape(clutch_player.get('name', 'N/A'))}\n"
+        if clutch_player:
+            report += f"💪 **Clutch Player:** {escape(clutch_player.get('name', 'N/A'))} ({clutch_player.get('score', 0)} points)\n"
         
         report += "\nCongratulations to everyone who participated! 🎉"
         
-        bot.send_message(chat_id, report, parse_mode="HTML")
+        bot.send_message(chat_id, report, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
 
     except Exception as e:
         report_error_to_admin(f"Error sending final battle report: {traceback.format_exc()}")
-        bot.send_message(chat_id, "Error generating final report.")
+        bot.send_message(chat_id, "Error generating final report.", message_thread_id=QUIZ_TOPIC_ID)
+def trigger_powerup_selection(chat_id, leading_team, lagging_team):
+    global team_battle_session
+    session = team_battle_session
+
+    def send_powerup_message(team_key, text, markup):
+        try:
+            sent_msg = bot.send_message(chat_id, text, reply_markup=markup, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
+            session[team_key]['powerup_message_id'] = sent_msg.message_id
+        except Exception as e:
+            print(f"Could not send powerup message for {team_key}: {e}")
+
+    # Agar tie hai to dono ko comeback power-up do
+    if not leading_team:
+        for team_key in ['team1', 'team2']:
+            team = session[team_key]
+            captain_id = team['captain_id']
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("✨ Bonus Points (Next Q)", callback_data=f"pwrup_{captain_id}_{team_key}_BonusPoints"))
+            text = f"**{escape(team['name'])}**, it's a tie! Captain, choose your power-up:"
+            send_powerup_message(team_key, text, markup)
+        return
+
+    # Leading Team ke liye Attack Power-ups
+    l_team = leading_team
+    l_team_key = 'team1' if l_team['name'] == session['team1']['name'] else 'team2'
+    l_captain_id = l_team['captain_id']
+    l_markup = types.InlineKeyboardMarkup()
+    l_markup.add(types.InlineKeyboardButton("⚔️ Double Trouble (Hard Q for them)", callback_data=f"pwrup_{l_captain_id}_{l_team_key}_DoubleTrouble"))
+    l_text = f"**{escape(l_team['name'])}**, you are in the lead! Captain, choose your advantage:"
+    send_powerup_message(l_team_key, l_text, l_markup)
+
+    # Lagging Team ke liye Comeback Power-ups
+    g_team = lagging_team
+    g_team_key = 'team1' if g_team['name'] == session['team1']['name'] else 'team2'
+    g_captain_id = g_team['captain_id']
+    g_markup = types.InlineKeyboardMarkup()
+    g_markup.add(types.InlineKeyboardButton("✨ Bonus Points (Next Q)", callback_data=f"pwrup_{g_captain_id}_{g_team_key}_BonusPoints"))
+    g_markup.add(types.InlineKeyboardButton("🔍 Hint (Next Q)", callback_data=f"pwrup_{g_captain_id}_{g_team_key}_Hint"))
+    g_text = f"**{escape(g_team['name'])}**, it's time for a comeback! Captain, choose your power-up:"
+    send_powerup_message(g_team_key, g_text, g_markup)
 @bot.callback_query_handler(func=lambda call: call.data.startswith('pwrup_'))
 def handle_powerup_selection(call: types.CallbackQuery):
     global team_battle_session
     try:
+        session = team_battle_session
+        # --- NEW: Safety Check ---
+        if not session or session.get('status') != 'active':
+            bot.answer_callback_query(call.id, "This battle is no longer active.", show_alert=True)
+            bot.edit_message_text("This power-up has expired.", call.message.chat.id, call.message.message_id)
+            return
+            
         parts = call.data.split('_')
         captain_id = int(parts[1])
         team_key = parts[2] # 'team1' or 'team2'
         powerup_name = parts[3]
 
         # --- SECURITY CHECK ---
-        # Ye check karta hai ki button sirf sahi Captain hi daba sakta hai
         if call.from_user.id != captain_id:
             bot.answer_callback_query(call.id, "This is not for you! Only the team Captain can choose.", show_alert=True)
             return
 
-        session = team_battle_session
         team = session.get(team_key)
         
-        # Check if power-up has already been selected
         if team.get('active_powerup'):
             bot.answer_callback_query(call.id, "Your team has already selected a power-up.", show_alert=True)
             return
 
-        # Power-up ko session mein save karna
         team['active_powerup'] = powerup_name
         
         bot.answer_callback_query(call.id, f"Power-up '{powerup_name}' activated!")
         
-        # Message ko edit karke confirmation dena aur buttons hata dena
+        # --- NEW: Update BOTH messages ---
+        # 1. Update the message that was clicked
         confirmation_text = f"**{escape(team['name'])}** has activated the **{powerup_name}** power-up! ⚡"
         bot.edit_message_text(confirmation_text, call.message.chat.id, call.message.message_id, parse_mode="HTML")
+
+        # 2. Find and update the OTHER team's message
+        other_team_key = 'team2' if team_key == 'team1' else 'team1'
+        other_team_message_id = session.get(other_team_key, {}).get('powerup_message_id')
+        if other_team_message_id:
+            try:
+                other_team_name = escape(session[other_team_key]['name'])
+                waiting_text = f"**{other_team_name}**, the opponent has chosen their power-up. Get ready for the next question!"
+                bot.edit_message_text(waiting_text, call.message.chat.id, other_team_message_id, parse_mode="HTML")
+            except Exception as e:
+                print(f"Could not edit the other team's powerup message: {e}")
 
     except Exception as e:
         bot.answer_callback_query(call.id, "An error occurred with the power-up.", show_alert=True)
         report_error_to_admin(f"Error in handle_powerup_selection: {traceback.format_exc()}")
+@bot.callback_query_handler(func=lambda call: call.data == 'delete_analysis_msg')
+def handle_delete_message_callback(call: types.CallbackQuery):
+    """
+    Deletes the analysis message and the original command,
+    but only if the clicker is the original user or an admin.
+    """
+    try:
+        # User who requested the analysis
+        original_user_id = call.message.reply_to_message.from_user.id
+        # User who clicked the delete button
+        clicker_id = call.from_user.id
+
+        # Fetch group admins to check if the clicker is one of them
+        chat_admins = bot.get_chat_administrators(call.message.chat.id)
+        admin_ids = [admin.user.id for admin in chat_admins]
+
+        # --- SECURITY CHECK ---
+        if clicker_id == original_user_id or clicker_id in admin_ids:
+            # User is authorized, proceed with deletion
+            
+            # Delete the bot's analysis message
+            try:
+                bot.delete_message(call.message.chat.id, call.message.message_id)
+            except ApiTelegramException as e:
+                print(f"Info: Could not delete bot's analysis message (already gone?). Error: {e}")
+
+            # Delete the user's original command message
+            try:
+                bot.delete_message(call.message.chat.id, call.message.reply_to_message.message_id)
+            except ApiTelegramException as e:
+                print(f"Info: Could not delete user's command (already gone?). Error: {e}")
+
+            bot.answer_callback_query(call.id, "Analysis deleted.")
+        else:
+            # User is not authorized, show an alert
+            bot.answer_callback_query(call.id, "Only the person who requested this analysis or an admin can delete it.", show_alert=True)
+            
+    except AttributeError:
+        # This happens if the original command message was deleted, breaking the reply link.
+        # In this case, we allow anyone to delete the orphaned analysis message.
+        try:
+            bot.delete_message(call.message.chat.id, call.message.message_id)
+            bot.answer_callback_query(call.id, "Message deleted.")
+        except Exception as final_e:
+            print(f"Error deleting orphaned analysis message: {final_e}")
+            bot.answer_callback_query(call.id, "Could not delete the message.")
+    except Exception as e:
+        print(f"General error in delete_analysis_callback: {e}")
+        report_error_to_admin(f"Error in delete_analysis_callback: {traceback.format_exc()}")
+        bot.answer_callback_query(call.id, "An error occurred.")
+def format_holistic_analysis_message(user_name, analysis_data):
+    """
+    Takes raw holistic data and formats it into a rich, detailed, and accurate analysis message.
+    """
+    if not analysis_data:
+        return f"📊 <b>{escape(user_name)}'s Performance Snapshot</b>\n\nNo quiz data found yet. Participate in quizzes to build your profile!"
+
+    total_questions = len(analysis_data)
+    total_correct = sum(1 for item in analysis_data if item['is_correct'])
+    overall_accuracy = (total_correct / total_questions * 100) if total_questions > 0 else 0
+
+    topic_stats = {}
+    for item in analysis_data:
+        topic = item.get('topic', 'General Topics')
+        if not topic: topic = 'General Topics' # Handle cases where topic is None or empty
+        
+        if topic not in topic_stats:
+            topic_stats[topic] = {'correct': 0, 'total': 0}
+        topic_stats[topic]['total'] += 1
+        if item['is_correct']:
+            topic_stats[topic]['correct'] += 1
+
+    topic_accuracies = []
+    for topic, stats in topic_stats.items():
+        accuracy = (stats['correct'] / stats['total'] * 100) if stats['total'] > 0 else 0
+        topic_accuracies.append({'topic': topic, 'accuracy': accuracy, 'count': stats['total']})
+
+    # Sort topics by accuracy (highest first)
+    sorted_topics = sorted(topic_accuracies, key=lambda x: x['accuracy'], reverse=True)
+    
+    # --- Building the Message ---
+    msg = f"📊 **{escape(user_name)}'s Detailed Performance Analysis**\n\n"
+    msg += f"<i>Here is a deep dive into your quiz performance across all formats.</i>\n"
+    msg += "━━━━━━━━━━━━━━━━━━\n\n"
+    
+    msg += f"🎯 **Overall Performance**\n"
+    msg += f" • <b>Total Questions Attempted:</b> {total_questions}\n"
+    msg += f" • <b>Overall Accuracy:</b> {overall_accuracy:.1f}%\n\n"
+
+    # Strongest Areas (accuracy >= 75% and at least 3 questions attempted)
+    strongest_topics = [t for t in sorted_topics if t['accuracy'] >= 75 and t['count'] >= 3][:5]
+    if strongest_topics:
+        msg += f"💪 **Your Top 5 Strongest Areas**\n"
+        for t in strongest_topics:
+            msg += f"  • <code>{escape(t['topic'])}</code> | <b>{t['accuracy']:.0f}%</b> <i>({t['count']} ques)</i>\n"
+        msg += "\n"
+
+    # Weakest Areas (accuracy < 60% and at least 3 questions attempted)
+    weakest_topics = [t for t in sorted_topics if t['accuracy'] < 60 and t['count'] >= 3][:5]
+    if weakest_topics:
+        # --- THE FIX: Sort weakest topics from lowest accuracy to highest ---
+        weakest_topics.sort(key=lambda x: x['accuracy'])
+        msg += f"⚠️ **Your Top 5 Areas for Improvement**\n"
+        for t in weakest_topics:
+            msg += f"  • <code>{escape(t['topic'])}</code> | <b>{t['accuracy']:.0f}%</b> <i>({t['count']} ques)</i>\n"
+        msg += "\n"
+        
+    # --- UPGRADED: Coach's Insight ---
+    msg += f"💡 **Coach's Insight**\n"
+    if total_questions < 10:
+        insight = "You've just started your journey! Keep participating in quizzes to build a stronger profile. Every quiz is a step forward. 🌱"
+    elif not weakest_topics and overall_accuracy >= 85:
+        insight = f"Outstanding performance! You have no significant weak areas. You are a consistent top performer. Keep revising to maintain this excellent form! 🏆"
+    elif overall_accuracy > 80 and weakest_topics:
+        # THE FIX: This now correctly picks the weakest topic
+        insight = f"Your overall performance is excellent! To become truly unbeatable, focus on improving your accuracy in topics like '<b>{escape(weakest_topics[0]['topic'])}</b>'."
+    elif overall_accuracy > 60:
+        insight = f"You have a solid foundation. Consistency is key now. Keep practicing your weaker areas like '<b>{escape(weakest_topics[0]['topic'] if weakest_topics else 'some topics')}</b>' to see a great jump in your rank."
+    else:
+        insight = "Let's build a stronger foundation. Start by revisiting the basics of your weakest topics. Every correct answer is progress! You can do it."
+    msg += f"<i>{insight}</i>\n"
+    
+    return msg
 @bot.message_handler(commands=['add_qm'])
 @permission_required('quizmarathon') # Yahan 'quizmarathon' permission check hogi
 def handle_add_qm(message):
@@ -2497,7 +2661,7 @@ def handle_quoted_reply_content(msg: types.Message):
 @membership_required
 def handle_today_quiz(msg: types.Message):
     """
-    Shows the quiz schedule with a robust reply method to prevent errors.
+    Shows a dynamically formatted, mobile-friendly quiz schedule for the day.
     """
     try:
         supabase.rpc('update_chat_activity', {'p_user_id': msg.from_user.id, 'p_user_name': msg.from_user.username or msg.from_user.first_name}).execute()
@@ -2510,7 +2674,9 @@ def handle_today_quiz(msg: types.Message):
 
     try:
         ist_tz = timezone(timedelta(hours=5, minutes=30))
-        current_hour = datetime.datetime.now(ist_tz).hour
+        now = datetime.datetime.now(ist_tz)
+        current_hour = now.hour
+        
         if 5 <= current_hour < 12:
             time_of_day_greeting = "🌅 Good Morning!"
         elif 12 <= current_hour < 17:
@@ -2518,63 +2684,86 @@ def handle_today_quiz(msg: types.Message):
         else:
             time_of_day_greeting = "🌆 Good Evening!"
 
-        today_date_str = datetime.datetime.now(ist_tz).strftime('%Y-%m-%d')
-        response = supabase.table('quiz_schedule').select('*').eq('quiz_date', today_date_str).order('quiz_no').execute()
+        today_date_str = now.strftime('%Y-%m-%d')
+        response = supabase.table('quiz_schedule').select('*').eq('quiz_date', today_date_str).order('quiz_time').execute()
 
         user_name = escape(msg.from_user.first_name)
         
-        # Define the robust reply parameters once
         reply_params = types.ReplyParameters(
             message_id=msg.message_id,
             allow_sending_without_reply=True
         )
         
         if not response.data:
-            message_text = f"✅ Hey {user_name}, no quizzes are scheduled for today. It might be a rest day! 🧘"
+            # Smart check: See if there's a schedule for tomorrow
+            try:
+                tomorrow_date = now + timedelta(days=1)
+                tomorrow_date_str = tomorrow_date.strftime('%Y-%m-%d')
+                tomorrow_response = supabase.table('quiz_schedule').select('id', count='exact').eq('quiz_date', tomorrow_date_str).limit(1).execute()
+                
+                if tomorrow_response.count > 0:
+                    message_text = f"✅ Hey {user_name}, no quizzes are scheduled for today. But tomorrow's schedule is ready!\n\nUse <code>/kalkaquiz</code> to see what's planned! 🔮"
+                else:
+                    message_text = f"✅ Hey {user_name}, no quizzes are scheduled for today. It might be a rest day! 🧘"
+            except Exception:
+                # If the check fails for any reason, send the original message
+                message_text = f"✅ Hey {user_name}, no quizzes are scheduled for today. It might be a rest day! 🧘"
+
             bot.send_message(msg.chat.id, message_text, parse_mode="HTML", reply_parameters=reply_params)
             return
         
+        # --- NEW: Rhyming Greetings ---
         all_greetings = [
-            f"Ready to conquer the quizzes today, {user_name}?\nHere's the schedule to light up your way! 💡",
-            f"Set your own winning pace, {user_name}, it's time to ace!\nHere's the quiz schedule for today's race! 🏁",
-            f"It's your time to truly shine, {user_name}, the stars align!\nHere are today's quizzes, all in a line! ✨",
-            f"A new day of learning has begun, {user_name}, let's have some fun!\nHere's the quiz schedule, time for a run! 🏃‍♂️",
-            f"With C.A.V.Y.A. right by your side, {user_name}, there's nowhere to hide!\nCheck the quiz power packed inside! 💪",
-            f"It's your moment, it's your time, {user_name}, get ready for the climb!\nHere's the schedule, perfectly on time! 🧗‍♀️",
-            f"Let's make every single moment count, {user_name}, and reach the paramount!\nToday's quiz schedule is now out and about! 📣",
-            f"Josh aur hosh, dono rakho saath,\n{user_name}, quiz schedule se karo din ki shuruaat! ☀️",
-            f"Mehnat se likhni hai apni kismat, {user_name}, dikhao aaj apni himmat!\nYeh raha aaj ka schedule, aayi hai quiz ki daawat! 💌",
-            f"Jeet ki tyari hai poori, ab nahi koi doori,\n{user_name}, aaj ka schedule check karna hai zaroori! 🏆",
+            f"Hey {user_name}, don't delay, let's see the quizzes for today! 🎯",
+            f"Success is near, have no fear, {user_name}, today's schedule is here! ✨",
+            f"Ready for the quest? Put your knowledge to the test! {user_name}, here's the schedule, be the best! 🏆",
+            f"Time to prepare, show them you care, {user_name}, the daily schedule is ready to share! 🚀",
+            f"Aaj ka din hai khaas, {user_name}, ho jao taiyaar aur dikhao apni class! ☀️"
         ]
         
         message_text = f"<b>{time_of_day_greeting}</b>\n\n{random.choice(all_greetings)}\n"
         message_text += "━━━━━━━━━━━━\n\n"
         
+        # --- NEW: Group quizzes by subject ---
+        quizzes_by_subject = {}
         for quiz in response.data:
-            try:
-                time_obj = datetime.datetime.strptime(quiz['quiz_time'], '%H:%M:%S')
-                formatted_time = time_obj.strftime('%I:%M %p')
-            except (ValueError, TypeError):
-                formatted_time = "N/A"
+            subject = escape(str(quiz.get('subject', 'General')))
+            if subject not in quizzes_by_subject:
+                quizzes_by_subject[subject] = []
+            quizzes_by_subject[subject].append(quiz)
 
-            message_text += (
-                f"<b>Quiz no. {quiz.get('quiz_no', 'N/A')}:</b>\n"
-                f"⏰ Time: {formatted_time}\n"
-                f"📝 Subject: {escape(str(quiz.get('subject', 'N/A')))}\n"
-                f"📖 Chapter: {escape(str(quiz.get('chapter_name', 'N/A')))}\n"
-                f"🧩 Topics: {escape(str(quiz.get('topics_covered', 'N/A')))}\n\n"
-            )
-        
+        for subject, quizzes in quizzes_by_subject.items():
+            message_text += f"<b>📚 Subject: {subject}</b>\n"
+            for quiz in quizzes:
+                try:
+                    time_obj = datetime.datetime.strptime(quiz['quiz_time'], '%H:%M:%S').time()
+                    formatted_time = time_obj.strftime('%I:%M %p')
+                    
+                    # --- NEW: Live Status Logic ---
+                    quiz_datetime = now.replace(hour=time_obj.hour, minute=time_obj.minute, second=time_obj.second)
+                    if now > quiz_datetime + timedelta(minutes=15): # 15 min grace period
+                        status_emoji = "✅ Completed"
+                    elif quiz_datetime <= now <= quiz_datetime + timedelta(minutes=15):
+                        status_emoji = "🔥 Live Now!"
+                    else:
+                        status_emoji = "⏰ Upcoming"
+                except (ValueError, TypeError):
+                    formatted_time = "N/A"
+                    status_emoji = "❓"
+
+                chapter = escape(str(quiz.get('chapter_name', 'N/A')))
+                topics = escape(str(quiz.get('topics_covered', 'N/A')))
+                
+                # --- NEW: Mobile-Friendly Format ---
+                message_text += f"└─ <b>{formatted_time}</b> - <u>Quiz {quiz.get('quiz_no', 'N/A')}</u>: {chapter} <i>({topics})</i>  <b>[{status_emoji}]</b>\n"
+            message_text += "\n" # Add a space after each subject block
+
         message_text += "━━━━━━━━━━━━"
         
         markup = types.InlineKeyboardMarkup(row_width=2)
-        
-        # --- FIX: Changed web_app to a simple url button to prevent errors ---
         markup.add(
             types.InlineKeyboardButton("📅 View Full Schedule", url="https://studyprosync.web.app/")
         )
-        
-        # Existing buttons remain below it
         markup.add(
             types.InlineKeyboardButton("📊 My Stats", callback_data=f"show_mystats_{msg.from_user.id}"),
             types.InlineKeyboardButton("🤖 All Commands", callback_data="show_info")
@@ -2600,7 +2789,7 @@ def handle_today_quiz(msg: types.Message):
 
 def format_kalkaquiz_message(quizzes):
     """
-    Formats the quiz schedule for /kalkaquiz into the new mobile-first HTML format.
+    Formats the quiz schedule for /kalkaquiz into a new, clean 'Subject Card' format.
     """
     if not quizzes:
         return ""
@@ -2612,11 +2801,11 @@ def format_kalkaquiz_message(quizzes):
         date_str = "Tomorrow's Schedule"
 
     message_parts = [
-        f"<b>🗓️ Tomorrow's Quiz Plan</b>\n",
-        f"<i>{escape(date_str)}</i>",
-        "- - - - - - - - - - - - - - - - - -\n"
+        f"<b>🗓️ Tomorrow's Quiz Plan</b>",
+        f"<i>{escape(date_str)}</i>\n"
     ]
 
+    # Group quizzes by subject (this logic is good and remains)
     quizzes_by_subject = {}
     for quiz in quizzes:
         subject = quiz.get('subject', 'Uncategorized')
@@ -2624,33 +2813,35 @@ def format_kalkaquiz_message(quizzes):
             quizzes_by_subject[subject] = []
         quizzes_by_subject[subject].append(quiz)
 
-    for i, (subject, quiz_list) in enumerate(quizzes_by_subject.items()):
-        message_parts.append(f"<b>📚 {escape(subject)}</b>\n")
+    # --- NEW: Build the "Subject Card" format ---
+    for subject, quiz_list in quizzes_by_subject.items():
+        # Add a separator and header for the subject "card"
+        message_parts.append("━━━━━━━━━━━━━━━━━━")
+        message_parts.append(f"<b>📚 {escape(subject.upper())}</b>")
+        message_parts.append("━━━━━━━━━━━━━━━━━━")
+        
         for quiz in quiz_list:
             try:
-                time_obj = datetime.datetime.strptime(quiz['quiz_time'], '%H:%M:%S')
-                hour = time_obj.hour
-                clock_emoji = "🕗" if hour < 12 else "🕐" if hour < 18 else "🕗"
+                time_obj = datetime.datetime.strptime(quiz['quiz_time'], '%H:%M:%S').time()
                 formatted_time = time_obj.strftime('%I:%M %p')
+                # Determine emoji based on time of day
+                hour = time_obj.hour
+                if 5 <= hour < 12: clock_emoji = "🌅"
+                elif 12 <= hour < 17: clock_emoji = "☀️"
+                elif 17 <= hour < 21: clock_emoji = "🌆"
+                else: clock_emoji = "🌙"
             except (ValueError, TypeError):
                 formatted_time, clock_emoji = "N/A", "⏰"
 
-            quiz_type = escape(str(quiz.get('quiz_type', '')))
-            topics_covered = escape(str(quiz.get('topics_covered', '')))
-
-            message_parts.append(f"{clock_emoji} <b>{formatted_time}</b> - <u>Quiz {quiz.get('quiz_no', 'N/A')}</u>")
-            message_parts.append(f"└─ 📖 <i>{escape(str(quiz.get('chapter_name', 'N/A')))}</i>")
-            if quiz_type:
-                message_parts.append(f"   └─ 📝 <i>Part: {quiz_type}</i>")
-            if topics_covered:
-                 message_parts.append(f"      └─ 💡 <i>Topics: {topics_covered}</i>")
+            chapter = escape(str(quiz.get('chapter_name', 'N/A')))
+            quiz_no = quiz.get('quiz_no', 'N/A')
             
-            message_parts.append("") 
+            # Create a compact, single line for each quiz
+            message_parts.append(f"{clock_emoji} <b>{formatted_time}</b> - <u>Quiz {quiz_no}</u>: {chapter}")
         
-        if i < len(quizzes_by_subject) - 1:
-            message_parts.append("- - - - - - - - - - - - - - - - - -\n")
-    
-    message_parts.append(f"<b><i>For detailed format use /todayquiz command tomorrow!</i></b> 💪")
+        message_parts.append("") # Add a blank line after each card for spacing
+
+    message_parts.append(f"<b><i>All the best for your preparation!</i></b> 💪")
     return "\n".join(message_parts)
 # =============================================================================
 # 9. TELEGRAM BOT HANDLERS - UTILITY & INTERACTIVE
@@ -2759,7 +2950,7 @@ def get_topic_id(message: types.Message):
 @membership_required
 def handle_tomorrow_quiz(msg: types.Message):
     """
-    Shows the quiz schedule for the next day using a robust reply method.
+    Shows tomorrow's quiz schedule with greetings and interactive buttons.
     """
     try:
         supabase.rpc('update_chat_activity', {'p_user_id': msg.from_user.id, 'p_user_name': msg.from_user.username or msg.from_user.first_name}).execute()
@@ -2775,34 +2966,55 @@ def handle_tomorrow_quiz(msg: types.Message):
         tomorrow_date = datetime.datetime.now(ist_tz) + datetime.timedelta(days=1)
         tomorrow_date_str = tomorrow_date.strftime('%Y-%m-%d')
         
-        response = supabase.table('quiz_schedule').select('*').eq('quiz_date', tomorrow_date_str).order('quiz_no').execute()
+        response = supabase.table('quiz_schedule').select('*').eq('quiz_date', tomorrow_date_str).order('quiz_time').execute()
 
-        # Define the reply parameters once. This tells Telegram to reply to the user's
-        # command, but if that command message is already deleted, just send it as a normal message.
         reply_params = types.ReplyParameters(
             message_id=msg.message_id,
             allow_sending_without_reply=True
         )
 
+        user_name = escape(msg.from_user.first_name)
         if not response.data:
-            message_text = f"✅ Hey {escape(msg.from_user.first_name)}, tomorrow's schedule has not been updated yet. Please check back later!"
+            message_text = f"✅ Hey {user_name}, tomorrow's schedule has not been updated yet. Please check back later!"
             bot.send_message(msg.chat.id, message_text, parse_mode="HTML", reply_parameters=reply_params)
             return
         
-        message_text = format_kalkaquiz_message(response.data)
+        # --- NEW: Greetings for tomorrow's plan ---
+        all_greetings = [
+            f"Planning for tomorrow starts today, {user_name}! Here's your roadmap to success. 🗺️",
+            f"Get a head start, {user_name}! Knowing the plan is half the battle won. Here's what's coming tomorrow. ✨",
+            f"Kal ke champions aaj taiyari karte hain, {user_name}! Yeh raha aapka schedule. 🏆"
+        ]
         
-        bot.send_message(msg.chat.id, message_text, parse_mode="HTML", reply_parameters=reply_params)
+        # Get the formatted schedule from our helper function
+        schedule_text = format_kalkaquiz_message(response.data)
+        
+        # Combine greeting and schedule
+        final_message = f"{random.choice(all_greetings)}\n\n{schedule_text}"
+
+        # --- NEW: Add interactive buttons ---
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            types.InlineKeyboardButton("📅 View Full Schedule", url="https://studyprosync.web.app/")
+        )
+        markup.add(
+            types.InlineKeyboardButton("📊 My Stats", callback_data=f"show_mystats_{msg.from_user.id}"),
+            types.InlineKeyboardButton("🤖 All Commands", callback_data="show_info")
+        )
+
+        bot.send_message(
+            msg.chat.id,
+            final_message,
+            parse_mode="HTML",
+            reply_markup=markup,
+            reply_parameters=reply_params
+        )
 
     except Exception as e:
         print(f"CRITICAL Error in /kalkaquiz: {traceback.format_exc()}")
         report_error_to_admin(f"Failed to fetch tomorrow's quiz schedule:\n{traceback.format_exc()}")
-        
-        # We still try to reply even in case of an error
         try:
-            reply_params = types.ReplyParameters(
-                message_id=msg.message_id,
-                allow_sending_without_reply=True
-            )
+            reply_params = types.ReplyParameters(message_id=msg.message_id, allow_sending_without_reply=True)
             bot.send_message(msg.chat.id, "😥 Oops! Something went wrong while fetching the schedule.", reply_parameters=reply_params)
         except Exception as final_error:
             print(f"Failed to even send the error message for /kalkaquiz: {final_error}")
@@ -3383,189 +3595,220 @@ def format_analysis_for_webapp(analysis_data, user_name):
 
 @bot.message_handler(commands=['my_analysis'])
 @membership_required
+def format_holistic_analysis_message(user_name, analysis_data):
+    """
+    Takes raw holistic data and formats it into a rich, detailed analysis message.
+    """
+    if not analysis_data:
+        return f"📊 <b>{escape(user_name)}'s Performance Snapshot</b>\n\nNo quiz data found yet. Participate in more quizzes to build your profile!"
+
+    total_questions = len(analysis_data)
+    total_correct = sum(1 for item in analysis_data if item['is_correct'])
+    overall_accuracy = (total_correct / total_questions * 100) if total_questions > 0 else 0
+
+    topic_stats = {}
+    for item in analysis_data:
+        topic = item.get('topic', 'General Topics')
+        if not topic: topic = 'General Topics' # Handle empty topic names
+        
+        if topic not in topic_stats:
+            topic_stats[topic] = {'correct': 0, 'total': 0}
+        topic_stats[topic]['total'] += 1
+        if item['is_correct']:
+            topic_stats[topic]['correct'] += 1
+
+    topic_accuracies = []
+    for topic, stats in topic_stats.items():
+        accuracy = (stats['correct'] / stats['total'] * 100) if stats['total'] > 0 else 0
+        topic_accuracies.append({'topic': topic, 'accuracy': accuracy, 'count': stats['total']})
+
+    # Sort topics by accuracy
+    sorted_topics = sorted(topic_accuracies, key=lambda x: x['accuracy'], reverse=True)
+    
+    # --- Building the Message ---
+    msg = f"📊 **{escape(user_name)}'s Detailed Performance Analysis**\n\n"
+    msg += f"<i>Here is a deep dive into your quiz performance across all formats.</i>\n"
+    msg += "━━━━━━━━━━━━━━━━━━\n\n"
+    
+    msg += f"🎯 **Overall Performance**\n"
+    msg += f" • <b>Total Questions Attempted:</b> {total_questions}\n"
+    msg += f" • <b>Overall Accuracy:</b> {overall_accuracy:.1f}%\n\n"
+
+    # Strongest Areas (accuracy >= 75% and at least 3 questions attempted)
+    strongest_topics = [t for t in sorted_topics if t['accuracy'] >= 75 and t['count'] >= 3][:5]
+    if strongest_topics:
+        msg += f"💪 **Your Top 5 Strongest Areas**\n"
+        for t in strongest_topics:
+            msg += f"  • <code>{escape(t['topic']):<25}</code> | <b>{t['accuracy']:.0f}%</b> Accuracy <i>({t['count']} ques)</i>\n"
+        msg += "\n"
+
+    # Weakest Areas (accuracy < 60% and at least 3 questions attempted)
+    weakest_topics = [t for t in sorted_topics if t['accuracy'] < 60 and t['count'] >= 3][:5]
+    if weakest_topics:
+        # Sort weakest topics from lowest accuracy to highest
+        weakest_topics.sort(key=lambda x: x['accuracy'])
+        msg += f"⚠️ **Your Top 5 Areas for Improvement**\n"
+        for t in weakest_topics:
+            msg += f"  • <code>{escape(t['topic']):<25}</code> | <b>{t['accuracy']:.0f}%</b> Accuracy <i>({t['count']} ques)</i>\n"
+        msg += "\n"
+        
+    # Coach's Insight
+    msg += f"💡 **Coach's Insight**\n"
+    if overall_accuracy > 80 and weakest_topics:
+        insight = f"Your overall performance is excellent! To become truly unbeatable, focus on improving your accuracy in topics like '<b>{escape(weakest_topics[0]['topic'])}</b>'."
+    elif overall_accuracy > 60:
+        insight = f"You have a solid foundation. Consistency is key now. Keep practicing your weaker areas like '<b>{escape(weakest_topics[0]['topic'] if weakest_topics else 'some topics')}</b>' to see a great jump in your rank."
+    else:
+        insight = "Let's build a stronger foundation. Start by revisiting the basics of your weakest topics. Every correct answer is progress! You can do it."
+    msg += f"<i>{insight}</i>\n"
+    
+    return msg
+
+@bot.message_handler(commands=['my_analysis'])
+@membership_required
 def handle_my_analysis_command(msg: types.Message):
     """
-    Sends a summarized analysis in the chat and provides a button 
-    for the full, detailed Web App dashboard in a private message.
+    Sends a rich, detailed, holistic analysis to the user and gives them control to delete it.
     """
-    try:
-        supabase.rpc('update_chat_activity', {'p_user_id': msg.from_user.id, 'p_user_name': msg.from_user.username or msg.from_user.first_name}).execute()
-    except Exception as e:
-        print(f"Activity tracking failed for user {msg.from_user.id} in command: {e}")
-
     user_id = msg.from_user.id
     user_name = escape(msg.from_user.first_name)
     
     try:
-        response = supabase.rpc('get_user_deep_analysis', {'p_user_id': user_id}).execute()
+        # Step 1: Naye powerful function se saara data fetch karna
+        response = supabase.rpc('get_user_holistic_analysis', {'p_user_id': user_id}).execute()
+        
+        # Step 2: Naye formatting function se message banana
+        analysis_text = format_holistic_analysis_message(user_name, response.data)
+        
+        # Step 3: Naya "Delete" button banana
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🗑️ Delete This Analysis", callback_data="delete_analysis_msg"))
         
         reply_params = types.ReplyParameters(
             message_id=msg.message_id,
             allow_sending_without_reply=True
         )
-        
-        if not response.data:
-            bot.send_message(
-                msg.chat.id,
-                f"Sorry {user_name}, I don't have enough data for a deep analysis yet. Participate in more quizzes to build your profile!",
-                reply_parameters=reply_params
-            )
-            return
 
-        # --- NEW TWO-STEP LOGIC ---
-        
-        # 1. Generate both full payload and summary text
-        full_analysis_payload = format_analysis_for_webapp(response.data, user_name)
-        summary_text = format_summary_for_telegram(full_analysis_payload, user_name)
+        # Step 4: Group mein message bhejna
+        bot.send_message(
+            msg.chat.id,
+            analysis_text,
+            parse_mode="HTML",
+            reply_markup=markup,
+            reply_parameters=reply_params
+        )
 
-        # 2. Add instructions to the summary
-        summary_text += "\n\n<i>For a full deep-dive, open your personal dashboard from the <b>Menu Button [ / ]</b> in your private chat with me!</i>"
-
-        # 3. Send the summary to the group/chat
-        bot.send_message(msg.chat.id, summary_text, parse_mode="HTML", reply_parameters=reply_params)
-
-        # 4. Prepare and send the private message with the Web App button
-        json_data_string = json.dumps(full_analysis_payload)
-        encoded_data = quote(json_data_string)
-
-        if not ANALYSIS_WEBAPP_URL:
-            report_error_to_admin("CRITICAL: ANALYSIS_WEBAPP_URL environment variable is not set!")
-            return
-
-        final_url = f"{ANALYSIS_WEBAPP_URL}?data={encoded_data}"
-
-        markup = types.InlineKeyboardMarkup()
-        # --- FIX: Changed web_app to a simple url button for reliability ---
-        button = types.InlineKeyboardButton("📊 Open My Full Dashboard", url=final_url)
-        markup.add(button)
-        
+        # Step 5: Background mein DM bhejne ki koshish karna (bina group mein bataye)
         try:
-            intro_text = "Here is your personalized performance dashboard! Click the button below to open it."
-            bot.send_message(
-                chat_id=user_id, # Send to user's private chat
-                text=intro_text,
-                reply_markup=markup
-            )
+            if ANALYSIS_WEBAPP_URL:
+                # Webapp ke liye data alag se format ho sakta hai, abhi ke liye simple rakhte hain
+                dm_markup = types.InlineKeyboardMarkup()
+                dm_markup.add(types.InlineKeyboardButton("📊 Open Full Dashboard", url=ANALYSIS_WEBAPP_URL))
+                bot.send_message(
+                    chat_id=user_id,
+                    text="Here is the link to your full, interactive dashboard!",
+                    reply_markup=dm_markup
+                )
         except Exception as dm_error:
-            print(f"Could not send DM with webapp button to {user_id}: {dm_error}")
-            # Inform user in the group if DM fails
-            bot.send_message(msg.chat.id, f"@{user_name}, I tried to send you the link to your full dashboard, but it seems I can't DM you. Please start a private chat with me and try again!", reply_parameters=reply_params)
+            # Agar DM fail hota hai, to chup-chaap error ko log karo, group mein mat batao
+            print(f"Silent DM fail for {user_id}: {dm_error}")
 
     except Exception as e:
         print(f"Error generating analysis for {user_id}:\n{traceback.format_exc()}")
         report_error_to_admin(f"Error generating analysis for {user_id}:\n{e}")
-        try:
-            bot.send_message(msg.chat.id, "❌ Oops! Something went wrong while generating your analysis.", reply_parameters=reply_params)
-        except Exception as final_error:
-            print(f"Failed to even send the error message for /my_analysis: {final_error}")
 
-# --- NEW HELPER FUNCTION FOR TELEGRAM SUMMARY ---
-def format_summary_for_telegram(analysis_data, user_name):
-    """
-    Creates a concise, text-based summary of the user's performance for a Telegram message.
-    """
-    stats = analysis_data.get('overallStats', {})
-    topics = analysis_data.get('performanceByTopic', [])
 
-    if not topics:
-        return f"📊 <b>{user_name}'s Performance Snapshot</b>\n\nNo quiz data found yet. Participate in quizzes to build your profile!"
+@bot.callback_query_handler(func=lambda call: call.data == 'delete_analysis_msg')
+def handle_delete_message_callback(call: types.CallbackQuery):
+    """Deletes the message this button is attached to."""
+    try:
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+        bot.answer_callback_query(call.id, "Message deleted.")
+    except Exception as e:
+        bot.answer_callback_query(call.id, "Could not delete the message.")
+        print(f"Error deleting message: {e}")
 
-    # Sort topics by accuracy to find strengths and weaknesses
-    sorted_by_accuracy = sorted(topics, key=lambda x: x['accuracy'])
-    
-    summary = f"📊 <b>{user_name}'s Performance Snapshot</b>\n\n"
-    summary += f"🎯 <b>Overall Accuracy:</b> {stats.get('overallAccuracy', 0)}% across {stats.get('totalQuestions', 0)} questions.\n"
-    summary += f"🚀 <b>Strongest Area:</b> {stats.get('bestSubject', 'N/A')}\n\n"
-
-    if len(sorted_by_accuracy) > 0:
-        summary += "⭐ <b>Top 3 Strongest Topics:</b>\n"
-        # Take top 3 from the end (highest accuracy)
-        for topic in sorted_by_accuracy[-1:-4:-1]:
-            summary += f"  - {escape(topic['topicName'])} ({topic['accuracy']}%)\n"
-    
-    weak_topics = [t for t in sorted_by_accuracy if t['accuracy'] < 75]
-    if weak_topics:
-        summary += "\n⚠️ <b>Top 3 Areas for Improvement:</b>\n"
-        # Take bottom 3 from the list of weak topics
-        for topic in weak_topics[:3]:
-            summary += f"  - {escape(topic['topicName'])} ({topic['accuracy']}%)\n"
-
-    summary += f"\n💡 <b>Coach's Tip:</b> {escape(analysis_data.get('coachInsight', 'Keep practicing!'))}"
-    
-    return summary
+# --- COMMAND ROUTER FOR WEB APP ---
+# Yahan hum ek dictionary banayenge jo Web App se aaye commands ko unke function se jodegi
+COMMAND_ROUTER = {
+    '/todayquiz': handle_today_quiz,
+    '/kalkaquiz': handle_tomorrow_quiz,
+    '/listfile': handle_listfile_command,
+    '/mystats': handle_mystats_command,
+    '/my_analysis': handle_my_analysis_command,
+    '/need': handle_need_command # Ye startswith ke liye alag se handle hoga
+}
 
 @bot.message_handler(content_types=['web_app_data'])
 @membership_required
 def handle_webapp_data(msg: types.Message):
     """
     Handles commands sent from the Mini App via tg.sendData().
-    This acts as a router to the appropriate command handler.
+    This acts as a smart, dynamic router to the appropriate command handler.
     """
     command_from_webapp = msg.web_app_data.data
     print(f"Received command from Mini App: {command_from_webapp}")
 
-    # This is the key part: we update the message object so the
-    # downstream handlers think it's a normal text message.
+    # msg.text object ko update karna taki baaki functions ise use kar sakein
     msg.text = command_from_webapp
+    
+    # --- DYNAMIC ROUTING LOGIC ---
+    handler_to_call = None
+    
+    # Pehle exact match dhoondho
+    if command_from_webapp in COMMAND_ROUTER:
+        handler_to_call = COMMAND_ROUTER[command_from_webapp]
+    
+    # Agar exact match nahi mila, to startswith waale commands check karo
+    elif command_from_webapp.startswith('/need'):
+        handler_to_call = COMMAND_ROUTER['/need']
 
-    # --- UPDATED ROUTING LOGIC ---
-    if command_from_webapp == "/todayquiz":
-        handle_today_quiz(msg)
-    elif command_from_webapp == "/listfile":
-        handle_listfile_command(msg)
-    elif command_from_webapp.startswith("/need"):
-        handle_need_command(msg)
+    # Agar koi function mila hai to use call karo
+    if handler_to_call:
+        try:
+            handler_to_call(msg)
+        except Exception as e:
+            report_error_to_admin(f"Error executing Web App command '{command_from_webapp}':\n{traceback.format_exc()}")
+            bot.send_message(msg.chat.id, "Sorry, there was an error processing your request from the dashboard.")
     else:
-        # Fallback for unknown commands from the web app
+        # Fallback agar command router mein nahi hai
         bot.send_message(msg.chat.id, f"Received an unknown action from the dashboard: {escape(command_from_webapp)}")
+
 
 
 @bot.message_handler(commands=['mystats'])
 @membership_required
 def handle_mystats_command(msg: types.Message):
     """
-    Fetches comprehensive stats, posts them as a public reply using robust HTML,
-    and auto-deletes both messages.
+    Fetches comprehensive stats and posts them, intelligently splitting the message
+    if it exceeds Telegram's character limit.
     """
-    try:
-        supabase.rpc('update_chat_activity', {
-            'p_user_id': msg.from_user.id, 
-            'p_user_name': msg.from_user.username or msg.from_user.first_name
-        }).execute()
-    except Exception as e:
-        print(f"Activity tracking failed for user {msg.from_user.id} in command: {e}")
-    
     user_id = msg.from_user.id
-    user_name = escape(msg.from_user.first_name)  # Escape user name immediately
+    user_name = escape(msg.from_user.first_name)
 
     try:
         response = supabase.rpc('get_user_stats', {'p_user_id': user_id}).execute()
         stats = response.data
 
+        reply_params = types.ReplyParameters(
+            message_id=msg.message_id,
+            allow_sending_without_reply=True
+        )
+
         if not stats or not stats.get('user_name'):
+            # ... (error message logic remains the same)
             error_message = f"""❌ <b>No Stats Found</b>
-
 👋 Hi <b>{user_name}</b>!
-
 🎯 <i>No quiz data found for you yet.</i>
-
 💡 <b>Get started:</b>
 • Participate in daily quizzes
 • Submit written practice
 • Engage with community
-
-🚀 <i>Your journey begins with your first quiz!</i>
-
-<b>C.A.V.Y.A is here to help you 💝</b>"""
-
-            error_msg = bot.reply_to(msg, error_message, parse_mode="HTML")
-            
-            # Auto-delete both messages after 15 seconds
-            delete_message_in_thread(msg.chat.id, msg.message_id, 15)
-            delete_message_in_thread(error_msg.chat.id, error_msg.message_id, 15)
+🚀 <i>Your journey begins with your first quiz!</i>"""
+            bot.send_message(msg.chat.id, error_message, parse_mode="HTML", reply_parameters=reply_params)
             return
 
-        # --- Create compact, mobile-optimized stats message ---
+        # --- Create stats message ---
         stats_message = f"""📊 <b>My Stats: {user_name}</b> 📊
 
 ━━ 🏆 <b>Rankings</b> ━━
@@ -3584,95 +3827,97 @@ def handle_mystats_command(msg: types.Message):
 • <b>Copies Checked:</b> {stats.get('copies_checked', 0)}
 """
 
-        # --- ENHANCED Coach's Comment Logic with Hinglish ---
+        # --- Coach's Comment Logic (remains the same) ---
         coach_comment = ""
-        APPRECIATION_STREAK = 8
-        current_streak = stats.get('current_streak', 0)
-        total_quizzes = stats.get('total_quizzes_played', 0)
-        weekly_rank = stats.get('weekly_rank')
-        all_time_rank = stats.get('all_time_rank')
-        total_submissions = stats.get('total_submissions', 0)
-        avg_performance = stats.get('average_performance', 0)
-
-        # Priority 1: Streaks
-        if current_streak >= APPRECIATION_STREAK:
-            coach_comment = f"Gazab ki consistency! 🔥 {current_streak}-quiz ki streak- pe ho, lage raho!"
-        elif current_streak == (APPRECIATION_STREAK - 1):
-            coach_comment = "Bas ek aur quiz aur aapka naya streak milestone poora ho jayega! You can do it! 🚀"
+        # ... (Your existing coach comment logic remains exactly the same here) ...
+        APPRECIATION_STREAK = 8;current_streak=stats.get('current_streak',0);total_quizzes=stats.get('total_quizzes_played',0);weekly_rank=stats.get('weekly_rank');all_time_rank=stats.get('all_time_rank');total_submissions=stats.get('total_submissions',0);avg_performance=stats.get('average_performance',0)
+        if current_streak>=APPRECIATION_STREAK:coach_comment=f"Gazab ki consistency! 🔥 {current_streak}-quiz ki streak pe ho, lage raho!"
+        elif current_streak==(APPRECIATION_STREAK-1):coach_comment="Bas ek aur quiz aur aapka naya streak milestone poora ho jayega! You can do it! 🚀"
+        elif weekly_rank==1:coach_comment="Is hafte ke Topper! Aap toh leaderboard par aag laga rahe ho! Keep it up! 👑"
+        elif all_time_rank is not None and all_time_rank<=10:coach_comment="All-Time Top 10 mein jagah banana aasan nahi. Aap toh legend ho! 🏛️"
+        elif total_submissions>0 and avg_performance>80:coach_comment="Aapki written practice performance outstanding hai! 80% se upar score karna kamaal hai. ✨"
+        elif total_quizzes>10 and total_submissions==0:coach_comment="Quiz performance acchi hai, ab writing practice mein bhi haath aazmaiye. /submit command try karein! ✍️"
+        elif(weekly_rank is None or weekly_rank==0)and total_quizzes>0:coach_comment="Is hafte abhi tak rank nahi lagi. Agla quiz aapka ho sakta hai! 💪"
+        elif current_streak==0 and total_quizzes>5:coach_comment="Koi baat nahi, streak break hote rehte hain. Ek naya, lamba streak shuru karne ka time hai! 🎯"
+        elif total_quizzes<3:coach_comment="Aapke liye to abhi quiz shuru hui hai! Participate karte rahiye aur apne stats ko grow karte dekhein! 🌱"
+        else:coach_comment="Consistency hi success ki chaabi hai. Practice karte rahiye, aap aacha kar rahe hain! 👍"
         
-        # Priority 2: Top Rankings
-        elif weekly_rank == 1:
-            coach_comment = "Is hafte ke Topper! Aap toh leaderboard par aag laga rahe ho! Keep it up! 👑"
-        elif all_time_rank is not None and all_time_rank <= 10:
-            coach_comment = "All-Time Top 10 mein jagah banana aasan nahi. Aap toh legend ho! 🏛️"
-
-        # Priority 3: Specific Improvement Areas
-        elif total_submissions > 0 and avg_performance > 80:
-            coach_comment = "Aapki written practice performance outstanding hai! 80% se upar score karna kamaal hai. ✨"
-        elif total_quizzes > 10 and total_submissions == 0:
-            coach_comment = "Quiz performance acchi hai, ab writing practice mein bhi haath aazmaiye. /submit command try karein! ✍️"
-        elif weekly_rank is None or weekly_rank == 0 and total_quizzes > 0:
-            coach_comment = "Is hafte abhi tak rank nahi lagi. Agla quiz aapka ho sakta hai! 💪"
-        elif current_streak == 0 and total_quizzes > 5:
-            coach_comment = "Koi baat nahi, streak break hote rehte hain. Ek naya, lamba streak shuru karne ka time hai! 🎯"
-        
-        # Priority 4: New User Encouragement
-        elif total_quizzes < 3:
-            coach_comment = "Apke liye to abhi quiz shuru hui hai! Participate karte rahiye aur apne stats ko grow karte dekhein! 🌱"
-        
-        # Priority 5: Generic Fallback
-        else:
-            coach_comment = "Consistency hi success ki chaabi hai. Practice karte rahiye, aap aacha kar rahe hain! 👍"
-
         # --- Final message assembly ---
         final_stats_message = stats_message + f"\n\n💡 <b>Coach's Tip:</b> {coach_comment}"
-
-        # --- Send the comprehensive stats message with a fallback ---
-        DELETE_DELAY_SECONDS = 120
-        sent_stats_message = None
-        try:
-            # Try to reply for better context
-            sent_stats_message = bot.reply_to(msg, final_stats_message, parse_mode="HTML")
-            # If reply succeeds, also schedule the original command for deletion
-            delete_message_in_thread(msg.chat.id, msg.message_id, DELETE_DELAY_SECONDS)
+        
+        # --- NEW: Smart Splitting Logic ---
+        if len(final_stats_message) > 4000: # 4096 is the limit, we use 4000 for safety
+            # Message lamba hai, to isey do hisso mein todo
+            part1 = stats_message
+            part2 = f"💡 <b>Coach's Tip:</b> {coach_comment}"
             
-        except ApiTelegramException as e:
-            if 'message to be replied not found' in e.description:
-                # If the original message is gone, send a new message instead of crashing
-                print("Original /mystats message was deleted. Sending stats as a new message.")
-                sent_stats_message = bot.send_message(msg.chat.id, final_stats_message, parse_mode="HTML", message_thread_id=msg.message_thread_id)
-            else:
-                # If it's a different API error, we should still know about it
-                raise e
-
-        # Schedule the bot's stats message for deletion (if it was sent successfully)
-        if sent_stats_message:
-            delete_message_in_thread(sent_stats_message.chat.id, sent_stats_message.message_id, DELETE_DELAY_SECONDS)
+            # Pehla part bhejo
+            first_msg = bot.send_message(msg.chat.id, part1, parse_mode="HTML", reply_parameters=reply_params)
+            
+            # Doosra part pehle ke reply mein bhejo, delete button ke saath
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("🗑️ Delete Stats", callback_data=f"delete_split_msg_{first_msg.message_id}")) # Pass first msg id
+            bot.send_message(msg.chat.id, part2, parse_mode="HTML", reply_to_message_id=first_msg.message_id, reply_markup=markup)
+        else:
+            # Message chota hai, to ek hi baar mein bhejo
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("🗑️ Delete Stats", callback_data="delete_stats_msg"))
+            bot.send_message(msg.chat.id, final_stats_message, parse_mode="HTML", reply_markup=markup, reply_parameters=reply_params)
 
     except Exception as e:
         print(f"Error in /mystats: {traceback.format_exc()}")
         report_error_to_admin(traceback.format_exc())
+        bot.reply_to(msg, "❌ <i>Unable to fetch your stats right now. Please try again later.</i>", parse_mode="HTML")
+@bot.callback_query_handler(func=lambda call: call.data.startswith('delete_stats_msg') or call.data.startswith('delete_split_msg_'))
+def handle_delete_stats_callback(call: types.CallbackQuery):
+    """
+    Robustly deletes single or split stats messages and the original command.
+    """
+    try:
+        clicker_id = call.from_user.id
         
-        error_message = """❌ <b>Stats Error</b>
+        # Determine the original command message
+        original_command_msg = None
+        if call.data.startswith('delete_split_msg_'):
+            # For split messages, the reply is to the first part, not the command
+            first_part_msg_id = int(call.data.split('_')[-1])
+            first_part_msg = bot.forward_message(chat_id=call.message.chat.id, from_chat_id=call.message.chat.id, message_id=first_part_msg_id)
+            original_command_msg = first_part_msg.reply_to_message
+            bot.delete_message(call.message.chat.id, first_part_msg.message_id) # Delete the forwarded message copy
+        else: # For single messages
+            original_command_msg = call.message.reply_to_message
 
-🔧 <i>Unable to fetch your stats right now.</i>
+        # Security Check
+        if original_command_msg and (clicker_id == original_command_msg.from_user.id or is_admin(clicker_id)):
+            # Delete the bot's message(s)
+            try:
+                if call.data.startswith('delete_split_msg_'):
+                    # Delete the second part (with the button)
+                    bot.delete_message(call.message.chat.id, call.message.message_id)
+                    # Delete the first part
+                    bot.delete_message(call.message.chat.id, int(call.data.split('_')[-1]))
+                else: # Single message
+                    bot.delete_message(call.message.chat.id, call.message.message_id)
+            except ApiTelegramException as e:
+                print(f"Info: Could not delete bot's stats message(s): {e}")
 
-📝 <b>What happened:</b>
-Technical issue with data retrieval.
-
-💡 <b>What to do:</b>
-• Try again in a few minutes
-• Contact admin if problem persists
-
-🚀 <i>Your data is safe - just a temporary glitch!</i>
-
-<b>C.A.V.Y.A is here to help you 💝</b>"""
-        
-        error_msg = bot.reply_to(msg, error_message, parse_mode="HTML")
-        
-        # Auto-delete error messages after 15 seconds
-        delete_message_in_thread(msg.chat.id, msg.message_id, 15)
-        delete_message_in_thread(error_msg.chat.id, error_msg.message_id, 15)
+            # Delete the user's original command
+            try:
+                bot.delete_message(call.message.chat.id, original_command_msg.message_id)
+            except ApiTelegramException as e:
+                print(f"Info: Could not delete user's command: {e}")
+            
+            bot.answer_callback_query(call.id, "Stats deleted.")
+        elif not original_command_msg:
+             # Fallback if reply link is broken
+             bot.delete_message(call.message.chat.id, call.message.message_id)
+             bot.answer_callback_query(call.id, "Stats deleted.")
+        else:
+            bot.answer_callback_query(call.id, "Only the person who used the command or an admin can delete this.", show_alert=True)
+            
+    except Exception as e:
+        print(f"Error in delete_stats_callback: {traceback.format_exc()}")
+        bot.answer_callback_query(call.id, "An error occurred while deleting.")
 # =============================================================================
 # 8. TELEGRAM BOT HANDLERS - QUIZ & NOTIFICATION COMMANDS
 # =============================================================================
@@ -4919,70 +5164,54 @@ def handle_section_command(msg: types.Message):
 @bot.message_handler(commands=['quizmarathon'])
 @permission_required('quizmarathon')
 def start_marathon_setup(msg: types.Message):
-    """Starts the streamlined setup for a quiz marathon with beautiful preset selection."""
+    """
+    Starts the streamlined setup for a quiz marathon with a clean, direct preset selection.
+    """
     try:
-        # Show initial setup message
-        setup_init_message = """🚀 <b>MARATHON SETUP INITIALIZING</b>
-
-🔄 <b>Current Status:</b>
-• ⏳ Loading quiz presets...
-• ⏳ Checking database connection...
-• ⏳ Preparing selection interface...
-
-<i>This will take just a moment...</i>"""
-
-        init_msg = bot.send_message(msg.chat.id, setup_init_message, parse_mode="HTML")
-        
-        # Fetch quiz presets from the database
+        # Step 1: Silently fetch quiz presets from the database first.
         presets_response = supabase.table('quiz_presets').select('set_name, button_label').order('id').execute()
         
         if not presets_response.data:
             no_presets_message = """❌ <b>No Quiz Presets Found</b>
 
-🎯 <b>Issue:</b> Quiz preset database is empty
+🎯 <b>Issue:</b> The quiz preset database is empty.
 
 💡 <b>Next Steps:</b>
-• Add presets via Supabase dashboard
-• Create quiz sets with questions
-• Configure preset labels and descriptions
+• Add presets via the Supabase dashboard.
+• Ensure each preset has questions in the `quiz_questions` table.
 
-📚 <i>Setup required before starting marathons!</i>"""
-
-            bot.edit_message_text(no_presets_message, msg.chat.id, init_msg.message_id, parse_mode="HTML")
+📚 <i>Setup is required before a marathon can be started!</i>"""
+            bot.reply_to(msg, no_presets_message, parse_mode="HTML")
             return
 
-        # Create beautiful preset selection interface
+        # Step 2: Build the new, clean message format.
+        selection_message = """🚀 <b>Start a New Quiz Marathon</b>
+━━━━━━━━━━━━━━━━━━
+Hello Admin! Please select a quiz set from the options below to begin.
+
+<i>Each set contains a unique collection of questions designed to test your group's knowledge.</i>
+━━━━━━━━━━━━━━━━━━"""
+
+        # Step 3: Create the buttons.
         markup = types.InlineKeyboardMarkup(row_width=2)
-        buttons = []
-        
-        for preset in presets_response.data:
-            button = types.InlineKeyboardButton(
+        buttons = [
+            types.InlineKeyboardButton(
                 f"🎯 {preset['button_label']}", 
                 callback_data=f"start_marathon_{preset['set_name']}"
-            )
-            buttons.append(button)
+            ) for preset in presets_response.data
+        ]
         
-        # Add buttons in pairs for better mobile display
+        # Arrange buttons in pairs for better mobile display
         for i in range(0, len(buttons), 2):
             if i + 1 < len(buttons):
                 markup.row(buttons[i], buttons[i + 1])
             else:
                 markup.row(buttons[i])
         
-        # Add cancel option
         markup.row(types.InlineKeyboardButton("❌ Cancel", callback_data="cancel_marathon"))
         
-        selection_message = """🏁 <b>QUIZ MARATHON SETUP</b> 🏁
-
-🎪 <i>Ready to start an epic quiz journey?</i>
-
-━━━━━━━━━━━━━━━━━━━━━━━━━
-
-🎯 <b>Select Your Quiz Theme:</b>
-
-💡 <i>Choose from our carefully curated question sets below...</i>"""
-
-        bot.edit_message_text(selection_message, msg.chat.id, init_msg.message_id, reply_markup=markup, parse_mode="HTML")
+        # Step 4: Send the final, single message.
+        bot.reply_to(msg, selection_message, reply_markup=markup, parse_mode="HTML")
 
     except Exception as e:
         print(f"Error in start_marathon_setup: {traceback.format_exc()}")
@@ -4990,92 +5219,111 @@ def start_marathon_setup(msg: types.Message):
         
         error_message = """🚨 <b>Marathon Setup Error</b>
 
-❌ <b>Status:</b> Unable to load quiz presets
+❌ <b>Status:</b> Unable to load quiz presets.
+🔧 <b>Issue:</b> There might be a database connection problem.
 
-🔧 <b>Issue:</b> Database connection problem
-
-📝 <b>Action:</b> Technical team notified
-
+📝 <b>Action:</b> The technical team has been notified.
 🔄 <i>Please try again in a moment...</i>"""
-
-        try:
-            bot.edit_message_text(error_message, msg.chat.id, init_msg.message_id, parse_mode="HTML")
-        except:
-            bot.send_message(msg.chat.id, error_message, parse_mode="HTML")
-
+        bot.reply_to(msg, error_message, parse_mode="HTML")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('start_marathon_'))
 def handle_marathon_set_selection(call: types.CallbackQuery):
-    """Handles quiz set selection with beautiful question count input."""
+    """
+    Handles quiz set selection with improved logic and error handling.
+    """
     user_id = call.from_user.id
+    chat_id = call.message.chat.id
+    message_id = call.message.message_id
     
-    # Remove buttons to clean up interface
-    bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id)
-
-    selected_set = call.data.split('_', 2)[-1]
-    
-    # Store selection in user state
-    user_states[user_id] = {
-        'step': 'awaiting_marathon_question_count',
-        'selected_set': selected_set,
-        'action': 'create_marathon'
-    }
-    
-    # Show progress update
-    progress_message = f"""✅ <b>QUIZ SET SELECTED</b>
-
-🎯 <b>Chosen Set:</b> <u><b>{escape(selected_set)}</b></u>
-
-🔄 <b>Current Status:</b>
-• ✅ Quiz set selected
-• ⏳ Checking available questions...
-• ⏳ Preparing question count input...
-
-<i>Analyzing question database...</i>"""
-
-    progress_msg = bot.send_message(user_id, progress_message, parse_mode="HTML")
-    
-    # Get available question count for this set
     try:
-        count_response = supabase.table('quiz_questions').select('id').eq('quiz_set', selected_set).eq('used', False).execute()
-        available_count = len(count_response.data) if count_response.data else 0
+        # Edit the original message to show a loading state, removing old buttons
+        bot.edit_message_text("⏳ Analyzing selected quiz set...", chat_id, message_id)
         
+        selected_set = call.data.split('_', 2)[-1]
+        
+        # Store selection in user state
+        user_states[user_id] = {
+            'step': 'awaiting_marathon_question_count',
+            'selected_set': selected_set,
+            'action': 'create_marathon',
+            'setup_message_id': message_id # Save the message ID to edit later
+        }
+        
+        # Get available unused question count for this set
+        count_response = supabase.table('quiz_questions').select('id', count='exact').eq('quiz_set', selected_set).eq('used', False).execute()
+        available_count = count_response.count
+
+        # --- NEW LOGIC: Handle the "Zero Questions" case ---
+        if available_count == 0:
+            no_questions_message = f"""⚠️ <b>No Unused Questions Found</b>
+
+🎯 <b>For Set:</b> <u><b>{escape(selected_set)}</b></u>
+
+This set has no unused questions available for a marathon.
+
+<b>Please choose an option:</b>"""
+            
+            markup = types.InlineKeyboardMarkup()
+            # This button will take the user back to the set selection screen
+            markup.add(types.InlineKeyboardButton("🔄 Choose Another Set", callback_data="back_to_marathon_setup"))
+            markup.add(types.InlineKeyboardButton("❌ Cancel", callback_data="cancel_marathon"))
+            
+            bot.edit_message_text(no_questions_message, chat_id, message_id, reply_markup=markup, parse_mode="HTML")
+            return
+
+        # If questions are available, proceed as before but with a cleaner message
         question_count_message = f"""✅ <b>QUIZ SET ANALYZED</b>
 
 🎯 <b>Chosen Set:</b> <u><b>{escape(selected_set)}</b></u>
 
-📊 <b>Available Questions:</b> <b>{available_count}</b> unused questions
+📊 <b>Available:</b> <b>{available_count}</b> unused questions are ready.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━
 
 🔢 <b>How many questions for this marathon?</b>
 
 💡 <b>Recommendations:</b>
-• <b>Quick Quiz:</b> 5-15 questions (15-30 mins)
-• <b>Standard Marathon:</b> 20-40 questions (45-90 mins)  
-• <b>Epic Challenge:</b> 50+ questions (2+ hours)
+ • <b>Quick Quiz:</b> 10-15
+ • <b>Standard Marathon:</b> 25-40
+ • <b>Epic Challenge:</b> 50+
 
-📝 <b>Enter number of questions (1-{min(available_count, 100)}):</b>
+📝 <b>Enter a number (1-{min(available_count, 100)}):</b>"""
 
-<i>Type your choice and send...</i>"""
-
-        bot.edit_message_text(question_count_message, user_id, progress_msg.message_id, parse_mode="HTML")
-        bot.register_next_step_handler_by_chat_id(user_id, process_marathon_question_count)
+        prompt_msg = bot.edit_message_text(question_count_message, chat_id, message_id, parse_mode="HTML")
+        bot.register_next_step_handler(prompt_msg, process_marathon_question_count)
         
     except Exception as e:
-        print(f"Error getting question count: {e}")
+        print(f"Error getting question count: {traceback.format_exc()}")
+        report_error_to_admin(f"Error in handle_marathon_set_selection:\n{e}")
         
-        error_message = f"""⚠️ <b>Set Selection Issue</b>
+        error_message = f"""❌ <b>Database Error</b>
 
-🎯 <b>Selected:</b> {escape(selected_set)}
-❌ <b>Issue:</b> Cannot verify question availability
+Could not verify question availability for the selected set due to a technical issue.
 
-🔢 <b>Enter number of questions (1-50):</b>
+<b>Please choose an option:</b>"""
+        
+        markup = types.InlineKeyboardMarkup()
+        # This button will re-run the current function
+        markup.add(types.InlineKeyboardButton("🔄 Try Again", callback_data=call.data))
+        markup.add(types.InlineKeyboardButton("❌ Cancel", callback_data="cancel_marathon"))
+        
+        bot.edit_message_text(error_message, chat_id, message_id, reply_markup=markup, parse_mode="HTML")
 
-<i>We'll validate availability during setup...</i>"""
-
-        bot.edit_message_text(error_message, user_id, progress_msg.message_id, parse_mode="HTML")
-        bot.register_next_step_handler_by_chat_id(user_id, process_marathon_question_count)
+# --- NEW: Add a callback handler for the 'back' button ---
+@bot.callback_query_handler(func=lambda call: call.data == 'back_to_marathon_setup')
+def handle_back_to_marathon_setup(call: types.CallbackQuery):
+    """Takes the admin back to the main marathon setup screen."""
+    # We create a fake message object to re-run the original setup command
+    fake_message = call.message
+    fake_message.from_user = call.from_user
+    
+    # Delete the old message
+    try:
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+    except:
+        pass
+    
+    start_marathon_setup(fake_message)
 
 
 @bot.callback_query_handler(func=lambda call: call.data == 'cancel_marathon')
@@ -5095,81 +5343,13 @@ Use <code>/quizmarathon</code> anytime!
     bot.send_message(call.from_user.id, cancel_message, parse_mode="HTML")
 
 
-def process_marathon_question_count(msg: types.Message):
-    """Process question count input and start the marathon with beautiful presentation."""
-    if not is_admin(msg.from_user.id): 
-        return
-        
-    user_id = msg.from_user.id
-
+def _launch_marathon_session(user_id, chat_id, message_id, selected_set, num_questions):
+    """
+    Helper function to handle the heavy lifting of fetching data, creating the session,
+    and launching the marathon.
+    """
     try:
-        num_questions = int(msg.text.strip())
-        
-        if not (1 <= num_questions <= 100):
-            error_message = f"""⚠️ <b>Invalid Question Count</b>
-
-🔢 <b>Your input:</b> {escape(msg.text)}
-📏 <b>Valid range:</b> 1 to 100 questions
-
-💡 <b>Popular choices:</b>
-• <b>10</b> - Quick challenge
-• <b>25</b> - Standard marathon  
-• <b>50</b> - Epic challenge
-
-<i>Please enter a valid number...</i>"""
-
-            prompt = bot.send_message(user_id, error_message, parse_mode="HTML")
-            bot.register_next_step_handler(prompt, process_marathon_question_count)
-            return
-
-        state_data = user_states.get(user_id, {})
-        selected_set = state_data.get('selected_set')
-
-        if not selected_set:
-            lost_data_message = """❌ <b>Session Lost</b>
-
-🔄 <b>Issue:</b> Quiz set selection was lost
-
-💡 <b>Solution:</b> Please restart the process
-
-🚀 <i>Use</i> <code>/quizmarathon</code> <i>to begin again...</i>"""
-
-            bot.send_message(user_id, lost_data_message, parse_mode="HTML")
-            return
-
-        setup_message = f"""⚙️ <b>MARATHON SETUP IN PROGRESS</b>
-
-🎯 <b>Quiz Set:</b> {escape(selected_set)}
-🔢 <b>Questions:</b> {num_questions}
-
-🔄 <b>Current Status:</b>
-• ✅ Parameters validated
-• ⏳ Fetching preset details...
-• ⏳ Loading questions...
-• ⏳ Preparing quiz environment...
-
-<i>This will take just a moment...</i>"""
-        setup_msg = bot.send_message(user_id, setup_message, parse_mode="HTML")
-        
-        preset_details_res = supabase.table('quiz_presets').select('quiz_title, quiz_description').eq('set_name', selected_set).single().execute()
-        
-        if not preset_details_res.data:
-            preset_error_message = f"""❌ <b>Preset Not Found</b>
-
-🎯 <b>Looking for:</b> {escape(selected_set)}
-❌ <b>Status:</b> Preset details missing
-
-💡 <b>Possible fixes:</b>
-• Check preset name spelling
-• Verify preset exists in database
-• Contact technical support
-
-🔄 <i>Please try with a different set...</i>"""
-            bot.edit_message_text(preset_error_message, user_id, setup_msg.message_id, parse_mode="HTML")
-            return
-            
-        preset_details = preset_details_res.data
-        
+        # Step 1: Fetch preset details
         progress_message = f"""⚙️ <b>MARATHON SETUP IN PROGRESS</b>
 
 🎯 <b>Quiz Set:</b> {escape(selected_set)}
@@ -5177,518 +5357,355 @@ def process_marathon_question_count(msg: types.Message):
 
 🔄 <b>Current Status:</b>
 • ✅ Parameters validated
-• ✅ Preset details loaded
-• ⏳ Loading questions from database...
-• ⏳ Preparing quiz environment...
+• ⏳ Fetching preset details...
 
-<i>Loading {num_questions} questions...</i>"""
-        bot.edit_message_text(progress_message, user_id, setup_msg.message_id, parse_mode="HTML")
+<i>Please wait...</i>"""
+        bot.edit_message_text(progress_message, chat_id, message_id, parse_mode="HTML")
         
-        questions_res = supabase.table('quiz_questions').select('*').eq('quiz_set', selected_set).eq('used', False).order('id').limit(num_questions).execute()
+        preset_details_res = supabase.table('quiz_presets').select('quiz_title, quiz_description').eq('set_name', selected_set).single().execute()
+        if not preset_details_res.data:
+            raise ValueError(f"Preset '{selected_set}' not found in database.")
+        preset_details = preset_details_res.data
+
+        # Step 2: Fetch questions
+        bot.edit_message_text(progress_message.replace("Fetching preset details...", "✅ Preset details loaded\n• ⏳ Loading questions..."), chat_id, message_id, parse_mode="HTML")
+        questions_res = supabase.table('quiz_questions').select('*').eq('quiz_set', selected_set).eq('used', False).limit(num_questions).execute()
         
         if not questions_res.data:
-            no_questions_message = f"""❌ <b>No Questions Available</b>
-
-🎯 <b>Set:</b> {escape(selected_set)}
-📊 <b>Requested:</b> {num_questions} questions
-❌ <b>Found:</b> 0 unused questions
-
-💡 <b>Solutions:</b>
-• Add more questions to this set
-• Reset question usage flags  
-• Choose a different quiz set
-
-📚 <i>Question bank needs attention!</i>"""
-            bot.edit_message_text(no_questions_message, user_id, setup_msg.message_id, parse_mode="HTML")
+            no_questions_message = f"❌ <b>No Questions Available</b> for set '{escape(selected_set)}'. Please add questions or choose another set."
+            bot.edit_message_text(no_questions_message, chat_id, message_id, parse_mode="HTML")
             return
 
+        # Step 3: Handle question count adjustment
         questions_for_marathon = questions_res.data
-        random.shuffle(questions_for_marathon)
         actual_count = len(questions_for_marathon)
         
         if actual_count < num_questions:
-            warning_message = f"""⚠️ <b>QUESTION COUNT ADJUSTED</b>
+            warning_message = f"⚠️ <b>Count Adjusted:</b> Only {actual_count} unused questions were available. The marathon will run with {actual_count} questions."
+            bot.edit_message_text(warning_message, chat_id, message_id, parse_mode="HTML")
+            time.sleep(4)
 
-🔢 <b>Requested:</b> {num_questions} questions
-📊 <b>Available:</b> {actual_count} unused questions
-
-✅ <b>Action:</b> Marathon will run with {actual_count} questions
-
-🚀 <i>Proceeding with available questions...</i>"""
-            bot.edit_message_text(warning_message, user_id, setup_msg.message_id, parse_mode="HTML")
-            time.sleep(3)
-        
-        final_setup_message = f"""⚙️ <b>MARATHON SETUP FINALIZING</b>
-
-🎯 <b>Quiz Set:</b> {escape(selected_set)}
-🔢 <b>Questions:</b> {actual_count}
-
-🔄 <b>Current Status:</b>
-• ✅ Questions loaded successfully
-• ✅ Session environment prepared
-• ⏳ Initializing marathon session...
-• ⏳ Preparing group announcement...
-
-<i>Almost ready to launch!</i>"""
-        bot.edit_message_text(final_setup_message, user_id, setup_msg.message_id, parse_mode="HTML")
+        # Step 4: Create session and announce
+        bot.edit_message_text(progress_message.replace("Fetching preset details...", "✅ Preset details loaded\n• ✅ Questions loaded\n• 🚀 Launching..."), chat_id, message_id, parse_mode="HTML")
         
         session_id = str(GROUP_ID)
         QUIZ_SESSIONS[session_id] = {
-            'title': preset_details['quiz_title'],
-            'description': preset_details['quiz_description'],
-            'questions': questions_for_marathon,
-            'current_question_index': 0,
-            'is_active': True,
-            'stats': {
-                'question_times': {},
-                'start_time': datetime.datetime.now(),
-                'total_questions': actual_count,
-                'current_phase': 'starting'
-            },
-            'leaderboard_updates': [],
-            'performance_tracker': {
-                'topics': {}, 'question_types': {}, 'difficulty_levels': {}
-            }
+            'title': preset_details['quiz_title'], 'description': preset_details['quiz_description'],
+            'questions': questions_for_marathon, 'current_question_index': 0, 'is_active': True,
+            'stats': {'start_time': datetime.datetime.now(), 'total_questions': actual_count},
+            'leaderboard_updates': [], 'performance_tracker': {}
         }
         QUIZ_PARTICIPANTS[session_id] = {}
 
-        # This block calculates when to show mid-quiz leaderboard updates.
-        # Its indentation is now corrected to be inside the main 'try' block.
         update_intervals = []
         if actual_count >= 9:
             q_third = actual_count // 3
-            update_intervals.append(q_third)
-            if (q_third * 2) < (actual_count - 2):
-                 update_intervals.append(q_third * 2)
+            update_intervals.extend([q_third, q_third * 2])
         elif actual_count >= 6:
             update_intervals.append(actual_count // 2)
         QUIZ_SESSIONS[session_id]['leaderboard_updates'] = update_intervals
-
+        
         safe_title = escape(preset_details['quiz_title'])
         safe_description = escape(preset_details['quiz_description'])
-        
         estimated_minutes = actual_count * 1.5
-        duration_text = f"{int(estimated_minutes)} minutes" if estimated_minutes < 60 else f"{int(estimated_minutes/60)} hour{'s' if estimated_minutes >= 120 else ''}"
+        duration_text = f"~{int(estimated_minutes)} mins" if estimated_minutes < 60 else f"~{int(estimated_minutes/60)} hr"
         
         marathon_announcement = f"""🏁 <b>QUIZ MARATHON BEGINS!</b> 🏁
-
-━━━━━━━━━━━━━━━━━━━━━━━━━
-
+━━━━━━━━━━━━━━━━━━
 🎯 <b><u>{safe_title}</u></b>
-
 💭 <i>{safe_description}</i>
-
-━━━━━━━━━━━━━━━━━━━━━━━━━
-
-📊 <b>Marathon Details:</b>
-🔢 Questions: <b>{actual_count}</b>
-⏱️ Duration: <b>~{duration_text}</b>
-🎪 Format: <b>Live Quiz Challenge</b>
-
-━━━━━━━━━━━━━━━━━━━━━━━━━
-
-🚀 <b>Get ready for an amazing journey!</b>
-
-🎯 <i>First question coming up in 5 seconds...</i>
-
-💪 <b>May the best mind win!</b> 🏆"""
+━━━━━━━━━━━━━━━━━━
+📊 <b>Details:</b> {actual_count} Questions | ⏱️ Duration: {duration_text}
+🚀 <i>Get ready! First question in 5 seconds...</i>"""
         bot.send_message(GROUP_ID, marathon_announcement, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
 
-        admin_confirmation = f"""✅ <b>MARATHON LAUNCHED SUCCESSFULLY!</b>
-
-🎯 <b>Set:</b> {escape(selected_set)}
-🔢 <b>Questions:</b> {actual_count}
-⏱️ <b>Est. Duration:</b> {duration_text}
-📍 <b>Location:</b> Quiz Topic
-
-🎪 <b>Status:</b> Live and running!
-
-🔧 <b>Admin Controls:</b>
-• Use <code>/roko</code> to stop early
-• Marathon will auto-complete
-
-<i>Marathon is now active in the group!</i>"""
-        bot.edit_message_text(admin_confirmation, user_id, setup_msg.message_id, parse_mode="HTML")
+        admin_confirmation = f"✅ **MARATHON LAUNCHED!**\nSet: {escape(selected_set)} | Questions: {actual_count}"
+        bot.edit_message_text(admin_confirmation, chat_id, message_id, parse_mode="HTML")
 
         time.sleep(5)
         send_marathon_question(session_id)
         
-        if user_id in user_states: 
+    except Exception as e:
+        print(f"Error launching marathon: {traceback.format_exc()}")
+        report_error_to_admin(f"Error in _launch_marathon_session:\n{e}")
+        error_message = "🚨 **CRITICAL ERROR:** Marathon setup failed during final launch. Please try again."
+        bot.edit_message_text(error_message, chat_id, message_id, parse_mode="HTML")
+
+
+def process_marathon_question_count(msg: types.Message):
+    """
+    Processes question count input, validates it, and calls the launcher.
+    """
+    user_id = msg.from_user.id
+    try:
+        if not is_admin(user_id): return # Extra safety check
+
+        state_data = user_states.get(user_id, {})
+        selected_set = state_data.get('selected_set')
+        setup_message_id = state_data.get('setup_message_id')
+
+        if not selected_set or not setup_message_id:
+            bot.send_message(user_id, "❌ **Session Lost.** Please restart the process using <code>/quizmarathon</code>.", parse_mode="HTML")
+            return
+        
+        # --- MORE ROBUST VALIDATION ---
+        if not msg.text.strip().isdigit():
+            prompt = bot.reply_to(msg, "❌ Invalid input. Please enter just a number (e.g., 25).")
+            bot.register_next_step_handler(prompt, process_marathon_question_count)
+            return
+            
+        num_questions = int(msg.text.strip())
+        
+        # We need the available count again for this final validation
+        count_response = supabase.table('quiz_questions').select('id', count='exact').eq('quiz_set', selected_set).eq('used', False).execute()
+        available_count = count_response.count
+
+        if not (1 <= num_questions <= available_count):
+            prompt = bot.reply_to(msg, f"❌ Invalid number. Please enter a number between 1 and {available_count} (the max available).")
+            bot.register_next_step_handler(prompt, process_marathon_question_count)
+            return
+
+        # Call the helper function to do the heavy lifting
+        _launch_marathon_session(user_id, msg.chat.id, setup_message_id, selected_set, num_questions)
+
+        if user_id in user_states:
             del user_states[user_id]
 
-    except ValueError:
-        invalid_number_message = f"""❌ <b>Invalid Input</b>
-
-🔤 <b>You entered:</b> "{escape(msg.text)}"
-🔢 <b>Expected:</b> A number (like 10, 25, 50)
-
-💡 <b>Examples:</b>
-• Type <code>15</code> for 15 questions
-• Type <code>30</code> for 30 questions  
-• Type <code>50</code> for 50 questions
-
-<i>Please enter just the number...</i>"""
-        prompt = bot.send_message(user_id, invalid_number_message, parse_mode="HTML")
-        bot.register_next_step_handler(prompt, process_marathon_question_count)
-        
     except Exception as e:
-        print(f"Error starting marathon: {traceback.format_exc()}")
-        report_error_to_admin(f"Error starting marathon:\n{e}")
-        
-        critical_error_message = """🚨 <b>CRITICAL ERROR</b>
+        print(f"Error in process_marathon_question_count: {traceback.format_exc()}")
+        report_error_to_admin(f"Error in process_marathon_question_count:\n{e}")
 
-❌ <b>Status:</b> Marathon setup failed
+def _format_marathon_poll_question(question_data, current_idx, total_questions):
+    """
+    Helper function to create the formatted text for the marathon poll question.
+    """
+    # --- UPGRADED: Simplified and efficient progress bar logic ---
+    PROGRESS_BAR_LENGTH = 20
+    progress_ratio = (current_idx + 1) / total_questions
+    filled_chars = int(progress_ratio * PROGRESS_BAR_LENGTH)
+    progress_bar = "▓" * filled_chars + "░" * (PROGRESS_BAR_LENGTH - filled_chars)
 
-🔧 <b>Issue:</b> System error during initialization
+    clean_question = unescape(question_data.get('Question', ''))
+    
+    question_text = (
+        f"📝 Question {current_idx + 1} of {total_questions}\n"
+        f"{progress_bar}\n\n"
+        f"{clean_question}"
+    )
 
-📝 <b>Action:</b> Error logged to technical team
-
-🔄 <b>Solution:</b> Please try again or contact support
-
-<i>We apologize for the inconvenience!</i>"""
-        try:
-            bot.edit_message_text(critical_error_message, user_id, setup_msg.message_id, parse_mode="HTML")
-        except:
-            bot.send_message(user_id, critical_error_message, parse_mode="HTML")
+    # --- THE FIX: Handle apostrophes for Telegram Polls ---
+    # This replaces single quotes with the HTML entity to ensure they render correctly.
+    return question_text.replace("'", "&#39;")
 
 def send_marathon_question(session_id):
     """
-    Send the next question. This version uses a lock to prevent the end-of-quiz
-    race condition, ensuring the final results are triggered only once.
+    UPGRADED: Now handles and sends a separate text message for long case studies
+    with a title before sending the poll.
     """
     session = None
     is_quiz_over = False
 
-    # --- CRITICAL SECTION START ---
-    # This lock ensures only one thread at a time can check if the quiz is over.
     with session_lock:
         session = QUIZ_SESSIONS.get(session_id)
         if not session or not session.get('is_active') or session.get('ending'):
             return
 
         idx = session['current_question_index']
-        total_questions = len(session['questions'])
-
-        if idx >= total_questions:
+        if idx >= len(session['questions']):
             is_quiz_over = True
-            session['ending'] = True  # Set the flag to stop any other threads
+            session['ending'] = True
             session['is_active'] = False
-    # --- CRITICAL SECTION END ---
-
-    # If the quiz is over, trigger the final sequence and stop execution here.
+    
     if is_quiz_over:
         send_final_suspense_message(session_id)
         return
 
-    # --- The rest of the logic runs outside the lock ---
-    idx = session['current_question_index']
-    question_data = session['questions'][idx]
+    question_data = session['questions'][session['current_question_index']]
     
-    # ... [Previous logic for mid-quiz update, image sending, etc. remains here] ...
-    # Mid-quiz update logic
-    try:
-        if idx in session.get('leaderboard_updates', []) and QUIZ_PARTICIPANTS.get(session_id):
-            send_mid_quiz_update(session_id)
-            time.sleep(4)
-    except Exception:
-        pass
+    if session['current_question_index'] in session.get('leaderboard_updates', []) and QUIZ_PARTICIPANTS.get(session_id):
+        send_mid_quiz_update(session_id)
+        time.sleep(4)
 
-    # Timer and Image logic...
-    try:
-        timer_seconds = int(question_data.get('time_allotted', 60))
-        if not (15 <= timer_seconds <= 300):
-            timer_seconds = 60
-    except (ValueError, TypeError):
-        timer_seconds = 60
-    
+    # --- NEW: Upgraded Case Study Logic ---
+    case_study_text = question_data.get('case_study_text')
+    if case_study_text:
+        try:
+            case_study_title = question_data.get('case_study_title')
+            
+            header = f"📖 <b>Case Study for Question {session['current_question_index'] + 1}</b>\n<pre>------------------</pre>\n"
+            
+            if case_study_title:
+                header += f"<b>Case Title: {escape(case_study_title)}</b>\n\n"
+
+            full_message = header + case_study_text # escape() hata diya gaya hai
+            bot.send_message(GROUP_ID, full_message, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
+            time.sleep(5) 
+        except Exception as e:
+            report_error_to_admin(f"Failed to send case study text for QID {question_data.get('id')}: {e}")
+    # --- End of Upgraded Logic ---
+
     image_id = question_data.get('image_file_id')
     if image_id:
         try:
-            image_caption = f"""🖼️ <b>Visual Clue Incoming!</b>
-📸 <i>Study this image carefully...</i>
-🎯 <b>Question {idx+1}/{len(session['questions'])} loading...</b>"""
-            bot.send_photo(GROUP_ID, image_id, caption=image_caption, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
+            image_caption = f"🖼️ <b>Visual Clue for Question {session['current_question_index'] + 1}!</b>"
+            bot.send_photo(GROUP_ID, image_id, caption=image_caption, parse_mode="HTML", message_thread_id=QUIZ_TOP_ID)
             time.sleep(3)
         except Exception as e:
-            print(f"Error sending image for question {idx+1}: {e}")
-            report_error_to_admin(f"Failed to send image for QID {question_data.get('id')}")
+            print(f"Error sending image for question {session['current_question_index'] + 1}: {e}")
 
-    # ... [The rest of the function for creating and sending the poll remains the same] ...
+    try:
+        timer_seconds = int(question_data.get('time_allotted', 60))
+    except (ValueError, TypeError):
+        timer_seconds = 60
+    
     options = [unescape(str(question_data.get(f'Option {c}', ''))) for c in ['A', 'B', 'C', 'D']]
     correct_answer_letter = str(question_data.get('Correct Answer', 'A')).upper()
     correct_option_index = ['A', 'B', 'C', 'D'].index(correct_answer_letter)
     
-    total_questions = len(session['questions'])
-    progress_filled = "▓" * (idx + 1)
-    progress_empty = "░" * (total_questions - idx - 1)
-    progress_bar = progress_filled + progress_empty
-    
-    if len(progress_bar) > 25:
-        ratio = (idx + 1) / total_questions
-        filled_chars = int(ratio * 25)
-        progress_bar = "▓" * filled_chars + "░" * (25 - filled_chars)
-    
-    clean_question = unescape(question_data.get('Question', ''))
-    question_text = f"""📝 Question {idx + 1} of {total_questions}
-
-{progress_bar}
-
-{clean_question}"""
+    question_text = _format_marathon_poll_question(question_data, session['current_question_index'], len(session['questions']))
     
     poll_message = bot.send_poll(
-        chat_id=GROUP_ID, message_thread_id=QUIZ_TOPIC_ID,
-        question=question_text, options=options, type='quiz',
-        correct_option_id=correct_option_index, is_anonymous=False,
-        open_period=timer_seconds,
+        chat_id=GROUP_ID, message_thread_id=QUIZ_TOPIC_ID, question=question_text, 
+        options=options, type='quiz', correct_option_id=correct_option_index, 
+        is_anonymous=False, open_period=timer_seconds,
         explanation=escape(unescape(str(question_data.get('Explanation', '')))),
         explanation_parse_mode="HTML"
     )
 
-    # --- DYNAMIC COMMENTARY HAS BEEN REMOVED AS PER YOUR REQUEST ---
-
-    # Update session data (this should also be locked)
     with session_lock:
-        ist_tz = timezone(timedelta(hours=5, minutes=30))
         session['current_poll_id'] = poll_message.poll.id
-        session['question_start_time'] = datetime.datetime.now(ist_tz)
+        session['question_start_time'] = datetime.datetime.now(IST)
         session['current_question_index'] += 1
 
-    # Schedule the next question
     threading.Timer(timer_seconds + 7, send_marathon_question, args=[session_id]).start()
 
-
 def send_mid_quiz_update(session_id):
-    """Send engaging mid-quiz leaderboard update with enhanced analytics."""
+    """
+    Sends a beautifully formatted, consistent, and clean mid-quiz update.
+    """
     session = QUIZ_SESSIONS.get(session_id)
     participants = QUIZ_PARTICIPANTS.get(session_id, {})
-    
-    if not participants:
-        return
-    
-    # Get current standings
+    if not participants: return
+
     sorted_participants = sorted(
         participants.items(), 
         key=lambda x: (x[1].get('score', 0), -x[1].get('total_time', 999999)), 
         reverse=True
     )
+    if not sorted_participants: return
     
-    if not sorted_participants:
-        return
-        
-    top_user_id, top_data = sorted_participants[0]
-    top_score = top_data.get('score', 0)
-    current_question = session['current_question_index']
-    phase = session['stats']['current_phase']
-    
-    # Get user name without @
-    top_user_name = top_data.get('user_name', 'Someone')
-    
-    # Create phase-specific encouraging messages
-    if len(sorted_participants) == 1:
-        if phase == 'early':
-            update_message = f"""🎯 <b>Early Leader Spotlight!</b>
-
-👑 <u><b>{escape(top_user_name)}</b></u> ne ek strong start liya hai <b>{top_score} points</b> ke saath! 
-
-🔥 <i>Baaki sab kaha hain? Competition denge kya?</i>
-
-⚡ <b>Marathon abhi shuru hua hai - kuch bhi ho sakta hai!</b> 🎪"""
-
-        elif phase == 'middle':
-            update_message = f"""🔥 <b>Mid-Game Domination!</b>
-
-👑 <u><b>{escape(top_user_name)}</b></u> consistently perform kar rahe hain <b>{top_score} points</b> ke saath!
-
-💪 <i>Koi unhe challenge karega? Time is running out!</i>
-
-⚡ <b>Final phase mei surprises ho sakte hain!</b> 🎪"""
-
-        else:  # final phase
-            update_message = f"""👑 <b>Championship Contender!</b>
-
-🏆 <u><b>{escape(top_user_name)}</b></u> final stretch mei lead kar rahe hain <b>{top_score} points</b> ke saath!
-
-🔥 <i>Kya yeh unka championship moment hai?</i>
-
-⚡ <b>Last few questions mei kuch bhi ho sakta hai!</b> 🎯"""
-
-    else:
-        second_user_id, second_data = sorted_participants[1]
-        second_score = second_data.get('score', 0)
-        second_user_name = second_data.get('user_name', 'Runner-up')
-        
-        gap = top_score - second_score
-        
-        if gap <= 1:
-            if phase == 'early':
-                update_message = f"""🔥 <b>Neck-to-Neck Competition!</b>
-
-👑 <u><b>{escape(top_user_name)}</b></u> - <b>{top_score} points</b>
-🥈 <u><b>{escape(second_user_name)}</b></u> - <b>{second_score} points</b>
-
-⚡ <i>Sirf {gap} point ka fark! Early stages mei itna tight!</i>
-
-🎯 <b>Yeh marathon epic hone wala hai!</b> 💫"""
-
-            elif phase == 'middle':
-                update_message = f"""🚨 <b>Photo Finish Alert!</b>
-
-👑 <u><b>{escape(top_user_name)}</b></u> - <b>{top_score} points</b>
-🥈 <u><b>{escape(second_user_name)}</b></u> - <b>{second_score} points</b>
-
-💥 <i>Middle phase mei {gap} point ka fark! Thriller chal raha hai!</i>
-
-🔥 <b>Final stretch mei decide hoga winner!</b> 🏆"""
-
-            else:  # final phase
-                update_message = f"""🚨 <b>CHAMPIONSHIP THRILLER!</b>
-
-👑 <u><b>{escape(top_user_name)}</b></u> - <b>{top_score} points</b>
-🥈 <u><b>{escape(second_user_name)}</b></u> - <b>{second_score} points</b>
-
-⚡ <i>Final phase mei sirf {gap} point ka fark!</i>
-
-🏆 <b>Har question game-changer hai ab!</b> 🔥"""
-        else:
-            # Show top 3 for bigger gaps
-            podium_text = f"👑 <u><b>{escape(top_user_name)}</b></u> - <b>{top_score} points</b>\n"
-            podium_text += f"🥈 <u><b>{escape(second_user_name)}</b></u> - <b>{second_score} points</b>\n"
-            
-            if len(sorted_participants) > 2:
-                third_user_id, third_data = sorted_participants[2]
-                third_score = third_data.get('score', 0)
-                third_user_name = third_data.get('user_name', 'Third place')
-                podium_text += f"🥉 <u><b>{escape(third_user_name)}</b></u> - <b>{third_score} points</b>\n"
-
-            if phase == 'early':
-                update_message = f"""🎯 <b>Early Leaderboard!</b>
-
-{podium_text}
-🔥 <i>Clear hierarchy ban raha hai, par abhi bohot kuch baaki hai!</i>
-
-💪 <b>Koi bhi comeback kar sakta hai!</b> 🎪"""
-
-            elif phase == 'middle':
-                update_message = f"""📊 <b>Mid-Marathon Standings!</b>
-
-{podium_text}
-⚡ <i>Leader establish ho gaya hai, par final phase mei surprises hote hain!</i>
-
-🏆 <b>Championship race abhi open hai!</b> 🔥"""
-
-            else:  # final phase
-                update_message = f"""🏁 <b>Final Phase Standings!</b>
-
-{podium_text}
-👑 <i>Champions emerging ho rahe hain!</i>
-
-🔥 <b>Last few questions mei history banegi!</b> 🏆"""
-
-    # Add participation stats
+    # --- Data Gathering ---
     total_participants = len(sorted_participants)
-    update_message += f"\n\n📊 <i>Live Update: {total_participants} warriors fighting for glory!</i>"
-    
-    update_message += f"\n\n🎮 <i>Quiz continues... next question aa raha hai!</i>"
-    
-    bot.send_message(GROUP_ID, update_message, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
+    current_question = session['current_question_index']
+    total_questions = len(session['questions'])
+    phase = "Early Game" if current_question < total_questions / 3 else "Middle Game" if current_question < total_questions * 2 / 3 else "Final Stretch"
+
+    top_user_name = escape(sorted_participants[0][1].get('user_name', 'N/A'))
+    top_score = sorted_participants[0][1].get('score', 0)
+
+    # --- Dynamic "Live Insight" Generation ---
+    insight = ""
+    if total_participants == 1:
+        insight = f"<b>{top_user_name}</b> is leading the charge solo! Keep up the great pace! 💪"
+    else:
+        second_score = sorted_participants[1][1].get('score', 0)
+        gap = top_score - second_score
+        if gap <= 5:
+            insight = f"It's a photo finish! Sirf <b>{gap} point{'s' if gap != 1 else ''}</b> ka fark hai top mein! Thriller chal raha hai! 🔥"
+        elif gap <= 15:
+            insight = f"<b>{top_user_name}</b> has a solid lead, but the chasers are close behind. Abhi bhi kuch bhi ho sakta hai! 🏃"
+        else:
+            insight = f"<b>{top_user_name}</b> is dominating the field with a significant lead! Incredible performance! 🚀"
+
+    # --- Building the Final Message ---
+    message = f"🏆 <b>Mid-Marathon Report</b> 🏆\n"
+    message += f"<pre>━━━━━━━━━━━━━━━━━━━━━━</pre>\n"
+    message += f"<b>PHASE:</b> {phase} (Q. {current_question}/{total_questions})\n\n"
+
+    # Leaderboard part
+    for i, (user_id, data) in enumerate(sorted_participants[:3]): # Show Top 3
+        rank_emojis = ["🥇", "🥈", "🥉"]
+        name = escape(data.get('user_name', 'N/A'))
+        score = data.get('score', 0)
+        
+        # Dynamic dot leader for clean alignment
+        max_name_len = 15
+        display_name = (name[:max_name_len-3] + '...') if len(name) > max_name_len else name
+        dots = "." * (max_name_len - len(display_name))
+        
+        message += f"{rank_emojis[i]} <b>{display_name}</b> {dots} {score} pts\n"
+
+    message += f"<pre>━━━━━━━━━━━━━━━━━━━━━━</pre>\n"
+    message += f"⚡ <b>Live Insight:</b>\n<i>{insight}</i>\n\n"
+    message += f"🎮 <i>Quiz continues... next question aa raha hai!</i>"
+
+    bot.send_message(GROUP_ID, message, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
 
 
 def send_final_suspense_message(session_id):
-    """Send final suspense message before showing results with enhanced drama."""
+    """
+    Edits the Live Dashboard into a final suspense message to prevent clutter
+    before showing the results.
+    """
     session = QUIZ_SESSIONS.get(session_id)
     participants = QUIZ_PARTICIPANTS.get(session_id, {})
     
+    # If there are no participants, we still need to clean up the session.
+    # The final report function will handle the "no participants" message.
     if not participants:
-        # No participants case with motivational messaging
-        no_participants_message = """🏁 <b>Quiz Marathon Complete!</b>
-
-😅 <i>Lagta hai sabko homework karna pada!</i>
-
-🎯 <b>No participants this time, but that's okay!</b>
-
-💡 <i>Next marathon mei zaroor participate kariyega - we'll be waiting!</i>
-
-🚀 <b>Knowledge ke liye adventure continues...</b>
-
-<b>C.A.V.Y.A is here to help you grow! 💝</b>"""
-
-        bot.send_message(GROUP_ID, no_participants_message, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
+        threading.Timer(2, send_final_report_sequence, args=[session_id]).start()
+        # Clean up the dashboard
+        try:
+            bot.delete_message(GROUP_ID, session['dashboard_message_id'])
+        except:
+            pass
         return
     
-    # Get current standings for suspense
     sorted_participants = sorted(
         participants.items(), 
         key=lambda x: (x[1].get('score', 0), -x[1].get('total_time', 999999)), 
         reverse=True
     )
     
-    if sorted_participants:
-        total_questions = session['stats']['total_questions']
-        total_participants = len(sorted_participants)
-        
-        leader_id, leader_data = sorted_participants[0]
-        leader_name = leader_data.get('user_name', 'Someone')
-        leader_score = leader_data.get('score', 0)
-        leader_accuracy = (leader_score / total_questions * 100) if total_questions > 0 else 0
-
-        # Create suspenseful messaging based on competition level
-        if len(sorted_participants) == 1:
-            suspense_message = f"""🏁 <b>MARATHON COMPLETE!</b>
-
-🎯 <b>Epic journey of {total_questions} questions khatam!</b>
-
-👑 Sirf <u><b>{escape(leader_name)}</b></u> ne participate kiya aur <b>{leader_score} points</b> score kiye!
-
-💪 <i>Solo performance, but dedication dikhaya hai!</i>
-
-⏳ <b>Final detailed results calculating...</b>
-
-🥁 <i>Performance analysis aa raha hai...</i> 🎪"""
-
-        elif len(sorted_participants) <= 3:
-            second_score = sorted_participants[1][1].get('score', 0) if len(sorted_participants) > 1 else 0
-            gap = leader_score - second_score
-            
-            suspense_message = f"""🏁 <b>MARATHON COMPLETE!</b>
-
-🔥 <b>Intense competition of {total_questions} questions!</b>
-
-👑 <u><b>{escape(leader_name)}</b></u> currently leading with <b>{leader_score} points</b> ({leader_accuracy:.1f}% accuracy)
-
-🥈 Gap with runner-up: <b>{gap} points</b>
-
-👀 <i>Par final results mei kuch surprises ho sakte hain!</i>
-
-⏳ <b>Comprehensive analysis calculating...</b>
-
-🥁 <i>Champion reveal in 5 seconds...</i> 🎪"""
-
-        else:
-            # Big competition
-            suspense_message = f"""🏁 <b>EPIC MARATHON COMPLETE!</b>
-
-🌟 <b>MASSIVE competition - {total_participants} warriors fought {total_questions} questions!</b>
-
-🎯 Previous leader: <u><b>{escape(leader_name)}</b></u> with <b>{leader_score} points</b>
-
-📊 Accuracy: <b>{leader_accuracy:.1f}%</b>
-
-👀 <i>Par itne participants ke saath, final ranking mei changes possible hain!</i>
-
-⏳ <b>Advanced analytics running...</b>
-🏆 <b>Legend tier calculations in progress...</b>
-📈 <b>Performance breakdowns loading...</b>
-
-🥁 <i>Grand results reveal in 5 seconds...</i> 🎪"""
-
-        bot.send_message(GROUP_ID, suspense_message, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
-        
-        # Wait 5 seconds before showing results
-        threading.Timer(5, send_final_report_sequence, args=[session_id]).start()
+    total_questions = session['stats']['total_questions']
+    total_participants = len(sorted_participants)
+    
+    # --- NEW: Dynamic "Final Insight" Generation ---
+    final_insight = ""
+    if total_participants == 1:
+        final_insight = "A true solo performance! Calculating the final stats..."
     else:
-        # Fallback if no sorted participants
-        threading.Timer(2, send_final_report_sequence, args=[session_id]).start()
+        leader_score = sorted_participants[0][1].get('score', 0)
+        second_score = sorted_participants[1][1].get('score', 0)
+        if (leader_score - second_score) <= 5:
+            final_insight = "It was a photo finish! Every second counts in the final calculation..."
+        elif total_participants > 10:
+            final_insight = "What a massive battle! Compiling the full leaderboard and performance analytics..."
+        else:
+            final_insight = "The competition was intense! Running advanced analytics..."
 
+    # --- NEW: Edit the existing dashboard instead of sending a new message ---
+    suspense_message = f"""🏁 <b>MARATHON COMPLETE!</b> 🏁
+<pre>━━━━━━━━━━━━━━━━━━━━━━</pre>
+<b>FINAL STATS:</b>
+• <b>Questions:</b> {total_questions}
+• <b>Warriors:</b> {total_participants} Participants
+<pre>━━━━━━━━━━━━━━━━━━━━━━</pre>
+🥁 <b>Final Insight:</b>
+<i>{final_insight}</i>
+
+⏳ <b>Grand results reveal in 5 seconds...</b>"""
+
+    try:
+        # Edit the dashboard to show the suspense message
+        bot.edit_message_text(suspense_message, GROUP_ID, session['dashboard_message_id'], parse_mode="HTML")
+    except Exception as e:
+        print(f"Could not edit dashboard for suspense message: {e}")
+        # Fallback: if editing fails, send a new message
+        bot.send_message(GROUP_ID, suspense_message, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
+
+    # Wait 5 seconds before showing results
+    threading.Timer(5, send_final_report_sequence, args=[session_id]).start()
 
 # Enhanced Stop Marathon Command
 @bot.message_handler(commands=['roko'])
@@ -5779,45 +5796,39 @@ def delete_message_in_thread(chat_id, message_id, delay):
     threading.Thread(target=task).start()
 
 def format_duration(seconds: float) -> str:
-    """Formats seconds into 'X.Y minutes' or 'Z seconds' for consistency."""
-    if seconds < 60:
-        return f"{int(seconds)} seconds"
+    """
+    UPGRADED: Formats seconds into a more human-readable 'X min Y sec' format.
+    """
+    if seconds < 0: return "0 sec"
+    if seconds < 60: return f"{int(seconds)} sec"
+    
+    minutes = int(seconds // 60)
+    remaining_seconds = int(seconds % 60)
+    
+    if remaining_seconds == 0:
+        return f"{minutes} min"
     else:
-        minutes = seconds / 60
-        return f"{minutes:.1f} minutes"
+        return f"{minutes} min {remaining_seconds} sec"
 
-def record_quiz_participation(user_id, username, score, total_time):
-    """Record quiz participation in database"""
-    try:
-        supabase.rpc('record_quiz_participation', {
-            'p_user_id': user_id,
-            'p_username': username,
-            'p_score': score,
-            'p_total_time': total_time
-        }).execute()
-    except Exception as e:
-        print(f"Error recording participation: {e}")
-        report_error_to_admin(f"Participation recording failed for {user_id}")
+# REMOVED: The function 'record_quiz_participation' was redundant and has been removed for cleaner code.
+# All participation is now correctly recorded inside the 'send_marathon_results' function.
 
 def calculate_legend_tier(user_score, total_questions, all_scores):
     """
-    Calculates a user's legend tier based on their percentile rank and accuracy.
-    This formula handles ties gracefully.
+    NO CHANGE NEEDED: This function is already perfectly written.
+    It calculates a user's legend tier based on their percentile rank and accuracy
+    and handles ties gracefully.
     """
-    # Safety check for empty or invalid data
     if total_questions == 0 or not all_scores:
         return None
         
     user_accuracy = (user_score / total_questions) * 100
     
-    # --- Correct Percentile Calculation ---
     scores_below = sum(1 for s in all_scores if s < user_score)
     scores_equal = sum(1 for s in all_scores if s == user_score)
     
-    # This formula gives a more accurate rank in case of ties
     percentile = ((scores_below + 0.5 * scores_equal) / len(all_scores)) * 100
     
-    # --- Assign Tier based on Percentile and Minimum Accuracy ---
     if percentile >= LEGEND_TIERS['DIAMOND'] and user_accuracy >= 80:
         return {'tier': 'DIAMOND', 'emoji': '💎', 'title': 'Diamond Legend'}
     elif percentile >= LEGEND_TIERS['GOLD'] and user_accuracy >= 70:
@@ -5831,68 +5842,47 @@ def calculate_legend_tier(user_score, total_questions, all_scores):
 
 def send_final_report_sequence(session_id):
     """
-    A new, bulletproof orchestrator function to send the final messages.
-    It uses a lock and a 'results_sent' flag to be 100% certain that this
-    entire sequence runs only ONCE per marathon.
+    UPGRADED: A bulletproof orchestrator that now only calls a single,
+    consolidated final report function to prevent clutter.
     """
-    session = None # Initialize session to None first
-
-    # This is the most important part. We use the master lock here.
+    session = None
     with session_lock:
         session = QUIZ_SESSIONS.get(session_id)
-        
-        # If the session doesn't exist, or if we have ALREADY started sending results,
-        # then stop immediately. This is the new safety check.
         if not session or session.get('results_sent'):
             return
-            
-        # If we are the first to get here, immediately "claim" the session by setting a flag.
         session['results_sent'] = True
     
-    # Now that we have claimed the session, we can release the lock and do the slow work.
+    print(f"INFO: Starting final CONSOLIDATED report sequence for session {session_id}...")
+    
     participants = QUIZ_PARTICIPANTS.get(session_id)
-
-    # Check for participants *after* claiming the session.
     if not participants:
-        print(f"No participants for session {session_id}. Proceeding to cleanup.")
-        # We still call send_marathon_results because it contains the cleanup logic.
-        send_marathon_results(session_id)
+        send_marathon_results(session_id) # This handles the no-participant message
         return
 
-    # If there are participants, send the full report.
     try:
-        # Step 1: Send the performance analysis first.
-        send_performance_analysis(session, participants)
-        
-        # Add a small delay for better user experience
-        time.sleep(3)
-        
-        # Step 2: Send the final results, which includes the session cleanup.
+        # We no longer send a separate performance analysis.
+        # We will only send the main, consolidated results.
         send_marathon_results(session_id)
         
     except Exception as e:
         print(f"An error occurred during the final report sequence: {traceback.format_exc()}")
         report_error_to_admin(f"CRITICAL: Failed during final report sequence for session {session_id}:\n{e}")
-        # Even if sending fails, we MUST try to clean up.
-        send_marathon_results(session_id)
+        send_marathon_results(session_id) # Attempt to clean up even if sending fails
 
 def send_marathon_results(session_id):
     """
-    Generates and sends comprehensive marathon results with legend tiers,
-    and guarantees session cleanup to prevent memory leaks.
+    UPGRADED: Generates and sends a single, clean, consolidated final report
+    and guarantees session cleanup.
     """
     session = QUIZ_SESSIONS.get(session_id)
-    if not session:
-        return  # Session already cleaned up or never existed
+    if not session: return
 
     try:
-        # This part contains all your original logic for processing results
-        session['is_active'] = False  # Prevent new questions from being sent
+        session['is_active'] = False
         participants = QUIZ_PARTICIPANTS.get(session_id)
         
         total_questions_asked = session.get('current_question_index', 0)
-        total_planned_questions = len(session.get('questions', []))
-
+        
         # Mark used questions in database
         if session.get('questions') and total_questions_asked > 0:
             try:
@@ -5905,303 +5895,92 @@ def send_marathon_results(session_id):
         safe_quiz_title = escape(session.get('title', 'Quiz Marathon'))
 
         if not participants:
-            # Logic for no participants...
+            # Logic for no participants remains the same
             duration = datetime.datetime.now() - session['stats']['start_time']
-            no_participants_message = f"""🏁 <b>MARATHON COMPLETED</b>
-
-🎯 <b>Quiz:</b> '{safe_quiz_title}'
-⏱️ <b>Duration:</b> {format_duration(duration.total_seconds())}
-📊 <b>Questions:</b> {total_questions_asked}/{total_planned_questions} asked
-
-😅 <b>Participation:</b> No warriors joined this battle!
-
-💡 <b>Next Time Tips:</b>
-• Share marathon announcements
-• Schedule during peak hours  
-• Create excitement with topics people love
-
-🚀 <b>Every quiz is a learning opportunity!</b>
-
-<b>C.A.V.Y.A is here to make learning fun! 💝</b>"""
+            no_participants_message = f"🏁 <b>MARATHON COMPLETED</b>\n\n🎯 <b>Quiz:</b> '{safe_quiz_title}'\n📊 <b>Questions:</b> {total_questions_asked} asked\n\n😅 No warriors joined this battle! Better luck next time."
             bot.send_message(GROUP_ID, no_participants_message, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
         
         else:
-            # All your beautiful result processing logic goes here.
-            # This part is unchanged from your original code.
             sorted_items = sorted(
                 participants.items(), 
                 key=lambda item: (item[1]['score'], -item[1]['total_time']), 
                 reverse=True
             )
             
-            participant_ids = list(participants.keys())
-            
-            try:
-                pre_quiz_stats_response = supabase.rpc('get_pre_marathon_stats', {'p_user_ids': participant_ids}).execute()
-                pre_quiz_stats_dict = {item['user_id']: item for item in pre_quiz_stats_response.data}
-            except:
-                pre_quiz_stats_dict = {}
-
-            try:
-                total_active_members_response = supabase.rpc('get_total_active_members', {'days_interval': 7}).execute()
-                total_active_members = total_active_members_response.data or len(participants)
-            except:
-                total_active_members = len(participants)
-            
             all_scores = [p['score'] for p in participants.values()]
             
+            # --- Data Finalization Loop ---
+            achievements = {'pb': [], 'streak': []}
             APPRECIATION_STREAK = 8
             for user_id, p in sorted_items:
-                # Calculate legend tier
-                legend_tier = calculate_legend_tier(p['score'], total_questions_asked, all_scores)
-                p['legend_tier'] = legend_tier
-
-                # --- NEW: Call the single, powerful Supabase function ---
-                try:
-                    # The performance_breakdown from poll handler is already in the correct JSON format
-                    performance_data = p.get('performance_breakdown', {})
-                    
+                p['legend_tier'] = calculate_legend_tier(p['score'], total_questions_asked, all_scores)
+                
+                try: # Finalize data in DB
                     supabase.rpc('finalize_marathon_user_data', {
-                        'p_user_id': user_id,
-                        'p_user_name': p.get('user_name', p.get('name')), # Use the more reliable username
-                        'p_score_achieved': p.get('score', 0),
-                        'p_time_taken_seconds': p.get('total_time', 0),
-                        'p_performance_breakdown': performance_data
+                        'p_user_id': user_id, 'p_user_name': p.get('user_name', p.get('name')),
+                        'p_score_achieved': p.get('score', 0), 'p_time_taken_seconds': p.get('total_time', 0),
+                        'p_performance_breakdown': p.get('performance_breakdown', {})
                     }).execute()
-                    
                 except Exception as e:
-                    error_msg = f"Critical error finalizing data for user {user_id} via RPC."
-                    print(f"{error_msg}\n{traceback.format_exc()}")
-                    report_error_to_admin(f"{error_msg}\nError: {e}")
+                    report_error_to_admin(f"Critical error finalizing data for user {user_id}: {e}")
 
                 # Check for achievements
-                user_pre_stats = pre_quiz_stats_dict.get(user_id, {})
-                highest_before = user_pre_stats.get('highest_marathon_score') or 0
-                streak_before = user_pre_stats.get('current_streak') or 0
-                
-                if p['score'] > highest_before:
-                    p['pb_achieved'] = True
-                if (streak_before + 1) == APPRECIATION_STREAK:
-                    p['streak_completed'] = True
+                pre_quiz_stats = supabase.rpc('get_pre_marathon_stats', {'p_user_ids': [user_id]}).execute().data
+                if pre_quiz_stats:
+                    if p['score'] > (pre_quiz_stats[0].get('highest_marathon_score') or 0):
+                        achievements['pb'].append(escape(p['name']))
+                    if (pre_quiz_stats[0].get('current_streak') or 0) + 1 == APPRECIATION_STREAK:
+                        achievements['streak'].append(escape(p['name']))
             
+            # --- Build the Consolidated Report ---
             marathon_duration = datetime.datetime.now() - session['stats']['start_time']
             
-            results_text = f"""🏁 <b>MARATHON RESULTS - '{safe_quiz_title}'</b> 🏁
-{ "━"*25 }
-📊 <b>Marathon Statistics:</b>
-• Questions: <b>{total_questions_asked}</b> asked ({total_planned_questions} planned)
-• Duration: <b>{format_duration(marathon_duration.total_seconds())}</b>
-• Warriors: <b>{len(participants)}</b> participants"""
-            if total_active_members > 0:
-                participation_percentage = (len(participants) / total_active_members) * 100
-                results_text += f"\n• Participation: <b>{participation_percentage:.0f}%</b> of active members"
-            results_text += f"\n\n{ '━'*25 }\n\n"
+            results_text = f"🏁 <b>MARATHON RESULTS: '{safe_quiz_title}'</b> 🏁\n"
+            results_text += f"<pre>━━━━━━━━━━━━━━━━━━━━━━</pre>\n"
+            results_text += f"📊 {total_questions_asked} Questions | ⏱️ {format_duration(marathon_duration.total_seconds())} | 👥 {len(participants)} Warriors\n"
+            results_text += f"<pre>━━━━━━━━━━━━━━━━━━━━━━</pre>\n\n"
             
-            champion_id, champion_data = sorted_items[0]
+            # Champion Section
+            champion_data = sorted_items[0][1]
             champion_name = escape(champion_data['name'])
             champion_score = champion_data['score']
             champion_accuracy = (champion_score / total_questions_asked * 100) if total_questions_asked > 0 else 0
-            champion_time = format_duration(champion_data['total_time'])
-            results_text += f"""👑 <b>MARATHON CHAMPION</b> 👑
-🏆 <u><b>{champion_name}</b></u>
-📊 Score: <b>{champion_score}/{total_questions_asked}</b> ({champion_accuracy:.1f}%)
-⏱️ Time: <b>{champion_time}</b>"""
-            if champion_data.get('legend_tier'):
-                tier_info = champion_data['legend_tier']
-                results_text += f"\n{tier_info['emoji']} <b>{tier_info['title']}</b>"
-            achievements = []
-            if champion_data.get('pb_achieved'): achievements.append("🔥 Personal Best!")
-            if champion_data.get('streak_completed'): achievements.append("⚡ Streak Master!")
-            if achievements: results_text += f"\n🎯 {' • '.join(achievements)}"
-            results_text += f"\n\n{ '━'*25 }\n\n"
+            results_text += f"👑   <b>MARATHON CHAMPION</b>   👑\n"
+            results_text += f"🏆   <b>{champion_name}</b>   🏆\n"
+            results_text += f"    Score: {champion_score}/{total_questions_asked} ({champion_accuracy:.1f}%)\n\n"
             
-            results_text += "🏆 <b>FINAL LEADERBOARD</b>\n\n"
+            # Top 10 Leaderboard Section
+            results_text += "🏆   <b>FINAL LEADERBOARD</b>   🏆\n"
             rank_emojis = ["🥇", "🥈", "🥉"]
             for i, (user_id, p) in enumerate(sorted_items[:10]):
                 rank = rank_emojis[i] if i < 3 else f"  <b>{i + 1}.</b>"
                 name = escape(p['name'])
-                percentage = (p['score'] / total_questions_asked * 100) if total_questions_asked > 0 else 0
-                formatted_time = format_duration(p['total_time'])
-                display_name = name[:22] + "..." if len(name) > 25 else name
-                line = f"{rank} <b>{display_name}</b> – {p['score']} ({percentage:.0f}%) {formatted_time}"
+                display_name = (name[:15] + '..') if len(name) > 17 else name
+                dots = "." * (18 - len(display_name))
+                line = f"{rank} {display_name} {dots} {p['score']} pts"
                 if p.get('legend_tier'): line += f" {p['legend_tier']['emoji']}"
-                if p.get('pb_achieved'): line += " 🏆"
-                if p.get('streak_completed'): line += " 🔥"
                 results_text += line + "\n"
-            results_text += f"\n{ '━'*25 }\n\n"
             
-            tier_counts = {}
-            for _, p in sorted_items:
-                if p.get('legend_tier'):
-                    tier = p['legend_tier']['tier']
-                    tier_counts[tier] = tier_counts.get(tier, 0) + 1
-            if tier_counts:
-                results_text += "💎 <b>LEGEND TIER DISTRIBUTION</b>\n\n"
-                tier_order = ['DIAMOND', 'GOLD', 'SILVER', 'BRONZE']
-                tier_emojis = {'DIAMOND': '💎', 'GOLD': '🏆', 'SILVER': '🥈', 'BRONZE': '🥉'}
-                for tier in tier_order:
-                    if tier in tier_counts:
-                        results_text += f"{tier_emojis[tier]} {tier.title()}: <b>{tier_counts[tier]}</b> legends\n"
-                results_text += f"\n{ '━'*25 }\n\n"
-            
-            results_text += "🎉 <b>Congratulations to all participants!</b>"
+            # Special Achievements Section
+            if achievements['pb'] or achievements['streak']:
+                results_text += f"\n<pre>━━━━━━━━━━━━━━━━━━━━━━</pre>\n\n"
+                results_text += "🎉   <b>SPECIAL ACHIEVEMENTS</b>   🎉\n"
+                if achievements['pb']:
+                    results_text += f"🔥 <b>Personal Best Score:</b> {', '.join(achievements['pb'])}\n"
+                if achievements['streak']:
+                    results_text += f"⚡ <b>Streak Master:</b> {', '.join(achievements['streak'])}\n"
+
+            results_text += f"\nCongratulations to all participants!"
             
             bot.send_message(GROUP_ID, results_text, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
             
-    
     finally:
-        # THIS BLOCK WILL *ALWAYS* RUN, even if errors happen above.
-        # This guarantees that we clean up the session data.
+        # Guaranteed session cleanup
         print(f"Cleaning up session data for session_id: {session_id}")
-        if session_id in QUIZ_SESSIONS: 
-            del QUIZ_SESSIONS[session_id]
-        if session_id in QUIZ_PARTICIPANTS: 
-            del QUIZ_PARTICIPANTS[session_id]
+        if session_id in QUIZ_SESSIONS: del QUIZ_SESSIONS[session_id]
+        if session_id in QUIZ_PARTICIPANTS: del QUIZ_PARTICIPANTS[session_id]
 
-def send_performance_analysis(session, participants):
-    """
-    Analyzes topic-wise data and sends a detailed performance insight report with beautiful formatting.
-    """
-    try:
-        # Aggregate topic and type performance data
-        topic_performance = {}
-        type_performance = {
-            'Theory': {'correct': 0, 'total': 0, 'participants': set()}, 
-            'Practical': {'correct': 0, 'total': 0, 'participants': set()}, 
-            'Case Study': {'correct': 0, 'total': 0, 'participants': set()}
-        }
-        
-        total_correct_answers = 0
-        total_questions_answered = 0
-        participant_accuracies = []
 
-        # Process participant data
-        for user_id, p_data in participants.items():
-            total_correct_answers += p_data.get('score', 0)
-            questions_answered = p_data.get('questions_answered', 0)
-            total_questions_answered += questions_answered
-            
-            if questions_answered > 0:
-                accuracy = (p_data.get('score', 0) / questions_answered) * 100
-                participant_accuracies.append(accuracy)
-            
-            # Process topic scores
-            for topic, scores in p_data.get('topic_scores', {}).items():
-                if topic not in topic_performance:
-                    topic_performance[topic] = {'correct': 0, 'total': 0, 'participants': set()}
-                
-                topic_performance[topic]['correct'] += scores.get('correct', 0)
-                topic_performance[topic]['total'] += scores.get('total', 0)
-                topic_performance[topic]['participants'].add(user_id)
-            
-            # Process performance breakdown for question types
-            for topic, type_data in p_data.get('performance_breakdown', {}).items():
-                for q_type, scores in type_data.items():
-                    if q_type in type_performance:
-                        type_performance[q_type]['correct'] += scores.get('correct', 0)
-                        type_performance[q_type]['total'] += scores.get('total', 0)
-                        type_performance[q_type]['participants'].add(user_id)
-
-        # Calculate insights
-        overall_accuracy = (total_correct_answers / total_questions_answered * 100) if total_questions_answered > 0 else 0
-        
-        # Topic analysis
-        topic_accuracy_list = []
-        for topic, data in topic_performance.items():
-            if data['total'] > 0:
-                accuracy = (data['correct'] / data['total'] * 100)
-                topic_accuracy_list.append({
-                    'topic': topic, 
-                    'accuracy': accuracy, 
-                    'total_questions': data['total'],
-                    'participants': len(data['participants'])
-                })
-        
-        sorted_topics = sorted(topic_accuracy_list, key=lambda x: x['accuracy'], reverse=True)
-        
-        # Find standout performers
-        most_accurate_person = None
-        fastest_correct_person = None
-        
-        if participants:
-            # Most accurate
-            most_accurate_person = max(
-                participants.values(), 
-                key=lambda p: (p['score'] / p['questions_answered'] * 100) if p.get('questions_answered', 0) > 0 else 0
-            )
-            
-            # Fastest on correct answers
-            fastest_candidates = [p for p in participants.values() if p.get('correct_answer_times')]
-            if fastest_candidates:
-                fastest_correct_person = min(
-                    fastest_candidates, 
-                    key=lambda p: sum(p['correct_answer_times']) / len(p['correct_answer_times']) if p['correct_answer_times'] else float('inf')
-                )
-
-        # Build analysis message with mobile-optimized formatting
-        safe_title = escape(session.get('title', 'Quiz Marathon'))
-        
-        analysis_message = f"""📊 <b>PERFORMANCE ANALYSIS</b> 📊
-
-🎯 <b>Marathon:</b> {safe_title}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━
-
-📈 <b>GROUP PERFORMANCE</b>
-
-• <b>Overall Accuracy:</b> {overall_accuracy:.1f}%
-• <b>Total Participants:</b> {len(participants)}
-• <b>Questions Answered:</b> {total_questions_answered}
-<i>(Sabhi participants ke diye gaye total answers)</i>
-• <b>Average Score:</b> {(total_correct_answers / len(participants)):.1f} per person"""
-
-        # Question type analysis
-        if any(data['total'] > 0 for data in type_performance.values()):
-            analysis_message += "\n\n🎯 <b>QUESTION TYPE BREAKDOWN</b>"
-            
-            for q_type, data in type_performance.items():
-                if data['total'] > 0:
-                    accuracy = (data['correct'] / data['total'] * 100)
-                    analysis_message += f"\n• <b>{escape(q_type)}:</b> {accuracy:.1f}% Accuracy"
-
-        # Topic analysis
-        topic_accuracy_list = []
-        for topic, data in topic_performance.items():
-            if data['total'] > 0:
-                accuracy = (data['correct'] / data['total'] * 100)
-                topic_accuracy_list.append({'topic': topic, 'accuracy': accuracy})
-        
-        sorted_topics = sorted(topic_accuracy_list, key=lambda x: x['accuracy'], reverse=True)
-        
-        if sorted_topics:
-            analysis_message += "\n\n📚 <b>TOPIC ANALYSIS</b>"
-            if len(sorted_topics) > 0:
-                strongest = sorted_topics[0]
-                analysis_message += f"\n• 💪 <b>Strongest Topic:</b> {escape(strongest['topic'])} ({strongest['accuracy']:.0f}%)"
-            if len(sorted_topics) > 1 and sorted_topics[-1]['accuracy'] < 70:
-                weakest = sorted_topics[-1]
-                analysis_message += f"\n• ⚠️ <b>Weakest Topic:</b> {escape(weakest['topic'])} ({weakest['accuracy']:.0f}%)"
-
-        # Find standout performers
-        if participants:
-            analysis_message += "\n\n⭐ <b>INDIVIDUAL SHOUT-OUTS</b>"
-            most_accurate_person = max(participants.values(), key=lambda p: (p['score'] / p['questions_answered'] * 100) if p.get('questions_answered', 0) > 0 else 0)
-            accuracy = (most_accurate_person['score'] / most_accurate_person['questions_answered'] * 100) if most_accurate_person.get('questions_answered', 0) > 0 else 0
-            analysis_message += f"\n• 🎯 <b>Accuracy King:</b> {escape(most_accurate_person['name'])} ({accuracy:.0f}%)"
-
-            fastest_candidates = [p for p in participants.values() if p.get('correct_answer_times')]
-            if fastest_candidates:
-                fastest_correct_person = min(fastest_candidates, key=lambda p: sum(p['correct_answer_times']) / len(p['correct_answer_times']))
-                avg_speed = sum(fastest_correct_person['correct_answer_times']) / len(fastest_correct_person['correct_answer_times'])
-                analysis_message += f"\n• 💨 <b>Speed Demon:</b> {escape(fastest_correct_person['name'])} ({avg_speed:.1f}s avg)"
-
-        analysis_message += "\n\n━━━━━━━━━━━━━━━━━━━━━━━━━\n<i>Great effort, everyone! Keep practicing!</i> ✨"
-
-        bot.send_message(GROUP_ID, analysis_message, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
-
-    except Exception as e:
-        print(f"Error in send_performance_analysis: {traceback.format_exc()}")
-        report_error_to_admin(f"Error generating performance analysis:\n{traceback.format_exc()}")
 # =============================================================================
 # 8. TELEGRAM BOT HANDLERS - RANKING & ADMIN UTILITIES
 # =============================================================================
