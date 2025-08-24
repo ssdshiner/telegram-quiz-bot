@@ -37,7 +37,7 @@ ADMIN_USER_ID_STR = os.getenv('ADMIN_USER_ID')
 BOT_USERNAME = "CAVYA_bot"
 PUBLIC_GROUP_COMMANDS = [
     # Schedule & Performance
-    'todayquiz', 'kalkaquiz', 'mystats', 'my_analysis',
+    'todayquiz', 'kalkaquiz', 'mystats', 'my_analysis', 'webquiz',
     # Vault & Tools
     'listfile', 'need', 'section',
     # Written Practice
@@ -795,27 +795,37 @@ def check_uploader_role(user_id):
         print(f"Error checking user role for {user_id}: {e}")
     return False
 
-@app.route('/api/get_quiz/<set_name>')
-def get_quiz_data(set_name):
+from flask_cors import CORS
+
+# Add this line right after app = Flask(__name__) to enable CORS
+CORS(app)
+
+@app.route('/api/save_result', methods=['POST'])
+def save_quiz_result():
     """
-    This is a secure API endpoint for the Web App to fetch quiz questions.
+    API endpoint for the Web App to securely save a user's quiz result.
     """
     try:
-        if not set_name:
-            return json.dumps({'error': 'Quiz set name is required.'}), 400
+        data = request.json
+        # Basic validation
+        if not all(k in data for k in ['userId', 'userName', 'score', 'correct', 'total', 'quizSet']):
+            return json.dumps({'status': 'error', 'message': 'Missing required data fields.'}), 400
 
-        # Fetch questions for the given set from Supabase
-        response = supabase.table('quiz_questions').select('*').eq('quiz_set', set_name).execute()
-
-        if not response.data:
-            return json.dumps({'error': f'No questions found for set: {set_name}'}), 404
-            
-        # Return the questions as a JSON response
-        return json.dumps(response.data), 200, {'Content-Type': 'application/json'}
+        supabase.table('web_quiz_results').insert({
+            'user_id': data['userId'],
+            'user_name': data['userName'],
+            'quiz_set': data['quizSet'],
+            'score_percentage': data['score'],
+            'correct_answers': data['correct'],
+            'total_questions': data['total'],
+        }).execute()
+        
+        print(f"Successfully saved web quiz result for {data['userName']} via API.")
+        return json.dumps({'status': 'success', 'message': 'Result saved.'}), 200
 
     except Exception as e:
-        print(f"API Error in get_quiz_data: {traceback.format_exc()}")
-        return json.dumps({'error': 'An internal server error occurred.'}), 500
+        report_error_to_admin(f"Error in /api/save_result: {traceback.format_exc()}")
+        return json.dumps({'status': 'error', 'message': 'An internal server error occurred.'}), 500
 @bot.message_handler(commands=['add_resource'])
 @permission_required('add_resource')
 def handle_add_resource(msg: types.Message):
@@ -925,64 +935,29 @@ def process_resource_description(msg: types.Message):
 @membership_required
 def handle_web_quiz_command(msg: types.Message):
     """
-    Starts the setup for launching a dynamic web app quiz.
+    Provides a simple button to launch the static web quiz.
     """
     try:
-        response = supabase.table('quiz_presets').select('set_name, button_label').order('id').execute()
-        if not response.data:
-            bot.reply_to(msg, "❌ No Quiz Sets found in the database to launch a web quiz.")
-            return
-
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        buttons = [
-            types.InlineKeyboardButton(
-                preset['button_label'],
-                callback_data=f"webquiz_select_{preset['set_name']}"
-            ) for preset in response.data
-        ]
-        
-        for i in range(0, len(buttons), 2):
-            if i + 1 < len(buttons): markup.row(buttons[i], buttons[i+1])
-            else: markup.row(buttons[i])
-
-        bot.reply_to(msg, "🚀 Please choose a Quiz Set to launch in the Web App:", reply_markup=markup)
-    except Exception as e:
-        report_error_to_admin(f"Error in /webquiz setup: {traceback.format_exc()}")
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('webquiz_select_'))
-def handle_webquiz_set_selection(call: types.CallbackQuery):
-    """
-    Handles the preset selection and provides the final Web App button.
-    """
-    try:
-        selected_set = call.data.split('_', 2)[-1]
-        user_id = call.from_user.id
-        user_name = call.from_user.first_name
+        user_id = msg.from_user.id
+        user_name = msg.from_user.first_name
 
         if not WEBAPP_URL:
             report_error_to_admin("CRITICAL: WEBAPP_URL is not set!")
-            bot.answer_callback_query(call.id, "Error: Web App URL is not configured.", show_alert=True)
+            bot.reply_to(msg, "❌ Error: The Web App URL is not configured.")
             return
 
-        web_app_url = f"{WEBAPP_URL.rstrip('/')}/quiz/?user_id={user_id}&user_name={quote(user_name)}&quiz_set={quote(selected_set)}"
+        # Create the simple URL with only the user's details
+        web_app_url = f"{WEBAPP_URL.rstrip('/')}/quiz/?user_id={user_id}&user_name={quote(user_name)}"
 
         markup = types.InlineKeyboardMarkup()
         markup.add(
-            types.InlineKeyboardButton(f"🚀 Launch '{escape(selected_set)}' Challenge", web_app=types.WebAppInfo(url=web_app_url))
+            types.InlineKeyboardButton("🚀 Launch Quiz Challenge", web_app=types.WebAppInfo(url=web_app_url))
         )
         
-        bot.answer_callback_query(call.id)
-        bot.edit_message_text(
-            f"You have selected: <b>{escape(selected_set)}</b>.\n\nClick the button below to start the challenge!",
-            call.message.chat.id,
-            call.message.message_id,
-            reply_markup=markup,
-            parse_mode="HTML"
-        )
+        bot.reply_to(msg, "Click the button below to start the quiz challenge!", reply_markup=markup)
+
     except Exception as e:
-        report_error_to_admin(f"Error in handle_webquiz_set_selection: {traceback.format_exc()}")
-
-
+        report_error_to_admin(f"Error in /webquiz command: {traceback.format_exc()}")
 # This is now a HELPER function, not a handler. Iske upar se decorator hata diya gaya hai.
 def process_webapp_quiz_results(data):
     """
@@ -2049,6 +2024,7 @@ Hello Admin! Here are your available tools.
 <code>/rankers</code> - Post weekly marathon ranks.
 <code>/alltimerankers</code> - Post all-time marathon ranks.
 <code>/leaderboard</code> - Post random quiz leaderboard.
+<code>/webresult</code> - Show web quiz result summary.
 <code>/bdhai</code> - Congratulate quiz winners.
 <code>/practice</code> - Start daily written practice.
 <code>/remind_checkers</code> - Remind for pending reviews.
@@ -2074,7 +2050,43 @@ Hello Admin! Here are your available tools.
 """
     bot.send_message(msg.chat.id, help_text, parse_mode="HTML")
 
+@bot.message_handler(commands=['webresult'])
+@admin_required
+def handle_web_result_command(msg: types.Message):
+    """
+    Fetches a summary of the latest web quiz results from Supabase.
+    """
+    if not msg.chat.type == 'private':
+        bot.reply_to(msg, "🤫 Please use this command in a private chat with me.")
+        return
 
+    try:
+        # Fetch the last 20 results, ordered by most recent
+        response = supabase.table('web_quiz_results').select('*').order('created_at', desc=True).limit(20).execute()
+        
+        if not response.data:
+            bot.send_message(msg.chat.id, "📊 No web quiz results have been recorded yet.")
+            return
+
+        results = response.data
+        total_participants = len(results)
+        avg_score = sum(r['score_percentage'] for r in results) / total_participants
+
+        summary_text = f"📊 **Latest Web Quiz Results Summary** 📊\n\n"
+        summary_text += f"👥 Total Participants: <b>{total_participants}</b>\n"
+        summary_text += f"🎯 Average Score: <b>{avg_score:.1f}%</b>\n\n"
+        summary_text += "--- <i>Recent Entries</i> ---\n"
+
+        for result in results[:10]: # Show the 10 most recent
+            user_name = escape(result.get('user_name', 'N/A'))
+            score = result.get('score_percentage', 0)
+            summary_text += f"• <b>{user_name}:</b> {score}%\n"
+
+        bot.send_message(msg.chat.id, summary_text, parse_mode="HTML")
+
+    except Exception as e:
+        report_error_to_admin(f"Error in /webresult command: {traceback.format_exc()}")
+        bot.send_message(msg.chat.id, "❌ An error occurred while fetching the results.")
 @bot.message_handler(commands=['leaderboard'])
 @admin_required
 def handle_leaderboard(msg: types.Message):
@@ -3738,78 +3750,6 @@ def format_analysis_for_webapp(analysis_data, user_name):
         },
         'coachInsight': coach_insight
     }
-
-@bot.message_handler(commands=['my_analysis'])
-@membership_required
-def format_holistic_analysis_message(user_name, analysis_data):
-    """
-    Takes raw holistic data and formats it into a rich, detailed analysis message.
-    """
-    if not analysis_data:
-        return f"📊 <b>{escape(user_name)}'s Performance Snapshot</b>\n\nNo quiz data found yet. Participate in more quizzes to build your profile!"
-
-    total_questions = len(analysis_data)
-    total_correct = sum(1 for item in analysis_data if item['is_correct'])
-    overall_accuracy = (total_correct / total_questions * 100) if total_questions > 0 else 0
-
-    topic_stats = {}
-    for item in analysis_data:
-        topic = item.get('topic', 'General Topics')
-        if not topic: topic = 'General Topics' # Handle empty topic names
-        
-        if topic not in topic_stats:
-            topic_stats[topic] = {'correct': 0, 'total': 0}
-        topic_stats[topic]['total'] += 1
-        if item['is_correct']:
-            topic_stats[topic]['correct'] += 1
-
-    topic_accuracies = []
-    for topic, stats in topic_stats.items():
-        accuracy = (stats['correct'] / stats['total'] * 100) if stats['total'] > 0 else 0
-        topic_accuracies.append({'topic': topic, 'accuracy': accuracy, 'count': stats['total']})
-
-    # Sort topics by accuracy
-    sorted_topics = sorted(topic_accuracies, key=lambda x: x['accuracy'], reverse=True)
-    
-    # --- Building the Message ---
-    msg = f"📊 **{escape(user_name)}'s Detailed Performance Analysis**\n\n"
-    msg += f"<i>Here is a deep dive into your quiz performance across all formats.</i>\n"
-    msg += "━━━━━━━━━━━━━━━━━━\n\n"
-    
-    msg += f"🎯 **Overall Performance**\n"
-    msg += f" • <b>Total Questions Attempted:</b> {total_questions}\n"
-    msg += f" • <b>Overall Accuracy:</b> {overall_accuracy:.1f}%\n\n"
-
-    # Strongest Areas (accuracy >= 75% and at least 3 questions attempted)
-    strongest_topics = [t for t in sorted_topics if t['accuracy'] >= 75 and t['count'] >= 3][:5]
-    if strongest_topics:
-        msg += f"💪 **Your Top 5 Strongest Areas**\n"
-        for t in strongest_topics:
-            msg += f"  • <code>{escape(t['topic']):<25}</code> | <b>{t['accuracy']:.0f}%</b> Accuracy <i>({t['count']} ques)</i>\n"
-        msg += "\n"
-
-    # Weakest Areas (accuracy < 60% and at least 3 questions attempted)
-    weakest_topics = [t for t in sorted_topics if t['accuracy'] < 60 and t['count'] >= 3][:5]
-    if weakest_topics:
-        # Sort weakest topics from lowest accuracy to highest
-        weakest_topics.sort(key=lambda x: x['accuracy'])
-        msg += f"⚠️ **Your Top 5 Areas for Improvement**\n"
-        for t in weakest_topics:
-            msg += f"  • <code>{escape(t['topic']):<25}</code> | <b>{t['accuracy']:.0f}%</b> Accuracy <i>({t['count']} ques)</i>\n"
-        msg += "\n"
-        
-    # Coach's Insight
-    msg += f"💡 **Coach's Insight**\n"
-    if overall_accuracy > 80 and weakest_topics:
-        insight = f"Your overall performance is excellent! To become truly unbeatable, focus on improving your accuracy in topics like '<b>{escape(weakest_topics[0]['topic'])}</b>'."
-    elif overall_accuracy > 60:
-        insight = f"You have a solid foundation. Consistency is key now. Keep practicing your weaker areas like '<b>{escape(weakest_topics[0]['topic'] if weakest_topics else 'some topics')}</b>' to see a great jump in your rank."
-    else:
-        insight = "Let's build a stronger foundation. Start by revisiting the basics of your weakest topics. Every correct answer is progress! You can do it."
-    msg += f"<i>{insight}</i>\n"
-    
-    return msg
-
 @bot.message_handler(commands=['my_analysis'])
 @membership_required
 def handle_my_analysis_command(msg: types.Message):
@@ -3820,13 +3760,10 @@ def handle_my_analysis_command(msg: types.Message):
     user_name = escape(msg.from_user.first_name)
     
     try:
-        # Step 1: Naye powerful function se saara data fetch karna
         response = supabase.rpc('get_user_holistic_analysis', {'p_user_id': user_id}).execute()
         
-        # Step 2: Naye formatting function se message banana
         analysis_text = format_holistic_analysis_message(user_name, response.data)
         
-        # Step 3: Naya "Delete" button banana
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("🗑️ Delete This Analysis", callback_data="delete_analysis_msg"))
         
@@ -3835,7 +3772,6 @@ def handle_my_analysis_command(msg: types.Message):
             allow_sending_without_reply=True
         )
 
-        # Step 4: Group mein message bhejna
         bot.send_message(
             msg.chat.id,
             analysis_text,
@@ -3844,10 +3780,8 @@ def handle_my_analysis_command(msg: types.Message):
             reply_parameters=reply_params
         )
 
-        # Step 5: Background mein DM bhejne ki koshish karna (bina group mein bataye)
         try:
             if ANALYSIS_WEBAPP_URL:
-                # Webapp ke liye data alag se format ho sakta hai, abhi ke liye simple rakhte hain
                 dm_markup = types.InlineKeyboardMarkup()
                 dm_markup.add(types.InlineKeyboardButton("📊 Open Full Dashboard", url=ANALYSIS_WEBAPP_URL))
                 bot.send_message(
@@ -3856,58 +3790,45 @@ def handle_my_analysis_command(msg: types.Message):
                     reply_markup=dm_markup
                 )
         except Exception as dm_error:
-            # Agar DM fail hota hai, to chup-chaap error ko log karo, group mein mat batao
             print(f"Silent DM fail for {user_id}: {dm_error}")
 
     except Exception as e:
-        print(f"Error generating analysis for {user_id}:\n{traceback.format_exc()}")
-        report_error_to_admin(f"Error generating analysis for {user_id}:\n{e}")
+        report_error_to_admin(f"Error generating analysis for {user_id}:\n{traceback.format_exc()}")
 
 
 @bot.callback_query_handler(func=lambda call: call.data == 'delete_analysis_msg')
 def handle_delete_message_callback(call: types.CallbackQuery):
-    """Deletes the message this button is attached to."""
+    """Deletes the analysis message, but only if the clicker is the original user or an admin."""
     try:
-        bot.delete_message(call.message.chat.id, call.message.message_id)
-        bot.answer_callback_query(call.id, "Message deleted.")
-    except Exception as e:
-        bot.answer_callback_query(call.id, "Could not delete the message.")
-        print(f"Error deleting message: {e}")
+        original_user_id = call.message.reply_to_message.from_user.id
+        clicker_id = call.from_user.id
 
-@bot.message_handler(content_types=['web_app_data'])
-@membership_required
-def process_webapp_quiz_results(data):
+        chat_admins = bot.get_chat_administrators(call.message.chat.id)
+        admin_ids = [admin.user.id for admin in chat_admins]
+
+        if clicker_id == original_user_id or clicker_id in admin_ids:
+            bot.delete_message(call.message.chat.id, call.message.message_id)
+            bot.delete_message(call.message.chat.id, call.message.reply_to_message.message_id)
+            bot.answer_callback_query(call.id, "Analysis deleted.")
+        else:
+            bot.answer_callback_query(call.id, "Only the person who requested this or an admin can delete it.", show_alert=True)
+            
+    except Exception as e:
+        report_error_to_admin(f"Error in delete_analysis_callback: {traceback.format_exc()}")
+        bot.answer_callback_query(call.id, "An error occurred.")
+
+
+def process_webapp_quiz_result(data):
     """
-    UPGRADED: Handles the FEMA quiz results, saves them to Supabase,
-    and then posts a summary to the group.
+    Helper function to format and send the web app quiz results to the group.
     """
     try:
-        user_id = data.get('userId')
         user_name = escape(data.get('userName', 'A participant'))
         score = data.get('score', 0)
         correct = data.get('correct', 0)
         total = data.get('total', 0)
         quiz_set = escape(data.get('quizSet', 'Web Quiz'))
 
-        # --- NEW: Save the detailed results to Supabase ---
-        try:
-            # We will calculate the strong/weak topics here in the bot if needed,
-            # or just save the core stats. Let's save the core stats for now.
-            supabase.table('web_quiz_results').insert({
-                'user_id': user_id,
-                'user_name': user_name,
-                'quiz_set': quiz_set,
-                'score_percentage': score,
-                'correct_answers': correct,
-                'total_questions': total,
-                # The other fields like time_taken can be added if sent from the webapp
-            }).execute()
-            print(f"Successfully saved web quiz result for {user_name} to Supabase.")
-        except Exception as db_error:
-            report_error_to_admin(f"Error saving webapp quiz result to Supabase: {traceback.format_exc()}")
-        # --- End of New Logic ---
-        
-        # Create a nice summary message to post in the group
         summary = f"🎉 **Web Quiz Result for {user_name}!** 🎉\n\n"
         summary += f"📚 **Topic:** {quiz_set}\n"
         
@@ -3926,28 +3847,24 @@ def process_webapp_quiz_results(data):
         report_error_to_admin(f"Error processing webapp quiz result: {traceback.format_exc()}")
 
 
-
 @bot.message_handler(content_types=['web_app_data'])
 @membership_required
 def handle_webapp_data(msg: types.Message):
     """
-    Handles data from the Mini App. It now understands both commands and JSON results.
+    Handles all data received from the Mini App, routing it correctly.
     """
     data_from_webapp = msg.web_app_data.data
     print(f"Received data from Mini App: {data_from_webapp}")
 
-    # --- NEW: Check if the data is a JSON string ---
     if data_from_webapp.strip().startswith('{'):
         try:
             payload = json.loads(data_from_webapp)
             if payload.get('type') == 'webappQuizResult':
-                process_webapp_quiz_results(payload)
+                process_webapp_quiz_result(payload)
                 return
         except json.JSONDecodeError:
             print("Received a non-JSON string that started with {.")
-            # Fallback to command processing
     
-    # --- Existing Command Router Logic ---
     msg.text = data_from_webapp
     handler_to_call = COMMAND_ROUTER.get(msg.text)
     
@@ -3983,7 +3900,6 @@ def handle_mystats_command(msg: types.Message):
         )
 
         if not stats or not stats.get('user_name'):
-            # ... (error message logic remains the same)
             error_message = f"""❌ <b>No Stats Found</b>
 👋 Hi <b>{user_name}</b>!
 🎯 <i>No quiz data found for you yet.</i>
@@ -3995,7 +3911,6 @@ def handle_mystats_command(msg: types.Message):
             bot.send_message(msg.chat.id, error_message, parse_mode="HTML", reply_parameters=reply_params)
             return
 
-        # --- Create stats message ---
         stats_message = f"""📊 <b>My Stats: {user_name}</b> 📊
 
 ━━ 🏆 <b>Rankings</b> ━━
@@ -4014,9 +3929,7 @@ def handle_mystats_command(msg: types.Message):
 • <b>Copies Checked:</b> {stats.get('copies_checked', 0)}
 """
 
-        # --- Coach's Comment Logic (remains the same) ---
         coach_comment = ""
-        # ... (Your existing coach comment logic remains exactly the same here) ...
         APPRECIATION_STREAK = 8;current_streak=stats.get('current_streak',0);total_quizzes=stats.get('total_quizzes_played',0);weekly_rank=stats.get('weekly_rank');all_time_rank=stats.get('all_time_rank');total_submissions=stats.get('total_submissions',0);avg_performance=stats.get('average_performance',0)
         if current_streak>=APPRECIATION_STREAK:coach_comment=f"Gazab ki consistency! 🔥 {current_streak}-quiz ki streak pe ho, lage raho!"
         elif current_streak==(APPRECIATION_STREAK-1):coach_comment="Bas ek aur quiz aur aapka naya streak milestone poora ho jayega! You can do it! 🚀"
@@ -4029,30 +3942,21 @@ def handle_mystats_command(msg: types.Message):
         elif total_quizzes<3:coach_comment="Aapke liye to abhi quiz shuru hui hai! Participate karte rahiye aur apne stats ko grow karte dekhein! 🌱"
         else:coach_comment="Consistency hi success ki chaabi hai. Practice karte rahiye, aap aacha kar rahe hain! 👍"
         
-        # --- Final message assembly ---
         final_stats_message = stats_message + f"\n\n💡 <b>Coach's Tip:</b> {coach_comment}"
         
-        # --- NEW: Smart Splitting Logic ---
-        if len(final_stats_message) > 4000: # 4096 is the limit, we use 4000 for safety
-            # Message lamba hai, to isey do hisso mein todo
+        if len(final_stats_message) > 4000:
             part1 = stats_message
             part2 = f"💡 <b>Coach's Tip:</b> {coach_comment}"
-            
-            # Pehla part bhejo
             first_msg = bot.send_message(msg.chat.id, part1, parse_mode="HTML", reply_parameters=reply_params)
-            
-            # Doosra part pehle ke reply mein bhejo, delete button ke saath
             markup = types.InlineKeyboardMarkup()
-            markup.add(types.InlineKeyboardButton("🗑️ Delete Stats", callback_data=f"delete_split_msg_{first_msg.message_id}")) # Pass first msg id
+            markup.add(types.InlineKeyboardButton("🗑️ Delete Stats", callback_data=f"delete_split_msg_{first_msg.message_id}"))
             bot.send_message(msg.chat.id, part2, parse_mode="HTML", reply_to_message_id=first_msg.message_id, reply_markup=markup)
         else:
-            # Message chota hai, to ek hi baar mein bhejo
             markup = types.InlineKeyboardMarkup()
             markup.add(types.InlineKeyboardButton("🗑️ Delete Stats", callback_data="delete_stats_msg"))
             bot.send_message(msg.chat.id, final_stats_message, parse_mode="HTML", reply_markup=markup, reply_parameters=reply_params)
 
     except Exception as e:
-        print(f"Error in /mystats: {traceback.format_exc()}")
         report_error_to_admin(traceback.format_exc())
         bot.reply_to(msg, "❌ <i>Unable to fetch your stats right now. Please try again later.</i>", parse_mode="HTML")
 @bot.callback_query_handler(func=lambda call: call.data.startswith('delete_stats_msg') or call.data.startswith('delete_split_msg_'))
