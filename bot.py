@@ -795,7 +795,27 @@ def check_uploader_role(user_id):
         print(f"Error checking user role for {user_id}: {e}")
     return False
 
+@app.route('/api/get_quiz/<set_name>')
+def get_quiz_data(set_name):
+    """
+    This is a secure API endpoint for the Web App to fetch quiz questions.
+    """
+    try S
+        if not set_name:
+            return json.dumps({'error': 'Quiz set name is required.'}), 400
 
+        # Fetch questions for the given set from Supabase
+        response = supabase.table('quiz_questions').select('*').eq('quiz_set', set_name).execute()
+
+        if not response.data:
+            return json.dumps({'error': f'No questions found for set: {set_name}'}), 404
+            
+        # Return the questions as a JSON response
+        return json.dumps(response.data), 200, {'Content-Type': 'application/json'}
+
+    except Exception as e:
+        print(f"API Error in get_quiz_data: {traceback.format_exc()}")
+        return json.dumps({'error': 'An internal server error occurred.'}), 500
 @bot.message_handler(commands=['add_resource'])
 @permission_required('add_resource')
 def handle_add_resource(msg: types.Message):
@@ -901,6 +921,131 @@ def process_resource_description(msg: types.Message):
     finally:
         if user_id in user_states:
             del user_states[user_id]
+@bot.message_handler(commands=['webquiz'])
+@membership_required
+def handle_web_quiz_command(msg: types.Message):
+    """
+    Starts the setup for launching a dynamic web app quiz.
+    """
+    try:
+        response = supabase.table('quiz_presets').select('set_name, button_label').order('id').execute()
+        if not response.data:
+            bot.reply_to(msg, "❌ No Quiz Sets found in the database to launch a web quiz.")
+            return
+
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        buttons = [
+            types.InlineKeyboardButton(
+                preset['button_label'],
+                callback_data=f"webquiz_select_{preset['set_name']}"
+            ) for preset in response.data
+        ]
+        
+        for i in range(0, len(buttons), 2):
+            if i + 1 < len(buttons): markup.row(buttons[i], buttons[i+1])
+            else: markup.row(buttons[i])
+
+        bot.reply_to(msg, "🚀 Please choose a Quiz Set to launch in the Web App:", reply_markup=markup)
+    except Exception as e:
+        report_error_to_admin(f"Error in /webquiz setup: {traceback.format_exc()}")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('webquiz_select_'))
+def handle_webquiz_set_selection(call: types.CallbackQuery):
+    """
+    Handles the preset selection and provides the final Web App button.
+    """
+    try:
+        selected_set = call.data.split('_', 2)[-1]
+        user_id = call.from_user.id
+        user_name = call.from_user.first_name
+
+        if not WEBAPP_URL:
+            report_error_to_admin("CRITICAL: WEBAPP_URL is not set!")
+            bot.answer_callback_query(call.id, "Error: Web App URL is not configured.", show_alert=True)
+            return
+
+        web_app_url = f"{WEBAPP_URL.rstrip('/')}/quiz/?user_id={user_id}&user_name={quote(user_name)}&quiz_set={quote(selected_set)}"
+
+        markup = types.InlineKeyboardMarkup()
+        markup.add(
+            types.InlineKeyboardButton(f"🚀 Launch '{escape(selected_set)}' Challenge", web_app=types.WebAppInfo(url=web_app_url))
+        )
+        
+        bot.answer_callback_query(call.id)
+        bot.edit_message_text(
+            f"You have selected: <b>{escape(selected_set)}</b>.\n\nClick the button below to start the challenge!",
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=markup,
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        report_error_to_admin(f"Error in handle_webquiz_set_selection: {traceback.format_exc()}")
+
+
+# This is now a HELPER function, not a handler. Iske upar se decorator hata diya gaya hai.
+def process_webapp_quiz_results(data):
+    """
+    Helper function to format and send the web app quiz results to the group.
+    """
+    try:
+        user_name = escape(data.get('userName', 'A participant'))
+        score = data.get('score', 0)
+        correct = data.get('correct', 0)
+        total = data.get('total', 0)
+        quiz_set = escape(data.get('quizSet', 'Web Quiz'))
+
+        summary = f"🎉 **Web Quiz Result: {user_name}!** 🎉\n\n"
+        summary += f"📚 **Topic:** {quiz_set}\n"
+        
+        if score >= 80:
+            summary += f"Wow! An outstanding score of <b>{score}%</b>! 🏆\n"
+        elif score >= 60:
+            summary += f"Great job! A solid score of <b>{score}%</b>. 👍\n"
+        else:
+            summary += f"Good effort! A score of <b>{score}%</b>. Keep practicing! 🌱\n"
+            
+        summary += f"You answered <b>{correct} out of {total}</b> questions correctly."
+        
+        bot.send_message(GROUP_ID, summary, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
+        
+    except Exception as e:
+        report_error_to_admin(f"Error processing webapp quiz result: {traceback.format_exc()}")
+
+# Yeh ab Web App Data ke liye Akela (Single) Handler hai
+@bot.message_handler(content_types=['web_app_data'])
+@membership_required
+def handle_webapp_data(msg: types.Message):
+    """
+    Handles data from the Mini App. It now understands both commands and JSON results.
+    """
+    data_from_webapp = msg.web_app_data.data
+    print(f"Received data from Mini App: {data_from_webapp}")
+
+    # Check if the data is a JSON string for quiz results
+    if data_from_webapp.strip().startswith('{'):
+        try:
+            payload = json.loads(data_from_webapp)
+            if payload.get('type') == 'webappQuizResult':
+                process_webapp_quiz_results(payload)
+                return
+        except json.JSONDecodeError:
+            print("Received a non-JSON string that started with {.")
+    
+    # Fallback to command router logic if it's not a quiz result
+    msg.text = data_from_webapp
+    handler_to_call = COMMAND_ROUTER.get(msg.text)
+    
+    if msg.text.startswith('/need'):
+        handler_to_call = COMMAND_ROUTER.get('/need')
+
+    if handler_to_call:
+        try:
+            handler_to_call(msg)
+        except Exception as e:
+            report_error_to_admin(f"Error executing Web App command '{msg.text}':\n{traceback.format_exc()}")
+    else:
+        bot.send_message(msg.chat.id, f"Received an unknown action from the dashboard: {escape(msg.text)}")
 
 # =============================================================================
 # 8. TELEGRAM BOT HANDLERS - CORE COMMANDS
@@ -1885,17 +2030,10 @@ Hello Admin! Here are your available tools.
 <code>Click any command to copy it.</code>
 ━━━━━━━━━━━━━━━━━━
 
-<b>📣 Content & Engagement</b>
-<code>/motivate</code> - Send a motivational quote.
-<code>/studytip</code> - Share a useful study tip.
-<code>/examcountdown</code> - Post exam countdown with stats.
-<code>/announce</code> - Create & pin a message.
-<code>/message</code> - Send content to group.
-<code>/reset_content</code> - Reset quotes/tips usage.
-
 <b>🧠 Quiz & Marathon</b>
 <code>/quizmarathon</code> - Start a standard marathon.
 <code>/teambattle</code> - Start a group vs group quiz.
+<code>/webquiz</code> - Launch a quiz in the Web App.
 <code>/randomquiz</code> - Post a single random quiz.
 <code>/randomquizvisual</code> - Post a visual random quiz.
 <code>/roko</code> - Force-stop a running marathon.
@@ -1925,6 +2063,14 @@ Hello Admin! Here are your available tools.
 <code>/run_checks</code> - Manually run warning/appreciation checks.
 <code>/sync_members</code> - Sync old members to tracker.
 <code>/prunedms</code> - Clean the inactive DM list.
+
+<b>📣 Content & Engagement</b>
+<code>/motivate</code> - Send a motivational quote.
+<code>/studytip</code> - Share a useful study tip.
+<code>/examcountdown</code> - Post exam countdown with stats.
+<code>/announce</code> - Create & pin a message.
+<code>/message</code> - Send content to group.
+<code>/reset_content</code> - Reset quotes/tips usage.
 """
     bot.send_message(msg.chat.id, help_text, parse_mode="HTML")
 
@@ -3741,39 +3887,91 @@ COMMAND_ROUTER = {
 
 @bot.message_handler(content_types=['web_app_data'])
 @membership_required
+def process_webapp_quiz_results(data):
+    """
+    UPGRADED: Handles the FEMA quiz results, saves them to Supabase,
+    and then posts a summary to the group.
+    """
+    try:
+        user_id = data.get('userId')
+        user_name = escape(data.get('userName', 'A participant'))
+        score = data.get('score', 0)
+        correct = data.get('correct', 0)
+        total = data.get('total', 0)
+        quiz_set = escape(data.get('quizSet', 'Web Quiz'))
+
+        # --- NEW: Save the detailed results to Supabase ---
+        try:
+            # We will calculate the strong/weak topics here in the bot if needed,
+            # or just save the core stats. Let's save the core stats for now.
+            supabase.table('web_quiz_results').insert({
+                'user_id': user_id,
+                'user_name': user_name,
+                'quiz_set': quiz_set,
+                'score_percentage': score,
+                'correct_answers': correct,
+                'total_questions': total,
+                # The other fields like time_taken can be added if sent from the webapp
+            }).execute()
+            print(f"Successfully saved web quiz result for {user_name} to Supabase.")
+        except Exception as db_error:
+            report_error_to_admin(f"Error saving webapp quiz result to Supabase: {traceback.format_exc()}")
+        # --- End of New Logic ---
+        
+        # Create a nice summary message to post in the group
+        summary = f"🎉 **Web Quiz Result for {user_name}!** 🎉\n\n"
+        summary += f"📚 **Topic:** {quiz_set}\n"
+        
+        if score >= 80:
+            summary += f"Wow! An outstanding score of <b>{score}%</b>! 🏆\n"
+        elif score >= 60:
+            summary += f"Great job! A solid score of <b>{score}%</b>. 👍\n"
+        else:
+            summary += f"Good effort! A score of <b>{score}%</b>. Keep practicing! 🌱\n"
+            
+        summary += f"You answered <b>{correct} out of {total}</b> questions correctly."
+        
+        bot.send_message(GROUP_ID, summary, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
+        
+    except Exception as e:
+        report_error_to_admin(f"Error processing webapp quiz result: {traceback.format_exc()}")
+
+
+
+@bot.message_handler(content_types=['web_app_data'])
+@membership_required
 def handle_webapp_data(msg: types.Message):
     """
-    Handles commands sent from the Mini App via tg.sendData().
-    This acts as a smart, dynamic router to the appropriate command handler.
+    Handles data from the Mini App. It now understands both commands and JSON results.
     """
-    command_from_webapp = msg.web_app_data.data
-    print(f"Received command from Mini App: {command_from_webapp}")
+    data_from_webapp = msg.web_app_data.data
+    print(f"Received data from Mini App: {data_from_webapp}")
 
-    # msg.text object ko update karna taki baaki functions ise use kar sakein
-    msg.text = command_from_webapp
+    # --- NEW: Check if the data is a JSON string ---
+    if data_from_webapp.strip().startswith('{'):
+        try:
+            payload = json.loads(data_from_webapp)
+            if payload.get('type') == 'femaQuizResult':
+                process_webapp_quiz_results(payload)
+                return
+        except json.JSONDecodeError:
+            print("Received a non-JSON string that started with {.")
+            # Fallback to command processing
     
-    # --- DYNAMIC ROUTING LOGIC ---
-    handler_to_call = None
+    # --- Existing Command Router Logic ---
+    msg.text = data_from_webapp
+    handler_to_call = COMMAND_ROUTER.get(msg.text)
     
-    # Pehle exact match dhoondho
-    if command_from_webapp in COMMAND_ROUTER:
-        handler_to_call = COMMAND_ROUTER[command_from_webapp]
-    
-    # Agar exact match nahi mila, to startswith waale commands check karo
-    elif command_from_webapp.startswith('/need'):
-        handler_to_call = COMMAND_ROUTER['/need']
+    if msg.text.startswith('/need'):
+        handler_to_call = COMMAND_ROUTER.get('/need')
 
-    # Agar koi function mila hai to use call karo
     if handler_to_call:
         try:
             handler_to_call(msg)
         except Exception as e:
-            report_error_to_admin(f"Error executing Web App command '{command_from_webapp}':\n{traceback.format_exc()}")
-            bot.send_message(msg.chat.id, "Sorry, there was an error processing your request from the dashboard.")
+            report_error_to_admin(f"Error executing Web App command '{msg.text}':\n{traceback.format_exc()}")
     else:
-        # Fallback agar command router mein nahi hai
-        bot.send_message(msg.chat.id, f"Received an unknown action from the dashboard: {escape(command_from_webapp)}")
-
+        bot.send_message(msg.chat.id, f"Received an unknown action from the dashboard: {escape(msg.text)}")
 
 
 @bot.message_handler(commands=['mystats'])
