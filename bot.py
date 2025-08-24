@@ -128,6 +128,8 @@ scheduled_tasks = []
 # Temporary storage for batch photo uploads
 photo_batches = {} # Stores photos by media_group_id or user_id
 batch_timers = {} # Stores timers to process the batch
+# Stores the current state of a team battle quiz
+team_battle_session = {}
 # Global Variables for Quiz Marathon System
 QUIZ_SESSIONS = {}
 QUIZ_PARTICIPANTS = {}
@@ -1063,7 +1065,430 @@ def process_photo_batch(batch_key, user_id):
             del batch_timers[user_id]
         if user_id in user_states and user_states[user_id].get('action') in ['adding_rq_photos', 'adding_qm_photos']:
             del user_states[user_id]
+@bot.message_handler(commands=['teambattle'])
+@permission_required('quizmarathon') # Hum 'quizmarathon' permission use kar rahe hain
+def handle_team_battle_command(message):
+    global team_battle_session
+    
+    # Purana session clear karna
+    team_battle_session = {}
+    
+    session_id = str(message.message_id)
+    admin_id = message.from_user.id
 
+    team_battle_session = {
+        'session_id': session_id,
+        'status': 'joining',
+        'admin_id': admin_id,
+        'participants': {} # user_id: user_name
+    }
+    
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("✅ Click Here to Join!", callback_data=f"tb_join_{session_id}"))
+    markup.add(types.InlineKeyboardButton("🚀 Start the Battle! (Admin Only)", callback_data=f"tb_start_{session_id}"))
+
+    bot.send_message(
+        message.chat.id,
+        "⚔️ **A New Team Battle is starting!** ⚔️\n\nReady for the challenge? Click the button below to join the fight!\n\n**Players Joined:**\n_(None yet)_",
+        reply_markup=markup,
+        parse_mode="HTML"
+    )
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('tb_join_'))
+def handle_team_battle_join(call: types.CallbackQuery):
+    global team_battle_session
+    
+    session_id = call.data.split('_')[-1]
+    user_id = call.from_user.id
+    user_name = call.from_user.first_name
+
+    # Check if this is the correct active session
+    if not team_battle_session or team_battle_session.get('session_id') != session_id or team_battle_session.get('status') != 'joining':
+        bot.answer_callback_query(call.id, "This quiz joining period has expired.", show_alert=True)
+        return
+
+    # Check if user has already joined
+    if user_id in team_battle_session['participants']:
+        bot.answer_callback_query(call.id, "You have already joined the battle!")
+        return
+    
+    # Add user to participants
+    team_battle_session['participants'][user_id] = user_name
+    bot.answer_callback_query(call.id, "You're in! Good luck!")
+
+    # Update the original message with the new participant list
+    participants_list = "\n".join([f"• {name}" for name in team_battle_session['participants'].values()])
+    
+    new_text = (
+        "⚔️ **A New Team Battle is starting!** ⚔️\n\n"
+        "Ready for the challenge? Click the button below to join the fight!\n\n"
+        "**Players Joined:**\n"
+        f"{participants_list}"
+    )
+
+    try:
+        bot.edit_message_text(new_text, call.message.chat.id, call.message.message_id, reply_markup=call.message.reply_markup, parse_mode="HTML")
+    except ApiTelegramException as e:
+        if "message is not modified" in e.description:
+            pass # Ignore this error, it's harmless
+        else:
+            raise e
+@bot.callback_query_handler(func=lambda call: call.data.startswith('tb_start_'))
+def handle_team_battle_start(call: types.CallbackQuery):
+    global team_battle_session
+    
+    session_id = call.data.split('_')[-1]
+    user_id = call.from_user.id
+
+    # Security Check: Sirf admin hi start kar sakta hai
+    if not team_battle_session or user_id != team_battle_session.get('admin_id'):
+        bot.answer_callback_query(call.id, "Only the admin who started the quiz can begin the battle.", show_alert=True)
+        return
+
+    # Player Count Check: Kam se kam 2 player hone chahiye
+    if len(team_battle_session.get('participants', {})) < 2:
+        bot.answer_callback_query(call.id, "Not enough players to start a battle. At least 2 players are needed.", show_alert=True)
+        return
+        
+    try:
+        # Purane message se buttons hata do
+        bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id)
+        bot.answer_callback_query(call.id, "Let the battle begin! Forming teams...")
+
+        # --- Team Formation Logic ---
+        participants_dict = team_battle_session['participants']
+        participants_list = list(participants_dict.items()) # [(user_id, user_name), ...]
+        random.shuffle(participants_list)
+
+        mid_point = len(participants_list) // 2
+        team1_list = participants_list[:mid_point]
+        team2_list = participants_list[mid_point:]
+
+        # --- Team Naming Ceremony ---
+        adjectives = ["Dhaakad", "Rowdy", "Mighty", "Fearless", "Cosmic", "Galactic", "Blazing"]
+        nouns = ["Dragons 🐲", "Raptors 🦅", "Titans 🔥", "Wizards 🧙", "Ninjas 🥷", "Samurais 🗡️", "Commandos 🎖️"]
+        
+        team1_name = f"{random.choice(adjectives)} {random.choice(nouns)}"
+        team2_name = f"{random.choice(adjectives)} {random.choice(nouns)}"
+        while team1_name == team2_name: # Ensure names are different
+            team2_name = f"{random.choice(adjectives)} {random.choice(nouns)}"
+
+        # --- Captain Selection ---
+        captain1_id, captain1_name = random.choice(team1_list)
+        captain2_id, captain2_name = random.choice(team2_list)
+
+        # --- Update Session State ---
+        team_battle_session['status'] = 'active'
+        team_battle_session['team1'] = {'name': team1_name, 'members': dict(team1_list), 'captain_id': captain1_id, 'score': 0}
+        team_battle_session['team2'] = {'name': team2_name, 'members': dict(team2_list), 'captain_id': captain2_id, 'score': 0}
+
+        # --- Final Team Announcement ---
+        team1_members_str = "\n".join([f"• {name} {'👑' if uid == captain1_id else ''}" for uid, name in team1_list])
+        team2_members_str = "\n".join([f"• {name} {'👑' if uid == captain2_id else ''}" for uid, name in team2_list])
+        
+        announcement = (
+            "**The teams are set and the battle is about to begin!**\n\n"
+            f"**TEAM 1: {team1_name}**\n"
+            f"{team1_members_str}\n\n"
+            f"**TEAM 2: {team2_name}**\n"
+            f"{team2_members_str}\n\n"
+            "_(👑 denotes the Team Captain)_\n\n"
+            "Get ready! The first question is coming up..."
+        )
+        
+        bot.send_message(call.message.chat.id, announcement, parse_mode="HTML")
+        
+        # TODO: Start the quiz loop in the next step
+        # For now, we'll just log that it's ready
+        print("Quiz is ready to start with teams:", team_battle_session)
+        # Wait 5 seconds before starting the quiz
+        time.sleep(5)
+        start_quiz_game_loop(call.message.chat.id, session_id)
+    except Exception as e:
+        bot.answer_callback_query(call.id, "An error occurred while starting the battle.", show_alert=True)
+        report_error_to_admin(f"Error in handle_team_battle_start: {traceback.format_exc()}")
+def start_quiz_game_loop(chat_id, session_id):
+    global team_battle_session
+    try:
+        # Step 1: Database se questions fetch karna
+        # Abhi ke liye, hum maan rahe hain ki team battle ke questions 'General_Battle' set se aayenge.
+        # Isko hum baad mein dynamic bana sakte hain.
+        QUIZ_SET_FOR_BATTLE = "Idt-8" # <<--- AAP ISKO APNE QUIZ SET NAAM SE BADAL SAKTE HAIN
+        NUMBER_OF_QUESTIONS = 15 # Aap yahan question count badal sakte hain
+
+        response = supabase.table('quiz_questions').select('*').eq('quiz_set', QUIZ_SET_FOR_BATTLE).limit(NUMBER_OF_QUESTIONS).execute()
+        
+        if not response.data:
+            bot.send_message(chat_id, "❌ Error: Is quiz ke liye database mein questions nahi mile. Battle cannot start.")
+            return
+
+        questions = response.data
+        random.shuffle(questions)
+        
+        # Session mein questions aur scores save karna
+        team_battle_session['questions'] = questions
+        team_battle_session['current_question_index'] = 0
+        
+        # Step 2: Live Dashboard banana
+        team1 = team_battle_session['team1']
+        team2 = team_battle_session['team2']
+        
+        dashboard_text = (
+            f"**{team1['name']}** vs **{team2['name']}**\n\n"
+            f"SCORE: **{team1['score']}** - **{team2['score']}**\n"
+            "------------------------------------\n"
+            "Waiting for the first question..."
+        )
+        
+        dashboard_message = bot.send_message(chat_id, dashboard_text, parse_mode="HTML")
+        team_battle_session['dashboard_message_id'] = dashboard_message.message_id
+
+        # Step 3: Pehla question bhejna
+        send_next_battle_question(chat_id, session_id)
+
+    except Exception as e:
+        report_error_to_admin(f"Error in start_quiz_game_loop: {traceback.format_exc()}")
+        bot.send_message(chat_id, "❌ Quiz start karte waqt ek critical error aa gaya.")
+
+
+def send_next_battle_question(chat_id, session_id):
+    global team_battle_session
+    try:
+        session = team_battle_session
+        idx = session['current_question_index']
+        
+        # --- POWER-UP EFFECT LOGIC (BEFORE SENDING QUESTION) ---
+        # Check if the other team used 'Double Trouble' on us
+        opponent_team_key = 'team2' if session['team1']['name'] in session.get('last_event', '') else 'team1'
+        if session.get(opponent_team_key, {}).get('active_powerup') == 'DoubleTrouble':
+            # Find a 'hard' question if possible
+            hard_question = next((q for q in session['questions'][idx:] if q.get('difficulty') == 'hard'), None)
+            if hard_question:
+                # Swap current question with the hard one
+                hard_question_index = session['questions'].index(hard_question)
+                session['questions'][idx], session['questions'][hard_question_index] = session['questions'][hard_question_index], session['questions'][idx]
+                print("Double Trouble Activated! Swapped with a hard question.")
+            session[opponent_team_key]['active_powerup'] = None # Use power-up
+
+        question = session['questions'][idx]
+        
+        options = [unescape(str(question.get(f'Option {c}', ''))) for c in ['A', 'B', 'C', 'D']]
+        correct_answer_letter = str(question.get('Correct Answer', 'A')).upper()
+        correct_option_index = ['A', 'B', 'C', 'D'].index(correct_answer_letter)
+        
+        poll_question = f"Q{idx + 1}/{len(session['questions'])}: {unescape(question.get('Question', ''))}"
+        
+        poll_message = bot.send_poll(
+            chat_id=chat_id, question=poll_question, options=options, type='quiz',
+            correct_option_id=correct_option_index, is_anonymous=False,
+            open_period=int(question.get('time_allotted', 30)),
+            explanation=escape(unescape(str(question.get('Explanation', '')))), explanation_parse_mode="HTML"
+        )
+        
+        session['current_poll_id'] = poll_message.poll.id
+        session['question_start_time'] = datetime.datetime.now(IST)
+        session['first_correct_user'] = None # Reset for Speed Demon bonus
+
+    except Exception as e:
+        report_error_to_admin(f"Error in send_next_battle_question: {traceback.format_exc()}")
+        bot.send_message(chat_id, "❌ Agla question bhejte waqt ek error aa gaya.")
+def update_battle_dashboard(chat_id, session_id, last_event=""):
+    session = team_battle_session
+    team1 = session['team1']
+    team2 = session['team2']
+    
+    dashboard_text = (
+        f"**{team1['name']}** vs **{team2['name']}**\n\n"
+        f"SCORE: **{team1['score']}** - **{team2['score']}**\n"
+        "------------------------------------\n"
+        f"🔥 {last_event}"
+    )
+    
+    try:
+        bot.edit_message_text(dashboard_text, chat_id, session['dashboard_message_id'], parse_mode="HTML")
+    except ApiTelegramException as e:
+        if "message is not modified" not in e.description:
+            print(f"Could not edit dashboard: {e}")
+
+def add_late_joiner(user_id, user_name):
+    global team_battle_session
+    team1_size = len(team_battle_session['team1']['members'])
+    team2_size = len(team_battle_session['team2']['members'])
+
+    # Kam members waali team mein add karo
+    if team1_size <= team2_size:
+        team_battle_session['team1']['members'][user_id] = user_name
+        return team_battle_session['team1']
+    else:
+        team_battle_session['team2']['members'][user_id] = user_name
+        return team_battle_session['team2']
+
+@bot.poll_answer_handler()
+def handle_team_battle_poll_answer(poll_answer: types.PollAnswer):
+    global team_battle_session
+    try:
+        if not team_battle_session or poll_answer.poll_id != team_battle_session.get('current_poll_id'):
+            return
+
+        user_id = poll_answer.user.id
+        user_name = poll_answer.user.first_name
+        selected_option = poll_answer.option_ids[0]
+        
+        session = team_battle_session
+        chat_id = GROUP_ID
+
+        player_team_key = None
+        if user_id in session['team1']['members']:
+            player_team_key = 'team1'
+        elif user_id in session['team2']['members']:
+            player_team_key = 'team2'
+        else:
+            added_team = add_late_joiner(user_id, user_name)
+            player_team_key = 'team1' if added_team['name'] == session['team1']['name'] else 'team2'
+            bot.send_message(chat_id, f"A new challenger appears! **{escape(user_name)}** joins **{escape(added_team['name'])}**!", parse_mode="HTML")
+
+        player_team = session[player_team_key]
+        
+        # Individual stats track karna shuru karein
+        if 'player_stats' not in player_team: player_team['player_stats'] = {}
+        if user_id not in player_team['player_stats']:
+            player_team['player_stats'][user_id] = {'score': 0, 'total_time': 0, 'correct_answers': 0}
+        
+        player_stats = player_team['player_stats'][user_id]
+        time_taken = (datetime.datetime.now(IST) - session['question_start_time']).total_seconds()
+        player_stats['total_time'] += time_taken
+
+        idx = session['current_question_index']
+        question = session['questions'][idx]
+        correct_option_index = ['A', 'B', 'C', 'D'].index(str(question.get('Correct Answer', 'A')).upper())
+        
+        last_event = ""
+        points_awarded = 0
+        
+        if selected_option == correct_option_index:
+            points_awarded = 10 # Base points
+            player_stats['score'] += points_awarded
+            player_stats['correct_answers'] += 1
+
+            # --- POWER-UP & BONUS LOGIC ---
+            # Bonus Points Power-up
+            if player_team.get('active_powerup') == 'BonusPoints':
+                points_awarded *= 2 # Double the points
+                player_team['active_powerup'] = None # Power-up use ho gaya
+            
+            # Speed Demon Bonus (first correct answer)
+            if not session.get('first_correct_user'):
+                session['first_correct_user'] = user_id
+                points_awarded += 5 # Bonus points
+                last_event += "⚡ Speed Demon! +5 bonus! "
+
+            last_event += f"{escape(user_name)} from {escape(player_team['name'])} answered correctly! **+{points_awarded} points!**"
+        else:
+            last_event = f"{escape(user_name)} from {escape(player_team['name'])} answered."
+        
+        player_team['score'] += points_awarded
+        update_battle_dashboard(chat_id, session['session_id'], last_event)
+        
+        session['current_question_index'] += 1
+        
+        if session['current_question_index'] == 6: # Mid-quiz checkpoint
+            # Logic remains same as before...
+            pass
+        
+        if session['current_question_index'] < len(session['questions']):
+            time.sleep(3)
+            send_next_battle_question(chat_id, session['session_id'])
+        else:
+            # Quiz Khatam!
+            send_final_battle_report(chat_id, session)
+            team_battle_session = {}
+
+    except Exception as e:
+        report_error_to_admin(f"Error in handle_team_battle_poll_answer: {traceback.format_exc()}")
+def send_final_battle_report(chat_id, session):
+    try:
+        team1 = session['team1']
+        team2 = session['team2']
+        
+        winning_team = team1 if team1['score'] > team2['score'] else team2 if team2['score'] > team1['score'] else None
+        losing_team = team2 if winning_team == team1 else team1 if winning_team == team2 else None
+
+        # --- Calculate Hall of Fame Stats ---
+        all_players = list(team1.get('player_stats', {}).values()) + list(team2.get('player_stats', {}).values())
+        if not all_players: return
+
+        # MVP (Most Valuable Player) - Highest individual score
+        mvp = max(all_players, key=lambda p: p.get('score', 0)) if all_players else None
+
+        # Fastest Finger - Lowest average time for correct answers
+        fastest_finger = min([p for p in all_players if p['correct_answers'] > 0], key=lambda p: p['total_time'] / p['correct_answers'], default=None)
+
+        # Clutch Player - Best performer from the losing team
+        clutch_player = None
+        if losing_team:
+            losing_team_players = list(losing_team.get('player_stats', {}).values())
+            clutch_player = max(losing_team_players, key=lambda p: p.get('score', 0)) if losing_team_players else None
+
+        # --- Format the Final Message ---
+        report = "--- 🏆 **BATTLE REPORT** 🏆 ---\n\n"
+        if winning_team:
+            report += f"**WINNER: {escape(winning_team['name'])}** with **{winning_team['score']}** points!\n\n"
+        else:
+            report += "**It's a TIE! An incredible performance by both teams!**\n\n"
+        
+        report += f"**Final Score:**\n"
+        report += f"• {escape(team1['name'])}: {team1['score']} points\n"
+        report += f"• {escape(team2['name'])}: {team2['score']} points\n\n"
+        
+        report += "--- **HALL OF FAME** ---\n"
+        if mvp: report += f"🎖️ **MVP:** {escape(mvp.get('name', 'N/A'))} ({mvp.get('score', 0)} points)\n"
+        if fastest_finger:
+            avg_time = fastest_finger['total_time'] / fastest_finger['correct_answers']
+            report += f"⚡ **Fastest Finger:** {escape(fastest_finger.get('name', 'N/A'))} ({avg_time:.2f}s avg)\n"
+        if clutch_player: report += f"💪 **Clutch Player:** {escape(clutch_player.get('name', 'N/A'))}\n"
+        
+        report += "\nCongratulations to everyone who participated! 🎉"
+        
+        bot.send_message(chat_id, report, parse_mode="HTML")
+
+    except Exception as e:
+        report_error_to_admin(f"Error sending final battle report: {traceback.format_exc()}")
+        bot.send_message(chat_id, "Error generating final report.")
+@bot.callback_query_handler(func=lambda call: call.data.startswith('pwrup_'))
+def handle_powerup_selection(call: types.CallbackQuery):
+    global team_battle_session
+    try:
+        parts = call.data.split('_')
+        captain_id = int(parts[1])
+        team_key = parts[2] # 'team1' or 'team2'
+        powerup_name = parts[3]
+
+        # --- SECURITY CHECK ---
+        # Ye check karta hai ki button sirf sahi Captain hi daba sakta hai
+        if call.from_user.id != captain_id:
+            bot.answer_callback_query(call.id, "This is not for you! Only the team Captain can choose.", show_alert=True)
+            return
+
+        session = team_battle_session
+        team = session.get(team_key)
+        
+        # Check if power-up has already been selected
+        if team.get('active_powerup'):
+            bot.answer_callback_query(call.id, "Your team has already selected a power-up.", show_alert=True)
+            return
+
+        # Power-up ko session mein save karna
+        team['active_powerup'] = powerup_name
+        
+        bot.answer_callback_query(call.id, f"Power-up '{powerup_name}' activated!")
+        
+        # Message ko edit karke confirmation dena aur buttons hata dena
+        confirmation_text = f"**{escape(team['name'])}** has activated the **{powerup_name}** power-up! ⚡"
+        bot.edit_message_text(confirmation_text, call.message.chat.id, call.message.message_id, parse_mode="HTML")
+
+    except Exception as e:
+        bot.answer_callback_query(call.id, "An error occurred with the power-up.", show_alert=True)
+        report_error_to_admin(f"Error in handle_powerup_selection: {traceback.format_exc()}")
 @bot.message_handler(commands=['add_qm'])
 @permission_required('quizmarathon') # Yahan 'quizmarathon' permission check hogi
 def handle_add_qm(message):
@@ -1294,17 +1719,21 @@ Hello Admin! Here are your available tools.
 <code>/examcountdown</code> - Post exam countdown with stats.
 <code>/announce</code> - Create & pin a message.
 <code>/message</code> - Send content to group.
-<code>/add_resource</code> - Add a file to the Vault.
-<code>/update_schedule</code> - Announce tomorrow's schedule.
 <code>/reset_content</code> - Reset quotes/tips usage.
 
 <b>🧠 Quiz & Marathon</b>
-<code>/quizmarathon</code> - Start a new marathon.
+<code>/quizmarathon</code> - Start a standard marathon.
+<code>/teambattle</code> - Start a group vs group quiz.
 <code>/randomquiz</code> - Post a single random quiz.
 <code>/randomquizvisual</code> - Post a visual random quiz.
 <code>/roko</code> - Force-stop a running marathon.
-<code>/fileid</code> - Get file_id for quiz images.
 <code>/notify</code> - Send a timed quiz alert.
+
+<b>✍️ Quiz Content Management</b>
+<code>/add_rq</code> - Add images to Random Quiz.
+<code>/add_qm</code> - Add images to Marathon sets.
+<code>/add_resource</code> - Add a file to the Vault.
+<code>/fileid</code> - Get file_id for quiz images.
 
 <b>📈 Ranking & Practice</b>
 <code>/rankers</code> - Post weekly marathon ranks.
@@ -1315,7 +1744,7 @@ Hello Admin! Here are your available tools.
 <code>/remind_checkers</code> - Remind for pending reviews.
 
 <b>👥 Member & Role Management</b>
-<code>/promote</code> - Make a member a Contributor.
+<code>/promote</code> - Grant command permissions.
 <code>/demote</code> - Remove Contributor role.
 <code>/dm</code> - Send a direct message to a user.
 <code>/activity_report</code> - Get a group activity report.
