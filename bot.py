@@ -5573,7 +5573,6 @@ def _format_marathon_poll_question(question_data, current_idx, total_questions):
     """
     Helper function to create the formatted text for the marathon poll question.
     """
-    # --- UPGRADED: Simplified and efficient progress bar logic ---
     PROGRESS_BAR_LENGTH = 20
     progress_ratio = (current_idx + 1) / total_questions
     filled_chars = int(progress_ratio * PROGRESS_BAR_LENGTH)
@@ -5581,20 +5580,20 @@ def _format_marathon_poll_question(question_data, current_idx, total_questions):
 
     clean_question = unescape(question_data.get('Question', ''))
     
-    question_text = (
-        f"📝 Question {current_idx + 1} of {total_questions}\n"
-        f"{progress_bar}\n\n"
-        f"{clean_question}"
-    )
+    # NEW: Truncate long questions to prevent errors
+    header = f"📝 Question {current_idx + 1} of {total_questions}\n{progress_bar}\n\n"
+    max_question_len = 295 - len(header) # Leave space for the header
+    if len(clean_question) > max_question_len:
+        clean_question = clean_question[:max_question_len] + "..."
 
-    # --- THE FIX: Handle apostrophes for Telegram Polls ---
-    # This replaces single quotes with the HTML entity to ensure they render correctly.
+    question_text = header + clean_question
+    
     return question_text.replace("'", "&#39;")
 
 def send_marathon_question(session_id):
     """
     UPGRADED: Now handles and sends a separate text message for long case studies
-    with a title before sending the poll.
+    with a title before sending the poll. Also truncates long questions/explanations.
     """
     session = None
     is_quiz_over = False
@@ -5620,29 +5619,24 @@ def send_marathon_question(session_id):
         send_mid_quiz_update(session_id)
         time.sleep(4)
 
-    # --- NEW: Upgraded Case Study Logic ---
     case_study_text = question_data.get('case_study_text')
     if case_study_text:
         try:
             case_study_title = question_data.get('case_study_title')
-            
             header = f"📖 <b>Case Study for Question {session['current_question_index'] + 1}</b>\n<pre>------------------</pre>\n"
-            
             if case_study_title:
                 header += f"<b>Case Title: {escape(case_study_title)}</b>\n\n"
-
-            full_message = header + case_study_text # escape() hata diya gaya hai
+            full_message = header + case_study_text
             bot.send_message(GROUP_ID, full_message, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
             time.sleep(5) 
         except Exception as e:
             report_error_to_admin(f"Failed to send case study text for QID {question_data.get('id')}: {e}")
-    # --- End of Upgraded Logic ---
 
     image_id = question_data.get('image_file_id')
     if image_id:
         try:
             image_caption = f"🖼️ <b>Visual Clue for Question {session['current_question_index'] + 1}!</b>"
-            bot.send_photo(GROUP_ID, image_id, caption=image_caption, parse_mode="HTML", message_thread_id=QUIZ_TOP_ID)
+            bot.send_photo(GROUP_ID, image_id, caption=image_caption, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
             time.sleep(3)
         except Exception as e:
             print(f"Error sending image for question {session['current_question_index'] + 1}: {e}")
@@ -5658,11 +5652,18 @@ def send_marathon_question(session_id):
     
     question_text = _format_marathon_poll_question(question_data, session['current_question_index'], len(session['questions']))
     
+    # --- NEW: Truncate long explanations ---
+    explanation_text = unescape(str(question_data.get('Explanation', '')))
+    if len(explanation_text) > 195: # Max 200, leave some room
+        explanation_text = explanation_text[:195] + "..."
+    safe_explanation = escape(explanation_text)
+    # --- End of new logic ---
+    
     poll_message = bot.send_poll(
         chat_id=GROUP_ID, message_thread_id=QUIZ_TOPIC_ID, question=question_text, 
         options=options, type='quiz', correct_option_id=correct_option_index, 
         is_anonymous=False, open_period=timer_seconds,
-        explanation=escape(unescape(str(question_data.get('Explanation', '')))),
+        explanation=safe_explanation,
         explanation_parse_mode="HTML"
     )
 
