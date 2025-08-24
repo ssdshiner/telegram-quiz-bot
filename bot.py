@@ -125,6 +125,9 @@ except Exception as e:
 # --- Global In-Memory Storage ---
 active_polls = []
 scheduled_tasks = []
+# Temporary storage for batch photo uploads
+photo_batches = {} # Stores photos by media_group_id or user_id
+batch_timers = {} # Stores timers to process the batch
 # Global Variables for Quiz Marathon System
 QUIZ_SESSIONS = {}
 QUIZ_PARTICIPANTS = {}
@@ -892,6 +895,314 @@ def process_resource_description(msg: types.Message):
 # =============================================================================
 # 8. TELEGRAM BOT HANDLERS - CORE COMMANDS
 # =============================================================================
+# Yeh ek example hai, aapko apne Supabase URL aur Key daalne honge
+# from supabase import create_client, Client
+# SUPABASE_URL = "YOUR_SUPABASE_URL"
+# SUPABASE_KEY = "YOUR_SUPABASE_KEY"
+# supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# Command handler for /add_rq
+@bot.message_handler(commands=['add_rq'])
+@permission_required('add_resource') # Permissions add kar diye hain
+def handle_add_rq(message):
+    if message.chat.type != 'private':
+        bot.reply_to(message, "🤫 Please use this command in a private chat with me.")
+        return
+    try:
+        parts = message.text.split()
+        if len(parts) < 2 or not parts[1].isdigit():
+            bot.reply_to(message, "Format galat hai. Please aise use karein: /add_rq <starting_id>")
+            return
+        
+        start_id = int(parts[1])
+        user_id = message.from_user.id
+        
+        # User ka state save karna taki bot ko pata rahe ki ye user photo bhejega
+        user_states[user_id] = {
+            'action': 'adding_rq_photos',
+            'start_id': start_id,
+            'chat_id': message.chat.id
+        }
+        
+        bot.reply_to(message, f"Theek hai! ID {start_id} se shuru karke images add ki jayengi. Ab please saari photos ek saath album/batch mein bhejein.\n\nProcess rokne ke liye /cancel type karein.")
+
+    except Exception as e:
+        bot.reply_to(message, f"Ek error aa gaya: {e}")
+        report_error_to_admin(f"Error in /add_rq: {traceback.format_exc()}")
+
+# Function jo photo ko process karega
+def process_single_photo(message, question_id):
+    try:
+        # Check karein ki message mein photo hai ya nahi
+        if message.content_type != 'photo':
+            bot.reply_to(message, "Aapne photo nahi bheji. Operation cancel kar diya gaya hai.")
+            return
+
+        # Photo ki sabse best quality वाली file ID lena
+        photo_file_id = message.photo[-1].file_id
+        
+        # Supabase mein UPDATE query chalana
+        # Hum 'id' column ko string(question_id) se match kar rahe hain kyunki aapke example mein '1' tha
+        response = supabase.table('questions').update({
+            'image_file_id': photo_file_id
+        }).eq('id', question_id).execute()
+
+        # Check karna ki update hua ya nahi
+        if len(response.data) > 0:
+            bot.reply_to(message, f"✅ Success! Image question ID {question_id} mein add ho gayi hai.")
+        else:
+            bot.reply_to(message, f"⚠️ Error! Question ID {question_id} database mein nahi mila. Please ID check karein.")
+            
+    except Exception as e:
+        bot.reply_to(message, f"Photo process karte waqt error aa gaya: {e}")
+# =============================================================================
+# 8. TELEGRAM BOT HANDLERS - BATCH IMAGE UPLOAD LOGIC
+# =============================================================================
+
+@bot.message_handler(content_types=['photo'])
+def handle_rq_photos(message):
+    user_id = message.from_user.id
+    
+    # Check karein ki user photo add karne wale state mein hai ya nahi
+    user_action = user_states.get(user_id, {}).get('action')
+    if user_action in ['adding_rq_photos', 'adding_qm_photos']:
+        
+        # Agar koi purana timer chal raha hai, to use cancel karein
+        if user_id in batch_timers:
+            batch_timers[user_id].cancel()
+
+        # Album/batch ke liye key (media_group_id ya user_id)
+        batch_key = message.media_group_id or user_id
+        
+        # Photo ko batch mein add karein
+        if batch_key not in photo_batches:
+            photo_batches[batch_key] = []
+        
+        photo_file_id = message.photo[-1].file_id
+        if photo_file_id not in [p['file_id'] for p in photo_batches[batch_key]]:
+             photo_batches[batch_key].append({'file_id': photo_file_id, 'message': message})
+        
+        # Naya timer set karein. Agar 2 second tak koi nayi photo nahi aayi, to batch process hoga.
+        timer = threading.Timer(2.0, process_photo_batch, [batch_key, user_id])
+        batch_timers[user_id] = timer
+        timer.start()
+
+def process_photo_batch(batch_key, user_id):
+    try:
+        if batch_key not in photo_batches:
+            return
+
+        batch_items = photo_batches[batch_key]
+        state = user_states[user_id]
+        start_id = state['start_id']
+        chat_id = state['chat_id']
+        action = state.get('action')
+
+        bot.send_message(chat_id, f"Processing {len(batch_items)} photos...")
+        
+        success_count = 0
+        fail_count = 0
+        failed_ids = []
+
+        # Decide which table and conditions to use based on the action
+        table_name = ''
+        if action == 'adding_rq_photos':
+            table_name = 'questions'
+        elif action == 'adding_qm_photos':
+            # Yahan assume kar rahe hain ki marathon questions 'quiz_questions' table mein hain
+            table_name = 'quiz_questions'
+
+        for i, item in enumerate(batch_items):
+            current_id = start_id + i
+            photo_file_id = item['file_id']
+            
+            try:
+                # Base query banayein
+                query = supabase.table(table_name).update({
+                    'image_file_id': photo_file_id
+                }).eq('id', str(current_id))
+
+                # Agar 'add_qm' hai, to quiz_set ki condition bhi add karein
+                if action == 'adding_qm_photos':
+                    set_name = state['set_name']
+                    query = query.eq('quiz_set', set_name)
+
+                # Query execute karein
+                response = query.execute()
+
+                if len(response.data) > 0:
+                    success_count += 1
+                else:
+                    fail_count += 1
+                    failed_ids.append(str(current_id))
+            
+            except Exception as db_error:
+                print(f"DB update error for ID {current_id}: {db_error}")
+                fail_count += 1
+                failed_ids.append(str(current_id))
+
+        # Final confirmation message
+        summary_message = f"✅ **Batch Process Complete!**\n\n"
+        summary_message += f"• Successfully added: **{success_count}** photos.\n"
+        if fail_count > 0:
+            summary_message += f"• Failed to add: **{fail_count}** photos.\n"
+            summary_message += f"• Failed IDs: `{', '.join(failed_ids)}`\n"
+            summary_message += f"_(Reason: Question ID not found or quiz_set mismatch)_"
+        
+        bot.send_message(chat_id, summary_message, parse_mode="HTML")
+
+    except Exception as e:
+        report_error_to_admin(f"Error in process_photo_batch: {traceback.format_exc()}")
+        bot.send_message(user_states[user_id]['chat_id'], "❌ Photos process karte waqt ek critical error aa gaya.")
+    
+    finally:
+        # State aur temporary data ko clean up karna
+        if batch_key in photo_batches:
+            del photo_batches[batch_key]
+        if user_id in batch_timers:
+            del batch_timers[user_id]
+        if user_id in user_states and user_states[user_id].get('action') in ['adding_rq_photos', 'adding_qm_photos']:
+            del user_states[user_id]
+
+@bot.message_handler(commands=['add_qm'])
+@permission_required('quizmarathon') # Yahan 'quizmarathon' permission check hogi
+def handle_add_qm(message):
+    if message.chat.type != 'private':
+        bot.reply_to(message, "🤫 Please use this command in a private chat with me.")
+        return
+    try:
+        # Step 1: Supabase se saare available quiz sets fetch karna
+        response = supabase.table('quiz_presets').select('set_name, button_label').order('id').execute()
+
+        if not response.data:
+            bot.reply_to(message, "❌ Database mein koi Quiz Marathon set nahi mila. Please pehle presets add karein.")
+            return
+
+        # Step 2: Har set ke liye Inline Keyboard Buttons banana
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        buttons = []
+        for preset in response.data:
+            buttons.append(
+                types.InlineKeyboardButton(
+                    text=preset['button_label'],
+                    callback_data=f"qm_set_{preset['set_name']}" # Example: "qm_set_History_Set_1"
+                )
+            )
+        
+        # Buttons ko 2-2 ke pair mein arrange karna
+        for i in range(0, len(buttons), 2):
+            if i + 1 < len(buttons):
+                markup.row(buttons[i], buttons[i+1])
+            else:
+                markup.row(buttons[i])
+
+        # Step 3: User ko buttons ke saath message bhejna
+        bot.reply_to(message, "Chaliye, Quiz Marathon ke liye images add karte hain.\n\nPlease neeche diye gaye options mein se ek **Quiz Set** chunein:", reply_markup=markup)
+
+    except Exception as e:
+        bot.reply_to(message, "❌ Quiz sets fetch karte waqt ek error aa gaya.")
+        report_error_to_admin(f"Error in /add_qm (fetching presets): {traceback.format_exc()}")
+@bot.callback_query_handler(func=lambda call: call.data.startswith('qm_set_'))
+def handle_qm_set_selection(call: types.CallbackQuery):
+    try:
+        user_id = call.from_user.id
+        chat_id = call.message.chat.id
+        
+        # Step 1: Button ke data mein se set ka naam nikalna
+        selected_set = call.data.split('_', 2)[-1]
+
+        # Acknowledge the button press to stop the loading icon
+        bot.answer_callback_query(call.id)
+
+        # Step 2: User state ko save karna taki agle steps mein kaam aaye
+        user_states[user_id] = {
+            'action': 'adding_qm_photos',
+            'set_name': selected_set,
+            'chat_id': chat_id
+        }
+
+        # Step 3: Database se uss set ka start aur end ID fetch karna
+        response = supabase.table('quiz_presets').select('start_id, end_id').eq('set_name', selected_set).single().execute()
+
+        if not response.data:
+            bot.edit_message_text("❌ Error! Is set ki details database mein nahi mili. Please /cancel karke dobara try karein.", chat_id, call.message.message_id)
+            return
+        
+        set_info = response.data
+        start_id = set_info['start_id']
+        end_id = set_info['end_id']
+
+        # Step 4: Purane message ko edit karke user se ID maangna
+        prompt_text = (
+            f"Aapne '{selected_set}' select kiya hai. 👍\n\n"
+            f"Is set ka valid ID range **{start_id}** se **{end_id}** tak hai.\n\n"
+            f"Please batayein, aap images kis ID se daalna shuru karna chahte hain?"
+        )
+        
+        prompt_message = bot.edit_message_text(prompt_text, chat_id, call.message.message_id)
+        
+        # Step 5: Bot ko batana ki agle message ka intezar karo
+        bot.register_next_step_handler(prompt_message, process_qm_start_id)
+
+    except Exception as e:
+        bot.answer_callback_query(call.id, "Ek error aa gaya!")
+        report_error_to_admin(f"Error in handle_qm_set_selection: {traceback.format_exc()}")
+
+
+# Ye function user se ID lega aur use validate karega
+def process_qm_start_id(message):
+    user_id = message.from_user.id
+    try:
+        state = user_states.get(user_id, {})
+        if not state or state.get('action') != 'adding_qm_photos':
+            return
+
+        set_name = state['set_name']
+
+        # --- VALIDATION 1: Check if input is a number ---
+        if not message.text.strip().isdigit():
+            prompt = bot.reply_to(message, "Yeh ek valid number nahi hai. Please sirf number enter karein.")
+            bot.register_next_step_handler(prompt, process_qm_start_id)
+            return
+            
+        start_id = int(message.text.strip())
+
+        # Fetch set's ID range from DB for validation
+        set_response = supabase.table('quiz_presets').select('start_id, end_id').eq('set_name', set_name).single().execute()
+        set_info = set_response.data
+        set_start_id = set_info['start_id']
+        set_end_id = set_info['end_id']
+
+        # --- VALIDATION 2: Check if ID is in the valid range ---
+        if not (set_start_id <= start_id <= set_end_id):
+            prompt = bot.reply_to(message, f"❌ Galat ID! Is set ke liye valid range {set_start_id} se {set_end_id} tak hai. Please sahi ID enter karein.")
+            bot.register_next_step_handler(prompt, process_qm_start_id)
+            return
+
+        # --- VALIDATION 3: Check if images already exist for this or subsequent IDs ---
+        # Assuming your marathon questions are in a table named 'quiz_questions'
+        response = supabase.table('quiz_questions').select('id').eq('quiz_set', set_name).gte('id', start_id).not_.is_('image_file_id', None).order('id').limit(1).execute()
+
+        if response.data:
+            colliding_id = response.data[0]['id']
+            bot.reply_to(message, f"⚠️ Conflict! Question ID {colliding_id} par pehle se ek image hai. Is ID se aage aap abhi add nahi kar sakte. Please doosri ID chunein ya pehle purani image hatayein.")
+            # Yahan hum process rok denge. User ko dobara command use karna padega.
+            if user_id in user_states:
+                del user_states[user_id]
+            return
+
+        # Sabkuch theek hai, ab user se photos maango
+        available_space = set_end_id - start_id + 1
+        user_states[user_id]['start_id'] = start_id # Validated ID ko state mein save karo
+        
+        bot.reply_to(message, f"✅ Perfect! Hum ID {start_id} se shuru karenge.\n\nAap is set mein abhi **maximum {available_space} photos** add kar sakte hain.\n\nAb please saari photos ek saath album/batch mein bhejein.")
+        # Humara purana 'handle_rq_photos' hi yahan kaam aa jayega, bas thoda modify karna hoga.
+
+    except Exception as e:
+        bot.reply_to(message, "❌ ID process karte waqt ek error aa gaya.")
+        if user_id in user_states:
+            del user_states[user_id]
+        report_error_to_admin(f"Error in process_qm_start_id: {traceback.format_exc()}")
 
 @bot.message_handler(commands=['suru'], func=bot_is_target)
 def on_start(msg: types.Message):
