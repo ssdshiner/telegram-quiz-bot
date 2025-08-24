@@ -800,7 +800,7 @@ def get_quiz_data(set_name):
     """
     This is a secure API endpoint for the Web App to fetch quiz questions.
     """
-    try S
+    try 
         if not set_name:
             return json.dumps({'error': 'Quiz set name is required.'}), 400
 
