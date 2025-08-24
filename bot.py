@@ -1397,224 +1397,170 @@ def update_battle_dashboard(chat_id, session_id, last_event=""):
 
 
 @bot.poll_answer_handler()
-def handle_team_battle_poll_answer(poll_answer: types.PollAnswer):
-    global team_battle_session
-    try:
-        # Use a lock to handle multiple answers at once safely
-        with session_lock:
-            if not team_battle_session or poll_answer.poll_id != team_battle_session.get('current_poll_id'):
-                return
+def handle_poll_answer(poll_answer: types.PollAnswer):
+    """
+    This is the single, master handler for all poll answers.
+    It intelligently routes the answer to the correct logic for Team Battles,
+    Marathons, or Random Quizzes.
+    """
+    poll_id_str = poll_answer.poll_id
+    user_info = poll_answer.user
+    selected_option = poll_answer.option_ids[0] if poll_answer.option_ids else None
 
-            session = team_battle_session
-            user_id = poll_answer.user.id
-            user_name = poll_answer.user.first_name
-            selected_option = poll_answer.option_ids[0]
-            chat_id = GROUP_ID
-
-            # Find player's team or add them as a late joiner
-            player_team_key = None
-            if user_id in session['team1']['members']:
-                player_team_key = 'team1'
-            elif user_id in session['team2']['members']:
-                player_team_key = 'team2'
-            else:
-                added_team = add_late_joiner(user_id, user_name)
-                player_team_key = 'team1' if added_team['name'] == session['team1']['name'] else 'team2'
-                bot.send_message(chat_id, f"A new challenger appears! **{escape(user_name)}** joins **{escape(added_team['name'])}**!", parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
-
-            player_team = session[player_team_key]
-            
-            # Initialize or get player stats
-            if 'player_stats' not in player_team: player_team['player_stats'] = {}
-            if user_id not in player_team['player_stats']:
-                player_team['player_stats'][user_id] = {'name': user_name, 'score': 0, 'total_time': 0, 'correct_answers': 0}
-            
-            player_stats = player_team['player_stats'][user_id]
-            time_taken = (datetime.datetime.now(IST) - session['question_start_time']).total_seconds()
-            player_stats['total_time'] += time_taken
-
-            # Check correctness and calculate points
-            idx = session['current_question_index']
-            question = session['questions'][idx]
-            correct_option_index = ['A', 'B', 'C', 'D'].index(str(question.get('Correct Answer', 'A')).upper())
-            
-            last_event = ""
-            points_awarded = 0
-            
-            if selected_option == correct_option_index:
-                points_awarded = 10 # Base points
-
-                # Apply Bonus Points Power-up
-                if player_team.get('active_powerup') == 'BonusPoints':
-                    points_awarded *= 2
-                    player_team['active_powerup'] = None # Consume power-up
-                
-                # Apply Speed Demon Bonus
-                if not session.get('first_correct_user'):
-                    session['first_correct_user'] = user_id
-                    points_awarded += 5
-                    last_event += "⚡ Speed Demon! +5 bonus! "
-
-                player_stats['correct_answers'] += 1
-                last_event += f"{escape(user_name)} from {escape(player_team['name'])} answered correctly! **+{points_awarded} points!**"
-            else:
-                last_event = f"{escape(user_name)} from {escape(player_team['name'])} answered."
-            
-            # Update individual score and then recalculate team score
-            player_stats['score'] += points_awarded
-            player_team['score'] = sum(p.get('score', 0) for p in player_team['player_stats'].values())
-            
-            # Update Dashboard
-            update_battle_dashboard(chat_id, session['session_id'], last_event)
-            
-            # Increment question index
-            session['current_question_index'] += 1
-            
-            # --- TRIGGER POWER-UPS AT MID-QUIZ ---
-        MID_QUIZ_CHECKPOINT = 6 # Aap isko change kar sakte hain (e.g., 5, 10)
-        
-        # Check if it's time for the mid-quiz report
-        if session['current_question_index'] == MID_QUIZ_CHECKPOINT:
-            time.sleep(2) # Short pause for drama
-            team1 = session['team1']
-            team2 = session['team2']
-            
-            # Decide leading and lagging teams
-            leading_team = team1 if team1['score'] > team2['score'] else team2 if team2['score'] > team1['score'] else None
-            lagging_team = team2 if leading_team == team1 else team1 if leading_team == team2 else None
-
-            report_text = (
-                f"**---------- MID-QUIZ REPORT ----------**\n\n"
-                f"**{escape(team1['name'])}**: {team1['score']} points\n"
-                f"**{escape(team2['name'])}**: {team2['score']} points\n\n"
-            )
-            
-            if leading_team:
-                report_text += f"Looks like **{escape(leading_team['name'])}** is in the lead! Time for power-ups... ⚡"
-            else:
-                report_text += "It's a TIE! The battle is intense! Time for power-ups... ⚡"
-
-            # Send the report and delete it after 60 seconds to reduce clutter
-            sent_report = bot.send_message(chat_id, report_text, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
-            delete_message_in_thread(chat_id, sent_report.message_id, 60)
-            
-            # Yahan hum naye function ko call kar rahe hain
-            trigger_powerup_selection(chat_id, leading_team, lagging_team) 
-            time.sleep(5) # Pause before the next question
-
-            # Check if quiz is over and proceed
-            if session['current_question_index'] < len(session['questions']):
-                time.sleep(3)
-                send_next_battle_question(chat_id, session['session_id'])
-            else:
-                send_final_battle_report(chat_id, session)
-                team_battle_session = {} # Clear session
-
-    except Exception as e:
-        report_error_to_admin(f"Error in handle_team_battle_poll_answer: {traceback.format_exc()}")
-def send_final_battle_report(chat_id, session):
-    try:
-        team1 = session['team1']
-        team2 = session['team2']
-        
-        winning_team = team1 if team1['score'] > team2['score'] else team2 if team2['score'] > team1['score'] else None
-        losing_team = team2 if winning_team == team1 else team1 if winning_team == team2 else None
-
-        # --- UPGRADED: Calculate Hall of Fame Stats ---
-        all_players = list(team1.get('player_stats', {}).values()) + list(team2.get('player_stats', {}).values())
-        if not all_players: return
-
-        # MVP (Most Valuable Player) - Highest score, with time as a tie-breaker
-        mvp = max(all_players, key=lambda p: (p.get('score', 0), -p.get('total_time', 999)))
-
-        # Fastest Finger - Must have at least 3 correct answers to qualify
-        MIN_ANSWERS_FOR_FASTEST = 3
-        eligible_for_fastest = [p for p in all_players if p.get('correct_answers', 0) >= MIN_ANSWERS_FOR_FASTEST]
-        fastest_finger = min(eligible_for_fastest, key=lambda p: p['total_time'] / p['correct_answers'], default=None)
-
-        # Clutch Player - Best performer from the losing team
-        clutch_player = None
-        if losing_team:
-            losing_team_players = list(losing_team.get('player_stats', {}).values())
-            if losing_team_players:
-                clutch_player = max(losing_team_players, key=lambda p: p.get('score', 0))
-
-        # --- UPGRADED: Format the Final Message ---
-        report = "--- 🏆 **BATTLE REPORT** 🏆 ---\n\n"
-        if winning_team:
-            report += f"**WINNER: {escape(winning_team['name'])}** with **{winning_team['score']}** points!\n\n"
-        else:
-            report += "**It's a TIE! An incredible performance by both teams!**\n\n"
-        
-        report += f"**Final Score:**\n"
-        report += f"• {escape(team1['name'])}: {team1['score']} points\n"
-        report += f"• {escape(team2['name'])}: {team2['score']} points\n\n"
-
-        # --- NEW: Individual Player Leaderboard ---
-        report += "--- 👤 **INDIVIDUAL RANKING** ---\n"
-        # Sort players by score (desc) and time (asc)
-        sorted_players = sorted(all_players, key=lambda p: (p.get('score', 0), p.get('total_time', 999)), reverse=True)
-        rank_emojis = ["🥇", "🥈", "🥉"]
-        for i, player in enumerate(sorted_players[:5]): # Show Top 5
-            rank = rank_emojis[i] if i < 3 else f"<b>{i + 1}.</b>"
-            report += f"{rank} {escape(player.get('name', 'N/A'))} - {player.get('score', 0)} points\n"
-        report += "\n"
-
-        report += "--- ⭐ **HALL OF FAME** ⭐ ---\n"
-        if mvp: report += f"🎖️ **MVP:** {escape(mvp.get('name', 'N/A'))} ({mvp.get('score', 0)} points)\n"
-        if fastest_finger:
-            avg_time = fastest_finger['total_time'] / fastest_finger['correct_answers']
-            report += f"⚡ **Fastest Finger:** {escape(fastest_finger.get('name', 'N/A'))} ({avg_time:.2f}s avg)\n"
-        if clutch_player:
-            report += f"💪 **Clutch Player:** {escape(clutch_player.get('name', 'N/A'))} ({clutch_player.get('score', 0)} points)\n"
-        
-        report += "\nCongratulations to everyone who participated! 🎉"
-        
-        bot.send_message(chat_id, report, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
-
-    except Exception as e:
-        report_error_to_admin(f"Error sending final battle report: {traceback.format_exc()}")
-        bot.send_message(chat_id, "Error generating final report.", message_thread_id=QUIZ_TOPIC_ID)
-def trigger_powerup_selection(chat_id, leading_team, lagging_team):
-    global team_battle_session
-    session = team_battle_session
-
-    def send_powerup_message(team_key, text, markup):
-        try:
-            sent_msg = bot.send_message(chat_id, text, reply_markup=markup, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
-            session[team_key]['powerup_message_id'] = sent_msg.message_id
-        except Exception as e:
-            print(f"Could not send powerup message for {team_key}: {e}")
-
-    # Agar tie hai to dono ko comeback power-up do
-    if not leading_team:
-        for team_key in ['team1', 'team2']:
-            team = session[team_key]
-            captain_id = team['captain_id']
-            markup = types.InlineKeyboardMarkup()
-            markup.add(types.InlineKeyboardButton("✨ Bonus Points (Next Q)", callback_data=f"pwrup_{captain_id}_{team_key}_BonusPoints"))
-            text = f"**{escape(team['name'])}**, it's a tie! Captain, choose your power-up:"
-            send_powerup_message(team_key, text, markup)
+    if selected_option is None:
         return
 
-    # Leading Team ke liye Attack Power-ups
-    l_team = leading_team
-    l_team_key = 'team1' if l_team['name'] == session['team1']['name'] else 'team2'
-    l_captain_id = l_team['captain_id']
-    l_markup = types.InlineKeyboardMarkup()
-    l_markup.add(types.InlineKeyboardButton("⚔️ Double Trouble (Hard Q for them)", callback_data=f"pwrup_{l_captain_id}_{l_team_key}_DoubleTrouble"))
-    l_text = f"**{escape(l_team['name'])}**, you are in the lead! Captain, choose your advantage:"
-    send_powerup_message(l_team_key, l_text, l_markup)
+    try:
+        with session_lock:
+            # --- ROUTE 1: Check if it's a Team Battle poll ---
+            if team_battle_session and poll_id_str == team_battle_session.get('current_poll_id'):
+                session = team_battle_session
+                user_id = poll_answer.user.id
+                user_name = poll_answer.user.first_name
+                chat_id = GROUP_ID
 
-    # Lagging Team ke liye Comeback Power-ups
-    g_team = lagging_team
-    g_team_key = 'team1' if g_team['name'] == session['team1']['name'] else 'team2'
-    g_captain_id = g_team['captain_id']
-    g_markup = types.InlineKeyboardMarkup()
-    g_markup.add(types.InlineKeyboardButton("✨ Bonus Points (Next Q)", callback_data=f"pwrup_{g_captain_id}_{g_team_key}_BonusPoints"))
-    g_markup.add(types.InlineKeyboardButton("🔍 Hint (Next Q)", callback_data=f"pwrup_{g_captain_id}_{g_team_key}_Hint"))
-    g_text = f"**{escape(g_team['name'])}**, it's time for a comeback! Captain, choose your power-up:"
-    send_powerup_message(g_team_key, g_text, g_markup)
+                player_team_key = None
+                if user_id in session['team1']['members']:
+                    player_team_key = 'team1'
+                elif user_id in session['team2']['members']:
+                    player_team_key = 'team2'
+                else:
+                    added_team = add_late_joiner(user_id, user_name)
+                    player_team_key = 'team1' if added_team['name'] == session['team1']['name'] else 'team2'
+                    bot.send_message(chat_id, f"A new challenger appears! **{escape(user_name)}** joins **{escape(added_team['name'])}**!", parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
+
+                player_team = session[player_team_key]
+                
+                if 'player_stats' not in player_team: player_team['player_stats'] = {}
+                if user_id not in player_team['player_stats']:
+                    player_team['player_stats'][user_id] = {'name': user_name, 'score': 0, 'total_time': 0, 'correct_answers': 0}
+                
+                player_stats = player_team['player_stats'][user_id]
+                time_taken = (datetime.datetime.now(IST) - session['question_start_time']).total_seconds()
+                player_stats['total_time'] += time_taken
+
+                idx = session['current_question_index']
+                question = session['questions'][idx]
+                correct_option_index = ['A', 'B', 'C', 'D'].index(str(question.get('Correct Answer', 'A')).upper())
+                
+                last_event = ""
+                points_awarded = 0
+                
+                if selected_option == correct_option_index:
+                    points_awarded = 10
+                    if player_team.get('active_powerup') == 'BonusPoints':
+                        points_awarded *= 2
+                        player_team['active_powerup'] = None
+                    
+                    if not session.get('first_correct_user'):
+                        session['first_correct_user'] = user_id
+                        points_awarded += 5
+                        last_event += "⚡ Speed Demon! +5 bonus! "
+
+                    player_stats['correct_answers'] += 1
+                    last_event += f"{escape(user_name)} from {escape(player_team['name'])} answered correctly! **+{points_awarded} points!**"
+                else:
+                    last_event = f"{escape(user_name)} from {escape(player_team['name'])} answered."
+                
+                player_stats['score'] += points_awarded
+                player_team['score'] = sum(p.get('score', 0) for p in player_team['player_stats'].values())
+                
+                update_battle_dashboard(chat_id, session['session_id'], last_event)
+                
+                session['current_question_index'] += 1
+                
+                MID_QUIZ_CHECKPOINT = 6
+                if session['current_question_index'] == MID_QUIZ_CHECKPOINT:
+                    time.sleep(2)
+                    team1 = session['team1']
+                    team2 = session['team2']
+                    
+                    leading_team = team1 if team1['score'] > team2['score'] else team2 if team2['score'] > team1['score'] else None
+                    lagging_team = team2 if leading_team == team1 else team1 if leading_team == team2 else None
+
+                    report_text = (
+                        f"**---------- MID-QUIZ REPORT ----------**\n\n"
+                        f"**{escape(team1['name'])}**: {team1['score']} points\n"
+                        f"**{escape(team2['name'])}**: {team2['score']} points\n\n"
+                    )
+                    
+                    if leading_team:
+                        report_text += f"Looks like **{escape(leading_team['name'])}** is in the lead! Time for power-ups... ⚡"
+                    else:
+                        report_text += "It's a TIE! The battle is intense! Time for power-ups... ⚡"
+
+                    sent_report = bot.send_message(chat_id, report_text, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
+                    delete_message_in_thread(chat_id, sent_report.message_id, 60)
+                    
+                    trigger_powerup_selection(chat_id, leading_team, lagging_team) 
+                    time.sleep(5)
+
+                if session['current_question_index'] < len(session['questions']):
+                    time.sleep(3)
+                    send_next_battle_question(chat_id, session['session_id'])
+                else:
+                    send_final_battle_report(chat_id, session)
+                    team_battle_session = {}
+                
+                return # Stop processing after handling team battle answer
+
+            # --- ROUTE 2: Check if it's a Quiz Marathon poll ---
+            session_id = str(GROUP_ID)
+            marathon_session = QUIZ_SESSIONS.get(session_id)
+            if marathon_session and marathon_session.get('is_active') and poll_id_str == marathon_session.get('current_poll_id'):
+                participants = QUIZ_PARTICIPANTS.setdefault(session_id, {})
+                if user_info.id not in participants:
+                    participants[user_info.id] = {
+                        'name': user_info.first_name, 'user_name': user_info.username or user_info.first_name,
+                        'score': 0, 'total_time': 0, 'questions_answered': 0, 'correct_answer_times': [],
+                        'topic_scores': {}, 'performance_breakdown': {}
+                    }
+                participant = participants[user_info.id]
+                
+                ist_tz = timezone(timedelta(hours=5, minutes=30))
+                time_taken = (datetime.datetime.now(ist_tz) - marathon_session['question_start_time']).total_seconds()
+                
+                question_idx = marathon_session['current_question_index'] - 1
+                question_data = marathon_session['questions'][question_idx]
+                correct_option_index = ['A', 'B', 'C', 'D'].index(str(question_data.get('Correct Answer', 'A')).upper())
+                is_correct = (selected_option == correct_option_index)
+                
+                participant['questions_answered'] += 1
+                participant['total_time'] += time_taken
+                if is_correct:
+                    participant['score'] += 1
+                    participant['correct_answer_times'].append(time_taken)
+
+                topic = question_data.get('topic', 'General')
+                participant['topic_scores'].setdefault(topic, {'correct': 0, 'total': 0})
+                participant['topic_scores'][topic]['total'] += 1
+                if is_correct:
+                    participant['topic_scores'][topic]['correct'] += 1
+
+                q_type = question_data.get('question_type', 'Theory')
+                participant['performance_breakdown'].setdefault(topic, {})
+                participant['performance_breakdown'][topic].setdefault(q_type, {'correct': 0, 'total': 0, 'time': 0})
+                
+                breakdown = participant['performance_breakdown'][topic][q_type]
+                breakdown['total'] += 1
+                breakdown['time'] += time_taken
+                if is_correct:
+                    breakdown['correct'] += 1
+                return # Stop processing after handling marathon answer
+
+        # --- ROUTE 3: Check if it's a Random Quiz poll (This runs if it's not a marathon/battle) ---
+        active_poll_info = next((poll for poll in active_polls if poll['poll_id'] == poll_id_str), None)
+        if active_poll_info and active_poll_info.get('type') == 'random_quiz':
+            if selected_option == active_poll_info['correct_option_id']:
+                supabase.rpc('increment_score', {
+                    'user_id_in': user_info.id,
+                    'user_name_in': user_info.first_name
+                }).execute()
+            return # Stop processing after handling random quiz
+
+    except Exception as e:
+        print(f"Error in the master poll answer handler: {traceback.format_exc()}")
+        report_error_to_admin(f"Error in handle_poll_answer:\n{traceback.format_exc()}")
 @bot.callback_query_handler(func=lambda call: call.data.startswith('pwrup_'))
 def handle_powerup_selection(call: types.CallbackQuery):
     global team_battle_session
@@ -1684,14 +1630,11 @@ def handle_delete_message_callback(call: types.CallbackQuery):
         # --- SECURITY CHECK ---
         if clicker_id == original_user_id or clicker_id in admin_ids:
             # User is authorized, proceed with deletion
-            
-            # Delete the bot's analysis message
             try:
                 bot.delete_message(call.message.chat.id, call.message.message_id)
             except ApiTelegramException as e:
                 print(f"Info: Could not delete bot's analysis message (already gone?). Error: {e}")
 
-            # Delete the user's original command message
             try:
                 bot.delete_message(call.message.chat.id, call.message.reply_to_message.message_id)
             except ApiTelegramException as e:
@@ -1703,8 +1646,7 @@ def handle_delete_message_callback(call: types.CallbackQuery):
             bot.answer_callback_query(call.id, "Only the person who requested this analysis or an admin can delete it.", show_alert=True)
             
     except AttributeError:
-        # This happens if the original command message was deleted, breaking the reply link.
-        # In this case, we allow anyone to delete the orphaned analysis message.
+        # This handles the error if the original command message was deleted, breaking the reply link.
         try:
             bot.delete_message(call.message.chat.id, call.message.message_id)
             bot.answer_callback_query(call.id, "Message deleted.")
@@ -1715,9 +1657,11 @@ def handle_delete_message_callback(call: types.CallbackQuery):
         print(f"General error in delete_analysis_callback: {e}")
         report_error_to_admin(f"Error in delete_analysis_callback: {traceback.format_exc()}")
         bot.answer_callback_query(call.id, "An error occurred.")
+
+
 def format_holistic_analysis_message(user_name, analysis_data):
     """
-    Takes raw holistic data and formats it into a rich, detailed, and accurate analysis message.
+    This is the HELPER function. It takes raw data and formats it into a message.
     """
     if not analysis_data:
         return f"📊 <b>{escape(user_name)}'s Performance Snapshot</b>\n\nNo quiz data found yet. Participate in quizzes to build your profile!"
@@ -1729,7 +1673,7 @@ def format_holistic_analysis_message(user_name, analysis_data):
     topic_stats = {}
     for item in analysis_data:
         topic = item.get('topic', 'General Topics')
-        if not topic: topic = 'General Topics' # Handle cases where topic is None or empty
+        if not topic: topic = 'General Topics'
         
         if topic not in topic_stats:
             topic_stats[topic] = {'correct': 0, 'total': 0}
@@ -1742,19 +1686,15 @@ def format_holistic_analysis_message(user_name, analysis_data):
         accuracy = (stats['correct'] / stats['total'] * 100) if stats['total'] > 0 else 0
         topic_accuracies.append({'topic': topic, 'accuracy': accuracy, 'count': stats['total']})
 
-    # Sort topics by accuracy (highest first)
     sorted_topics = sorted(topic_accuracies, key=lambda x: x['accuracy'], reverse=True)
     
-    # --- Building the Message ---
     msg = f"📊 **{escape(user_name)}'s Detailed Performance Analysis**\n\n"
     msg += f"<i>Here is a deep dive into your quiz performance across all formats.</i>\n"
     msg += "━━━━━━━━━━━━━━━━━━\n\n"
-    
     msg += f"🎯 **Overall Performance**\n"
     msg += f" • <b>Total Questions Attempted:</b> {total_questions}\n"
     msg += f" • <b>Overall Accuracy:</b> {overall_accuracy:.1f}%\n\n"
 
-    # Strongest Areas (accuracy >= 75% and at least 3 questions attempted)
     strongest_topics = [t for t in sorted_topics if t['accuracy'] >= 75 and t['count'] >= 3][:5]
     if strongest_topics:
         msg += f"💪 **Your Top 5 Strongest Areas**\n"
@@ -1762,24 +1702,20 @@ def format_holistic_analysis_message(user_name, analysis_data):
             msg += f"  • <code>{escape(t['topic'])}</code> | <b>{t['accuracy']:.0f}%</b> <i>({t['count']} ques)</i>\n"
         msg += "\n"
 
-    # Weakest Areas (accuracy < 60% and at least 3 questions attempted)
     weakest_topics = [t for t in sorted_topics if t['accuracy'] < 60 and t['count'] >= 3][:5]
     if weakest_topics:
-        # --- THE FIX: Sort weakest topics from lowest accuracy to highest ---
         weakest_topics.sort(key=lambda x: x['accuracy'])
         msg += f"⚠️ **Your Top 5 Areas for Improvement**\n"
         for t in weakest_topics:
             msg += f"  • <code>{escape(t['topic'])}</code> | <b>{t['accuracy']:.0f}%</b> <i>({t['count']} ques)</i>\n"
         msg += "\n"
         
-    # --- UPGRADED: Coach's Insight ---
     msg += f"💡 **Coach's Insight**\n"
     if total_questions < 10:
         insight = "You've just started your journey! Keep participating in quizzes to build a stronger profile. Every quiz is a step forward. 🌱"
     elif not weakest_topics and overall_accuracy >= 85:
         insight = f"Outstanding performance! You have no significant weak areas. You are a consistent top performer. Keep revising to maintain this excellent form! 🏆"
     elif overall_accuracy > 80 and weakest_topics:
-        # THE FIX: This now correctly picks the weakest topic
         insight = f"Your overall performance is excellent! To become truly unbeatable, focus on improving your accuracy in topics like '<b>{escape(weakest_topics[0]['topic'])}</b>'."
     elif overall_accuracy > 60:
         insight = f"You have a solid foundation. Consistency is key now. Keep practicing your weaker areas like '<b>{escape(weakest_topics[0]['topic'] if weakest_topics else 'some topics')}</b>' to see a great jump in your rank."
@@ -2056,7 +1992,173 @@ Hello Admin! Here are your available tools.
 <code>/reset_content</code> - Reset quotes/tips usage.
 """
     bot.send_message(msg.chat.id, help_text, parse_mode="HTML")
+@bot.poll_answer_handler()
+def handle_poll_answer(poll_answer: types.PollAnswer):
+    """
+    This is the single, master handler for all poll answers.
+    It intelligently routes the answer to the correct logic for Team Battles,
+    Marathons, or Random Quizzes.
+    """
+    poll_id_str = poll_answer.poll_id
+    user_info = poll_answer.user
+    selected_option = poll_answer.option_ids[0] if poll_answer.option_ids else None
 
+    if selected_option is None:
+        return
+
+    try:
+        # Use a lock to prevent race conditions when multiple users answer at once
+        with session_lock:
+# --- ROUTE 1: Check if it's a Team Battle poll ---
+if team_battle_session and poll_id_str == team_battle_session.get('current_poll_id'):
+    session = team_battle_session
+    user_id = poll_answer.user.id
+    user_name = poll_answer.user.first_name
+    selected_option = poll_answer.option_ids[0]
+    chat_id = GROUP_ID
+
+    player_team_key = None
+    if user_id in session['team1']['members']:
+        player_team_key = 'team1'
+    elif user_id in session['team2']['members']:
+        player_team_key = 'team2'
+    else:
+        added_team = add_late_joiner(user_id, user_name)
+        player_team_key = 'team1' if added_team['name'] == session['team1']['name'] else 'team2'
+        bot.send_message(chat_id, f"A new challenger appears! **{escape(user_name)}** joins **{escape(added_team['name'])}**!", parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
+
+    player_team = session[player_team_key]
+    
+    if 'player_stats' not in player_team: player_team['player_stats'] = {}
+    if user_id not in player_team['player_stats']:
+        player_team['player_stats'][user_id] = {'name': user_name, 'score': 0, 'total_time': 0, 'correct_answers': 0}
+    
+    player_stats = player_team['player_stats'][user_id]
+    time_taken = (datetime.datetime.now(IST) - session['question_start_time']).total_seconds()
+    player_stats['total_time'] += time_taken
+
+    idx = session['current_question_index']
+    question = session['questions'][idx]
+    correct_option_index = ['A', 'B', 'C', 'D'].index(str(question.get('Correct Answer', 'A')).upper())
+    
+    last_event = ""
+    points_awarded = 0
+    
+    if selected_option == correct_option_index:
+        points_awarded = 10 
+        if player_team.get('active_powerup') == 'BonusPoints':
+            points_awarded *= 2
+            player_team['active_powerup'] = None
+        
+        if not session.get('first_correct_user'):
+            session['first_correct_user'] = user_id
+            points_awarded += 5
+            last_event += "⚡ Speed Demon! +5 bonus! "
+
+        player_stats['correct_answers'] += 1
+        last_event += f"{escape(user_name)} from {escape(player_team['name'])} answered correctly! **+{points_awarded} points!**"
+    else:
+        last_event = f"{escape(user_name)} from {escape(player_team['name'])} answered."
+    
+    player_stats['score'] += points_awarded
+    player_team['score'] = sum(p.get('score', 0) for p in player_team['player_stats'].values())
+    
+    update_battle_dashboard(chat_id, session['session_id'], last_event)
+    
+    session['current_question_index'] += 1
+    
+    MID_QUIZ_CHECKPOINT = 6
+    if session['current_question_index'] == MID_QUIZ_CHECKPOINT:
+        time.sleep(2)
+        team1 = session['team1']
+        team2 = session['team2']
+        
+        leading_team = team1 if team1['score'] > team2['score'] else team2 if team2['score'] > team1['score'] else None
+        lagging_team = team2 if leading_team == team1 else team1 if leading_team == team2 else None
+
+        report_text = (
+            f"**---------- MID-QUIZ REPORT ----------**\n\n"
+            f"**{escape(team1['name'])}**: {team1['score']} points\n"
+            f"**{escape(team2['name'])}**: {team2['score']} points\n\n"
+        )
+        
+        if leading_team:
+            report_text += f"Looks like **{escape(leading_team['name'])}** is in the lead! Time for power-ups... ⚡"
+        else:
+            report_text += "It's a TIE! The battle is intense! Time for power-ups... ⚡"
+
+        sent_report = bot.send_message(chat_id, report_text, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
+        delete_message_in_thread(chat_id, sent_report.message_id, 60)
+        
+        trigger_powerup_selection(chat_id, leading_team, lagging_team) 
+        time.sleep(5)
+
+    if session['current_question_index'] < len(session['questions']):
+        time.sleep(3)
+        send_next_battle_question(chat_id, session['session_id'])
+    else:
+        send_final_battle_report(chat_id, session)
+        team_battle_session = {} 
+    
+    return # Stop processing after handling team battle answer
+
+            # --- ROUTE 2: Check if it's a Quiz Marathon poll ---
+            session_id = str(GROUP_ID)
+            marathon_session = QUIZ_SESSIONS.get(session_id)
+            if marathon_session and marathon_session.get('is_active') and poll_id_str == marathon_session.get('current_poll_id'):
+                participants = QUIZ_PARTICIPANTS.setdefault(session_id, {})
+                if user_info.id not in participants:
+                    participants[user_info.id] = {
+                        'name': user_info.first_name, 'user_name': user_info.username or user_info.first_name,
+                        'score': 0, 'total_time': 0, 'questions_answered': 0, 'correct_answer_times': [],
+                        'topic_scores': {}, 'performance_breakdown': {}
+                    }
+                participant = participants[user_info.id]
+                
+                ist_tz = timezone(timedelta(hours=5, minutes=30))
+                time_taken = (datetime.datetime.now(ist_tz) - marathon_session['question_start_time']).total_seconds()
+                
+                question_idx = marathon_session['current_question_index'] - 1
+                question_data = marathon_session['questions'][question_idx]
+                correct_option_index = ['A', 'B', 'C', 'D'].index(str(question_data.get('Correct Answer', 'A')).upper())
+                is_correct = (selected_option == correct_option_index)
+                
+                participant['questions_answered'] += 1
+                participant['total_time'] += time_taken
+                if is_correct:
+                    participant['score'] += 1
+                    participant['correct_answer_times'].append(time_taken)
+
+                topic = question_data.get('topic', 'General')
+                participant['topic_scores'].setdefault(topic, {'correct': 0, 'total': 0})
+                participant['topic_scores'][topic]['total'] += 1
+                if is_correct:
+                    participant['topic_scores'][topic]['correct'] += 1
+
+                q_type = question_data.get('question_type', 'Theory')
+                participant['performance_breakdown'].setdefault(topic, {})
+                participant['performance_breakdown'][topic].setdefault(q_type, {'correct': 0, 'total': 0, 'time': 0})
+                
+                breakdown = participant['performance_breakdown'][topic][q_type]
+                breakdown['total'] += 1
+                breakdown['time'] += time_taken
+                if is_correct:
+                    breakdown['correct'] += 1
+                return # Stop processing after handling marathon answer
+
+        # --- ROUTE 3: Check if it's a Random Quiz poll (This runs if it's not a marathon/battle) ---
+        active_poll_info = next((poll for poll in active_polls if poll['poll_id'] == poll_id_str), None)
+        if active_poll_info and active_poll_info.get('type') == 'random_quiz':
+            if selected_option == active_poll_info['correct_option_id']:
+                supabase.rpc('increment_score', {
+                    'user_id_in': user_info.id,
+                    'user_name_in': user_info.first_name
+                }).execute()
+            return # Stop processing after handling random quiz
+
+    except Exception as e:
+        print(f"Error in the master poll answer handler: {traceback.format_exc()}")
+        report_error_to_admin(f"Error in handle_poll_answer:\n{traceback.format_exc()}")
 @bot.message_handler(commands=['webresult'])
 @admin_required
 def handle_web_result_command(msg: types.Message):
@@ -3801,29 +3903,6 @@ def handle_my_analysis_command(msg: types.Message):
 
     except Exception as e:
         report_error_to_admin(f"Error generating analysis for {user_id}:\n{traceback.format_exc()}")
-
-
-@bot.callback_query_handler(func=lambda call: call.data == 'delete_analysis_msg')
-def handle_delete_message_callback(call: types.CallbackQuery):
-    """Deletes the analysis message, but only if the clicker is the original user or an admin."""
-    try:
-        original_user_id = call.message.reply_to_message.from_user.id
-        clicker_id = call.from_user.id
-
-        chat_admins = bot.get_chat_administrators(call.message.chat.id)
-        admin_ids = [admin.user.id for admin in chat_admins]
-
-        if clicker_id == original_user_id or clicker_id in admin_ids:
-            bot.delete_message(call.message.chat.id, call.message.message_id)
-            bot.delete_message(call.message.chat.id, call.message.reply_to_message.message_id)
-            bot.answer_callback_query(call.id, "Analysis deleted.")
-        else:
-            bot.answer_callback_query(call.id, "Only the person who requested this or an admin can delete it.", show_alert=True)
-            
-    except Exception as e:
-        report_error_to_admin(f"Error in delete_analysis_callback: {traceback.format_exc()}")
-        bot.answer_callback_query(call.id, "An error occurred.")
-
 
 def process_webapp_quiz_result(data):
     """
@@ -7007,93 +7086,7 @@ def handle_remind_checkers_command(msg: types.Message):
         bot.send_message(msg.chat.id, "❌ An error occurred while sending the reminder.")
 
 
-@bot.poll_answer_handler()
-def handle_all_poll_answers(poll_answer: types.PollAnswer):
-    """
-    This is the single, master handler for all poll answers.
-    It handles both Marathon and Random quizzes, records detailed performance, and is thread-safe.
-    """
-    poll_id_str = poll_answer.poll_id
-    user_info = poll_answer.user
-    selected_option = poll_answer.option_ids[0] if poll_answer.option_ids else None
 
-    if selected_option is None:
-        return
-
-    try:
-        session_id = str(GROUP_ID)
-        
-        # Use a lock to prevent race conditions when multiple users answer at once
-        with session_lock:
-            marathon_session = QUIZ_SESSIONS.get(session_id)
-            
-            # --- ROUTE 1: Marathon Quiz (MERGED & IMPROVED LOGIC) ---
-            if marathon_session and marathon_session.get('is_active') and poll_id_str == marathon_session.get('current_poll_id'):
-                
-                # Get participant, or initialize if new (using detailed init from Code 1)
-                participants = QUIZ_PARTICIPANTS.setdefault(session_id, {})
-                if user_info.id not in participants:
-                    participants[user_info.id] = {
-                        'name': user_info.first_name,
-                        'user_name': user_info.username or user_info.first_name, # More robust username
-                        'score': 0,
-                        'total_time': 0,
-                        'questions_answered': 0,
-                        'correct_answer_times': [],
-                        'topic_scores': {}, # Added from Code 1 for detailed analysis
-                        'performance_breakdown': {}
-                    }
-                participant = participants[user_info.id]
-                
-                # --- Calculate time and correctness ---
-                ist_tz = timezone(timedelta(hours=5, minutes=30))
-                time_taken = (datetime.datetime.now(ist_tz) - marathon_session['question_start_time']).total_seconds()
-                
-                question_idx = marathon_session['current_question_index'] - 1
-                question_data = marathon_session['questions'][question_idx]
-                correct_option_index = ['A', 'B', 'C', 'D'].index(str(question_data.get('Correct Answer', 'A')).upper())
-                is_correct = (selected_option == correct_option_index)
-                
-                # --- Update all participant stats ---
-                participant['questions_answered'] += 1
-                participant['total_time'] += time_taken # Accumulate total time for all answers as a tie-breaker
-
-                if is_correct:
-                    participant['score'] += 1
-                    participant['correct_answer_times'].append(time_taken)
-
-                # Update topic_scores (Logic from Code 1)
-                topic = question_data.get('topic', 'General')
-                participant['topic_scores'].setdefault(topic, {'correct': 0, 'total': 0})
-                participant['topic_scores'][topic]['total'] += 1
-                if is_correct:
-                    participant['topic_scores'][topic]['correct'] += 1
-
-                # Update performance_breakdown (Logic from Code 1)
-                q_type = question_data.get('question_type', 'Theory')
-                participant['performance_breakdown'].setdefault(topic, {})
-                participant['performance_breakdown'][topic].setdefault(q_type, {'correct': 0, 'total': 0, 'time': 0})
-                
-                breakdown = participant['performance_breakdown'][topic][q_type]
-                breakdown['total'] += 1
-                breakdown['time'] += time_taken
-                if is_correct:
-                    breakdown['correct'] += 1
-                
-                return # End processing for marathon quiz
-
-        # --- ROUTE 2: Random Quiz (UNTOUCHED LOGIC FROM CODE 2) ---
-        active_poll_info = next((poll for poll in active_polls if poll['poll_id'] == poll_id_str), None)
-        if active_poll_info and active_poll_info.get('type') == 'random_quiz':
-            if selected_option == active_poll_info['correct_option_id']:
-                supabase.rpc('increment_score', {
-                    'user_id_in': user_info.id,
-                    'user_name_in': user_info.first_name
-                }).execute()
-
-    except Exception as e:
-        print(f"Error in the master poll answer handler: {traceback.format_exc()}")
-        report_error_to_admin(f"Error in handle_all_poll_answers:\n{traceback.format_exc()}")
 # =============================================================================
 # 8. TELEGRAM BOT HANDLERS - MEMBER EVENTS & CHECKS
 # =============================================================================
