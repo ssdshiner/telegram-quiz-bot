@@ -222,7 +222,15 @@ def report_error_to_admin(error_message: str):
 def is_admin(user_id):
     """Checks if a user is the bot admin."""
     return user_id == ADMIN_USER_ID
-
+def has_any_permission(user_id):
+    """Checks if a user has been granted any permission in the database."""
+    try:
+        # Check if any row exists for this user_id in the permissions table
+        res = supabase.table('user_permissions').select('id', count='exact').eq('user_id', user_id).limit(1).execute()
+        return res.count > 0
+    except Exception as e:
+        print(f"Error checking for any permission for user {user_id}: {e}")
+        return False
 # NEW: Live Countdown Helper (More Efficient Version, now using SAFE HTML)
 def live_countdown(chat_id, message_id, duration_seconds):
     """
@@ -3151,7 +3159,7 @@ def handle_dm_conversation_steps(msg: types.Message):
 # --- Handler to Forward User DMs to Admin ---
 
 @bot.message_handler(
-    func=lambda msg: msg.chat.id == msg.from_user.id and not is_admin(msg.from_user.id),
+    func=lambda msg: msg.chat.id == msg.from_user.id and not is_admin(msg.from_user.id) and not has_any_permission(msg.from_user.id),
     content_types=['text', 'photo', 'video', 'document', 'audio', 'sticker']
 )
 def forward_user_reply_to_admin(msg: types.Message):
