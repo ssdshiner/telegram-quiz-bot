@@ -5440,7 +5440,6 @@ def _launch_marathon_session(user_id, chat_id, message_id, selected_set, num_que
     and launching the marathon.
     """
     try:
-        # Step 1: Fetch preset details
         progress_message = f"""⚙️ <b>MARATHON SETUP IN PROGRESS</b>
 
 🎯 <b>Quiz Set:</b> {escape(selected_set)}
@@ -5458,7 +5457,6 @@ def _launch_marathon_session(user_id, chat_id, message_id, selected_set, num_que
             raise ValueError(f"Preset '{selected_set}' not found in database.")
         preset_details = preset_details_res.data
 
-        # Step 2: Fetch questions
         bot.edit_message_text(progress_message.replace("Fetching preset details...", "✅ Preset details loaded\n• ⏳ Loading questions..."), chat_id, message_id, parse_mode="HTML")
         questions_res = supabase.table('quiz_questions').select('*').eq('quiz_set', selected_set).eq('used', False).limit(num_questions).execute()
         
@@ -5467,7 +5465,6 @@ def _launch_marathon_session(user_id, chat_id, message_id, selected_set, num_que
             bot.edit_message_text(no_questions_message, chat_id, message_id, parse_mode="HTML")
             return
 
-        # Step 3: Handle question count adjustment
         questions_for_marathon = questions_res.data
         actual_count = len(questions_for_marathon)
         
@@ -5476,7 +5473,6 @@ def _launch_marathon_session(user_id, chat_id, message_id, selected_set, num_que
             bot.edit_message_text(warning_message, chat_id, message_id, parse_mode="HTML")
             time.sleep(4)
 
-        # Step 4: Create session and announce
         bot.edit_message_text(progress_message.replace("Fetching preset details...", "✅ Preset details loaded\n• ✅ Questions loaded\n• 🚀 Launching..."), chat_id, message_id, parse_mode="HTML")
         
         session_id = str(GROUP_ID)
@@ -5497,7 +5493,14 @@ def _launch_marathon_session(user_id, chat_id, message_id, selected_set, num_que
         QUIZ_SESSIONS[session_id]['leaderboard_updates'] = update_intervals
         
         safe_title = escape(preset_details['quiz_title'])
-        safe_description = escape(preset_details['quiz_description'])
+        
+        # --- NEW: Truncate long descriptions to prevent crashing ---
+        quiz_description = preset_details.get('quiz_description', 'No description available.')
+        if len(quiz_description) > 500:
+            quiz_description = quiz_description[:500] + "..."
+        safe_description = escape(quiz_description)
+        # --- End of new logic ---
+
         estimated_minutes = actual_count * 1.5
         duration_text = f"~{int(estimated_minutes)} mins" if estimated_minutes < 60 else f"~{int(estimated_minutes/60)} hr"
         
