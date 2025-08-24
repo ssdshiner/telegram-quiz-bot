@@ -1395,172 +1395,6 @@ def update_battle_dashboard(chat_id, session_id, last_event=""):
         if "message is not modified" not in e.description:
             print(f"Could not edit dashboard: {e}")
 
-
-@bot.poll_answer_handler()
-def handle_poll_answer(poll_answer: types.PollAnswer):
-    """
-    This is the single, master handler for all poll answers.
-    It intelligently routes the answer to the correct logic for Team Battles,
-    Marathons, or Random Quizzes.
-    """
-    poll_id_str = poll_answer.poll_id
-    user_info = poll_answer.user
-    selected_option = poll_answer.option_ids[0] if poll_answer.option_ids else None
-
-    if selected_option is None:
-        return
-
-    try:
-        with session_lock:
-            # --- ROUTE 1: Check if it's a Team Battle poll ---
-            if team_battle_session and poll_id_str == team_battle_session.get('current_poll_id'):
-                session = team_battle_session
-                user_id = poll_answer.user.id
-                user_name = poll_answer.user.first_name
-                chat_id = GROUP_ID
-
-                player_team_key = None
-                if user_id in session['team1']['members']:
-                    player_team_key = 'team1'
-                elif user_id in session['team2']['members']:
-                    player_team_key = 'team2'
-                else:
-                    added_team = add_late_joiner(user_id, user_name)
-                    player_team_key = 'team1' if added_team['name'] == session['team1']['name'] else 'team2'
-                    bot.send_message(chat_id, f"A new challenger appears! **{escape(user_name)}** joins **{escape(added_team['name'])}**!", parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
-
-                player_team = session[player_team_key]
-                
-                if 'player_stats' not in player_team: player_team['player_stats'] = {}
-                if user_id not in player_team['player_stats']:
-                    player_team['player_stats'][user_id] = {'name': user_name, 'score': 0, 'total_time': 0, 'correct_answers': 0}
-                
-                player_stats = player_team['player_stats'][user_id]
-                time_taken = (datetime.datetime.now(IST) - session['question_start_time']).total_seconds()
-                player_stats['total_time'] += time_taken
-
-                idx = session['current_question_index']
-                question = session['questions'][idx]
-                correct_option_index = ['A', 'B', 'C', 'D'].index(str(question.get('Correct Answer', 'A')).upper())
-                
-                last_event = ""
-                points_awarded = 0
-                
-                if selected_option == correct_option_index:
-                    points_awarded = 10
-                    if player_team.get('active_powerup') == 'BonusPoints':
-                        points_awarded *= 2
-                        player_team['active_powerup'] = None
-                    
-                    if not session.get('first_correct_user'):
-                        session['first_correct_user'] = user_id
-                        points_awarded += 5
-                        last_event += "⚡ Speed Demon! +5 bonus! "
-
-                    player_stats['correct_answers'] += 1
-                    last_event += f"{escape(user_name)} from {escape(player_team['name'])} answered correctly! **+{points_awarded} points!**"
-                else:
-                    last_event = f"{escape(user_name)} from {escape(player_team['name'])} answered."
-                
-                player_stats['score'] += points_awarded
-                player_team['score'] = sum(p.get('score', 0) for p in player_team['player_stats'].values())
-                
-                update_battle_dashboard(chat_id, session['session_id'], last_event)
-                
-                session['current_question_index'] += 1
-                
-                MID_QUIZ_CHECKPOINT = 6
-                if session['current_question_index'] == MID_QUIZ_CHECKPOINT:
-                    time.sleep(2)
-                    team1 = session['team1']
-                    team2 = session['team2']
-                    
-                    leading_team = team1 if team1['score'] > team2['score'] else team2 if team2['score'] > team1['score'] else None
-                    lagging_team = team2 if leading_team == team1 else team1 if leading_team == team2 else None
-
-                    report_text = (
-                        f"**---------- MID-QUIZ REPORT ----------**\n\n"
-                        f"**{escape(team1['name'])}**: {team1['score']} points\n"
-                        f"**{escape(team2['name'])}**: {team2['score']} points\n\n"
-                    )
-                    
-                    if leading_team:
-                        report_text += f"Looks like **{escape(leading_team['name'])}** is in the lead! Time for power-ups... ⚡"
-                    else:
-                        report_text += "It's a TIE! The battle is intense! Time for power-ups... ⚡"
-
-                    sent_report = bot.send_message(chat_id, report_text, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
-                    delete_message_in_thread(chat_id, sent_report.message_id, 60)
-                    
-                    trigger_powerup_selection(chat_id, leading_team, lagging_team) 
-                    time.sleep(5)
-
-                if session['current_question_index'] < len(session['questions']):
-                    time.sleep(3)
-                    send_next_battle_question(chat_id, session['session_id'])
-                else:
-                    send_final_battle_report(chat_id, session)
-                    team_battle_session = {}
-                
-                return # Stop processing after handling team battle answer
-
-            # --- ROUTE 2: Check if it's a Quiz Marathon poll ---
-            session_id = str(GROUP_ID)
-            marathon_session = QUIZ_SESSIONS.get(session_id)
-            if marathon_session and marathon_session.get('is_active') and poll_id_str == marathon_session.get('current_poll_id'):
-                participants = QUIZ_PARTICIPANTS.setdefault(session_id, {})
-                if user_info.id not in participants:
-                    participants[user_info.id] = {
-                        'name': user_info.first_name, 'user_name': user_info.username or user_info.first_name,
-                        'score': 0, 'total_time': 0, 'questions_answered': 0, 'correct_answer_times': [],
-                        'topic_scores': {}, 'performance_breakdown': {}
-                    }
-                participant = participants[user_info.id]
-                
-                ist_tz = timezone(timedelta(hours=5, minutes=30))
-                time_taken = (datetime.datetime.now(ist_tz) - marathon_session['question_start_time']).total_seconds()
-                
-                question_idx = marathon_session['current_question_index'] - 1
-                question_data = marathon_session['questions'][question_idx]
-                correct_option_index = ['A', 'B', 'C', 'D'].index(str(question_data.get('Correct Answer', 'A')).upper())
-                is_correct = (selected_option == correct_option_index)
-                
-                participant['questions_answered'] += 1
-                participant['total_time'] += time_taken
-                if is_correct:
-                    participant['score'] += 1
-                    participant['correct_answer_times'].append(time_taken)
-
-                topic = question_data.get('topic', 'General')
-                participant['topic_scores'].setdefault(topic, {'correct': 0, 'total': 0})
-                participant['topic_scores'][topic]['total'] += 1
-                if is_correct:
-                    participant['topic_scores'][topic]['correct'] += 1
-
-                q_type = question_data.get('question_type', 'Theory')
-                participant['performance_breakdown'].setdefault(topic, {})
-                participant['performance_breakdown'][topic].setdefault(q_type, {'correct': 0, 'total': 0, 'time': 0})
-                
-                breakdown = participant['performance_breakdown'][topic][q_type]
-                breakdown['total'] += 1
-                breakdown['time'] += time_taken
-                if is_correct:
-                    breakdown['correct'] += 1
-                return # Stop processing after handling marathon answer
-
-        # --- ROUTE 3: Check if it's a Random Quiz poll (This runs if it's not a marathon/battle) ---
-        active_poll_info = next((poll for poll in active_polls if poll['poll_id'] == poll_id_str), None)
-        if active_poll_info and active_poll_info.get('type') == 'random_quiz':
-            if selected_option == active_poll_info['correct_option_id']:
-                supabase.rpc('increment_score', {
-                    'user_id_in': user_info.id,
-                    'user_name_in': user_info.first_name
-                }).execute()
-            return # Stop processing after handling random quiz
-
-    except Exception as e:
-        print(f"Error in the master poll answer handler: {traceback.format_exc()}")
-        report_error_to_admin(f"Error in handle_poll_answer:\n{traceback.format_exc()}")
 @bot.callback_query_handler(func=lambda call: call.data.startswith('pwrup_'))
 def handle_powerup_selection(call: types.CallbackQuery):
     global team_battle_session
@@ -2007,100 +1841,98 @@ def handle_poll_answer(poll_answer: types.PollAnswer):
         return
 
     try:
-        # Use a lock to prevent race conditions when multiple users answer at once
         with session_lock:
-# --- ROUTE 1: Check if it's a Team Battle poll ---
-if team_battle_session and poll_id_str == team_battle_session.get('current_poll_id'):
-    session = team_battle_session
-    user_id = poll_answer.user.id
-    user_name = poll_answer.user.first_name
-    selected_option = poll_answer.option_ids[0]
-    chat_id = GROUP_ID
+            # --- ROUTE 1: Check if it's a Team Battle poll ---
+            if team_battle_session and poll_id_str == team_battle_session.get('current_poll_id'):
+                session = team_battle_session
+                user_id = poll_answer.user.id
+                user_name = poll_answer.user.first_name
+                chat_id = GROUP_ID
 
-    player_team_key = None
-    if user_id in session['team1']['members']:
-        player_team_key = 'team1'
-    elif user_id in session['team2']['members']:
-        player_team_key = 'team2'
-    else:
-        added_team = add_late_joiner(user_id, user_name)
-        player_team_key = 'team1' if added_team['name'] == session['team1']['name'] else 'team2'
-        bot.send_message(chat_id, f"A new challenger appears! **{escape(user_name)}** joins **{escape(added_team['name'])}**!", parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
+                player_team_key = None
+                if user_id in session['team1']['members']:
+                    player_team_key = 'team1'
+                elif user_id in session['team2']['members']:
+                    player_team_key = 'team2'
+                else:
+                    added_team = add_late_joiner(user_id, user_name)
+                    player_team_key = 'team1' if added_team['name'] == session['team1']['name'] else 'team2'
+                    bot.send_message(chat_id, f"A new challenger appears! **{escape(user_name)}** joins **{escape(added_team['name'])}**!", parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
 
-    player_team = session[player_team_key]
-    
-    if 'player_stats' not in player_team: player_team['player_stats'] = {}
-    if user_id not in player_team['player_stats']:
-        player_team['player_stats'][user_id] = {'name': user_name, 'score': 0, 'total_time': 0, 'correct_answers': 0}
-    
-    player_stats = player_team['player_stats'][user_id]
-    time_taken = (datetime.datetime.now(IST) - session['question_start_time']).total_seconds()
-    player_stats['total_time'] += time_taken
+                player_team = session[player_team_key]
+                
+                if 'player_stats' not in player_team: player_team['player_stats'] = {}
+                if user_id not in player_team['player_stats']:
+                    player_team['player_stats'][user_id] = {'name': user_name, 'score': 0, 'total_time': 0, 'correct_answers': 0}
+                
+                player_stats = player_team['player_stats'][user_id]
+                time_taken = (datetime.datetime.now(IST) - session['question_start_time']).total_seconds()
+                player_stats['total_time'] += time_taken
 
-    idx = session['current_question_index']
-    question = session['questions'][idx]
-    correct_option_index = ['A', 'B', 'C', 'D'].index(str(question.get('Correct Answer', 'A')).upper())
-    
-    last_event = ""
-    points_awarded = 0
-    
-    if selected_option == correct_option_index:
-        points_awarded = 10 
-        if player_team.get('active_powerup') == 'BonusPoints':
-            points_awarded *= 2
-            player_team['active_powerup'] = None
-        
-        if not session.get('first_correct_user'):
-            session['first_correct_user'] = user_id
-            points_awarded += 5
-            last_event += "⚡ Speed Demon! +5 bonus! "
+                idx = session['current_question_index']
+                question = session['questions'][idx]
+                correct_option_index = ['A', 'B', 'C', 'D'].index(str(question.get('Correct Answer', 'A')).upper())
+                
+                last_event = ""
+                points_awarded = 0
+                
+                if selected_option == correct_option_index:
+                    points_awarded = 10 
+                    if player_team.get('active_powerup') == 'BonusPoints':
+                        points_awarded *= 2
+                        player_team['active_powerup'] = None
+                    
+                    if not session.get('first_correct_user'):
+                        session['first_correct_user'] = user_id
+                        points_awarded += 5
+                        last_event += "⚡ Speed Demon! +5 bonus! "
 
-        player_stats['correct_answers'] += 1
-        last_event += f"{escape(user_name)} from {escape(player_team['name'])} answered correctly! **+{points_awarded} points!**"
-    else:
-        last_event = f"{escape(user_name)} from {escape(player_team['name'])} answered."
-    
-    player_stats['score'] += points_awarded
-    player_team['score'] = sum(p.get('score', 0) for p in player_team['player_stats'].values())
-    
-    update_battle_dashboard(chat_id, session['session_id'], last_event)
-    
-    session['current_question_index'] += 1
-    
-    MID_QUIZ_CHECKPOINT = 6
-    if session['current_question_index'] == MID_QUIZ_CHECKPOINT:
-        time.sleep(2)
-        team1 = session['team1']
-        team2 = session['team2']
-        
-        leading_team = team1 if team1['score'] > team2['score'] else team2 if team2['score'] > team1['score'] else None
-        lagging_team = team2 if leading_team == team1 else team1 if leading_team == team2 else None
+                    player_stats['correct_answers'] += 1
+                    last_event += f"{escape(user_name)} from {escape(player_team['name'])} answered correctly! **+{points_awarded} points!**"
+                else:
+                    last_event = f"{escape(user_name)} from {escape(player_team['name'])} answered."
+                
+                player_stats['score'] += points_awarded
+                player_team['score'] = sum(p.get('score', 0) for p in player_team['player_stats'].values())
+                
+                update_battle_dashboard(chat_id, session['session_id'], last_event)
+                
+                session['current_question_index'] += 1
+                
+                MID_QUIZ_CHECKPOINT = 6
+                if session['current_question_index'] == MID_QUIZ_CHECKPOINT:
+                    time.sleep(2)
+                    team1 = session['team1']
+                    team2 = session['team2']
+                    
+                    leading_team = team1 if team1['score'] > team2['score'] else team2 if team2['score'] > team1['score'] else None
+                    lagging_team = team2 if leading_team == team1 else team1 if leading_team == team2 else None
 
-        report_text = (
-            f"**---------- MID-QUIZ REPORT ----------**\n\n"
-            f"**{escape(team1['name'])}**: {team1['score']} points\n"
-            f"**{escape(team2['name'])}**: {team2['score']} points\n\n"
-        )
-        
-        if leading_team:
-            report_text += f"Looks like **{escape(leading_team['name'])}** is in the lead! Time for power-ups... ⚡"
-        else:
-            report_text += "It's a TIE! The battle is intense! Time for power-ups... ⚡"
+                    report_text = (
+                        f"**---------- MID-QUIZ REPORT ----------**\n\n"
+                        f"**{escape(team1['name'])}**: {team1['score']} points\n"
+                        f"**{escape(team2['name'])}**: {team2['score']} points\n\n"
+                    )
+                    
+                    if leading_team:
+                        report_text += f"Looks like **{escape(leading_team['name'])}** is in the lead! Time for power-ups... ⚡"
+                    else:
+                        report_text += "It's a TIE! The battle is intense! Time for power-ups... ⚡"
 
-        sent_report = bot.send_message(chat_id, report_text, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
-        delete_message_in_thread(chat_id, sent_report.message_id, 60)
-        
-        trigger_powerup_selection(chat_id, leading_team, lagging_team) 
-        time.sleep(5)
+                    sent_report = bot.send_message(chat_id, report_text, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
+                    delete_message_in_thread(chat_id, sent_report.message_id, 60)
+                    
+                    trigger_powerup_selection(chat_id, leading_team, lagging_team) 
+                    time.sleep(5)
 
-    if session['current_question_index'] < len(session['questions']):
-        time.sleep(3)
-        send_next_battle_question(chat_id, session['session_id'])
-    else:
-        send_final_battle_report(chat_id, session)
-        team_battle_session = {} 
-    
-    return # Stop processing after handling team battle answer
+                if session['current_question_index'] < len(session['questions']):
+                    time.sleep(3)
+                    send_next_battle_question(chat_id, session['session_id'])
+                else:
+                    send_final_battle_report(chat_id, session)
+                    team_battle_session = {} 
+                
+                return # Stop processing after handling team battle answer
 
             # --- ROUTE 2: Check if it's a Quiz Marathon poll ---
             session_id = str(GROUP_ID)
