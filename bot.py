@@ -5886,23 +5886,6 @@ def delete_message_in_thread(chat_id, message_id, delay):
     
     threading.Thread(target=task).start()
 
-def format_duration(seconds: float) -> str:
-    """
-    UPGRADED: Formats seconds into a more human-readable 'X min Y sec' format.
-    """
-    if seconds < 0: return "0 sec"
-    if seconds < 60: return f"{int(seconds)} sec"
-    
-    minutes = int(seconds // 60)
-    remaining_seconds = int(seconds % 60)
-    
-    if remaining_seconds == 0:
-        return f"{minutes} min"
-    else:
-        return f"{minutes} min {remaining_seconds} sec"
-
-# REMOVED: The function 'record_quiz_participation' was redundant and has been removed for cleaner code.
-# All participation is now correctly recorded inside the 'send_marathon_results' function.
 
 def calculate_legend_tier(user_score, total_questions, all_scores):
     """
