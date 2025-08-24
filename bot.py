@@ -3874,17 +3874,6 @@ def handle_delete_message_callback(call: types.CallbackQuery):
         bot.answer_callback_query(call.id, "Could not delete the message.")
         print(f"Error deleting message: {e}")
 
-# --- COMMAND ROUTER FOR WEB APP ---
-# Yahan hum ek dictionary banayenge jo Web App se aaye commands ko unke function se jodegi
-COMMAND_ROUTER = {
-    '/todayquiz': handle_today_quiz,
-    '/kalkaquiz': handle_tomorrow_quiz,
-    '/listfile': handle_listfile_command,
-    '/mystats': handle_mystats_command,
-    '/my_analysis': handle_my_analysis_command,
-    '/need': handle_need_command # Ye startswith ke liye alag se handle hoga
-}
-
 @bot.message_handler(content_types=['web_app_data'])
 @membership_required
 def process_webapp_quiz_results(data):
@@ -7517,7 +7506,16 @@ except Exception as e:
 print("="*50)
 print("🚀 BOT IS LIVE AND READY FOR UPDATES 🚀")
 print("="*50 + "\n")
-
+# --- COMMAND ROUTER FOR WEB APP ---
+# Yahan hum ek dictionary banayenge jo Web App se aaye commands ko unke function se jodegi
+COMMAND_ROUTER = {
+    '/todayquiz': handle_today_quiz,
+    '/kalkaquiz': handle_tomorrow_quiz,
+    '/listfile': handle_listfile_command,
+    '/mystats': handle_mystats_command,
+    '/my_analysis': handle_my_analysis_command,
+    '/need': handle_need_command # Ye startswith ke liye alag se handle hoga
+}
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 10000))
