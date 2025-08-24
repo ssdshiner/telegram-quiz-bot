@@ -3951,7 +3951,7 @@ def handle_webapp_data(msg: types.Message):
     if data_from_webapp.strip().startswith('{'):
         try:
             payload = json.loads(data_from_webapp)
-            if payload.get('type') == 'femaQuizResult':
+            if payload.get('type') == 'webappQuizResult':
                 process_webapp_quiz_results(payload)
                 return
         except json.JSONDecodeError:
