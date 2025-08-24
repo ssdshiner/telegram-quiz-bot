@@ -5588,7 +5588,7 @@ def _format_marathon_poll_question(question_data, current_idx, total_questions):
 
     question_text = header + clean_question
     
-    return question_text.replace("'", "&#39;")
+    return question_text
 
 def send_marathon_question(session_id):
     """
@@ -5623,9 +5623,13 @@ def send_marathon_question(session_id):
     if case_study_text:
         try:
             case_study_title = question_data.get('case_study_title')
-            header = f"📖 <b>Case Study for Question {session['current_question_index'] + 1}</b>\n<pre>------------------</pre>\n"
+            
+            header = f"📖 <b>Case Study for Question {session['current_question_index'] + 1}</b>\n━━━━━━━━━━━━━━━━━━\n"
+            
             if case_study_title:
-                header += f"<b>Case Title: {escape(case_study_title)}</b>\n\n"
+                # --- THIS IS THE CORRECTED LINE ---
+                header += f"<blockquote><b>Case Title: {escape(case_study_title)}</b></blockquote>\n"
+            
             full_message = header + case_study_text
             bot.send_message(GROUP_ID, full_message, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
             time.sleep(5) 
@@ -5652,12 +5656,10 @@ def send_marathon_question(session_id):
     
     question_text = _format_marathon_poll_question(question_data, session['current_question_index'], len(session['questions']))
     
-    # --- NEW: Truncate long explanations ---
     explanation_text = unescape(str(question_data.get('Explanation', '')))
-    if len(explanation_text) > 195: # Max 200, leave some room
+    if len(explanation_text) > 195:
         explanation_text = explanation_text[:195] + "..."
     safe_explanation = escape(explanation_text)
-    # --- End of new logic ---
     
     poll_message = bot.send_poll(
         chat_id=GROUP_ID, message_thread_id=QUIZ_TOPIC_ID, question=question_text, 
