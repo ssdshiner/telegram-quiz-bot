@@ -954,7 +954,14 @@ def handle_web_quiz_command(msg: types.Message):
             types.InlineKeyboardButton("🚀 Launch Quiz Challenge", web_app=types.WebAppInfo(url=web_app_url))
         )
         
-        bot.reply_to(msg, "Click the button below to start the quiz challenge!", reply_markup=markup)
+        # --- THIS IS THE FIX ---
+        # We use send_message to post it as a new message in the correct topic
+        bot.send_message(
+            msg.chat.id,
+            "Click the button below to start the quiz challenge!",
+            reply_markup=markup,
+            message_thread_id=msg.message_thread_id
+        )
 
     except Exception as e:
         report_error_to_admin(f"Error in /webquiz command: {traceback.format_exc()}")
