@@ -1743,9 +1743,11 @@ Hello Admin! Here are your available tools.
 <code>/practice</code> - Start daily written practice.
 <code>/remind_checkers</code> - Remind for pending reviews.
 
-<b>👥 Member & Role Management</b>
-<code>/promote</code> - Grant command permissions.
-<code>/demote</code> - Remove Contributor role.
+<b>👥 Member & Permission Management</b>
+<code>/promote @user</code> - Grant command permissions.
+<code>/demote @user</code> - Remove all permissions.
+<code>/viewperms @user</code> - See a user's permissions.
+<code>/revoke @user</code> - Revoke a specific permission.
 <code>/dm</code> - Send a direct message to a user.
 <code>/activity_report</code> - Get a group activity report.
 <code>/run_checks</code> - Manually run warning/appreciation checks.
@@ -2190,7 +2192,8 @@ DELEGATABLE_COMMANDS = {
 @admin_required
 def handle_promote_command(msg: types.Message):
     """
-    Starts the interactive flow to grant specific permissions to a user.
+    Starts the interactive flow to grant specific permissions to a user,
+    but ONLY if they are an admin in the group.
     """
     try:
         parts = msg.text.split(' ')
@@ -2202,72 +2205,195 @@ def handle_promote_command(msg: types.Message):
         user_response = supabase.table('group_members').select('user_id, first_name').eq('username', username_to_promote).single().execute()
         
         if not user_response.data:
-            bot.reply_to(msg, f"❌ User <code>@{escape(username_to_promote)}</code> not found.", parse_mode="HTML")
+            bot.reply_to(msg, f"❌ User <code>@{escape(username_to_promote)}</code> not found in my database records.", parse_mode="HTML")
             return
             
         target_user = user_response.data
+        target_user_id = target_user['user_id']
+        
+        # --- NEW ADMIN CHECK ---
+        # Pehle check karo ki ye user group ka admin hai ya nahi
+        try:
+            chat_admins = bot.get_chat_administrators(GROUP_ID)
+            admin_ids = [admin.user.id for admin in chat_admins]
+            if target_user_id not in admin_ids:
+                bot.reply_to(msg, f"❌ <b>Action Failed!</b>\n\n<b>{escape(target_user['first_name'])}</b> is not an admin in the group. You can only grant special permissions to group admins.", parse_mode="HTML")
+                return
+        except Exception as admin_check_error:
+            report_error_to_admin(f"Could not check group admins in /promote: {admin_check_error}")
+            bot.reply_to(msg, "❌ Could not verify the user's admin status. Please try again.")
+            return
+        # --- END OF NEW CHECK ---
         
         markup = types.InlineKeyboardMarkup(row_width=2)
         buttons = []
         for command_name, button_label in DELEGATABLE_COMMANDS.items():
-            # Pass admin_id, target_id, and command_name in callback
-            callback_data = f"grant_{msg.from_user.id}_{target_user['user_id']}_{command_name}"
+            callback_data = f"grant_{msg.from_user.id}_{target_user_id}_{command_name}"
             buttons.append(types.InlineKeyboardButton(button_label, callback_data=callback_data))
         
-        # Arrange buttons in pairs
         for i in range(0, len(buttons), 2):
             if i + 1 < len(buttons):
                 markup.row(buttons[i], buttons[i+1])
             else:
                 markup.row(buttons[i])
 
-        bot.reply_to(msg, f"Choose a permission to grant to <b>{escape(target_user['first_name'])}</b>:", reply_markup=markup, parse_mode="HTML")
+        bot.reply_to(msg, f"Choose a permission to grant to group admin <b>{escape(target_user['first_name'])}</b>:", reply_markup=markup, parse_mode="HTML")
 
     except Exception as e:
         print(f"Error in /promote: {traceback.format_exc()}")
+        report_error_to_admin(f"Error in /promote: {traceback.format_exc()}")
         bot.reply_to(msg, "❌ An error occurred.")
+
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('grant_'))
 def handle_grant_permission_callback(call: types.CallbackQuery):
     """
-    Handles the permission granting button click.
+    Handles the permission granting button click and announces it in the group.
     """
     try:
-        _, admin_id, target_user_id, command_name = call.data.split('_')
+        _, admin_id_str, target_user_id_str, command_name = call.data.split('_')
+        admin_id = int(admin_id_str)
+        target_user_id = int(target_user_id_str)
 
         # Security Check: Only the admin who initiated the command can grant permission
-        if call.from_user.id != int(admin_id):
+        if call.from_user.id != admin_id:
             bot.answer_callback_query(call.id, "You are not authorized to perform this action.", show_alert=True)
             return
 
         # Grant the permission in the database
         supabase.table('user_permissions').upsert({
-            'user_id': int(target_user_id),
+            'user_id': target_user_id,
             'command_name': command_name,
-            'granted_by': int(admin_id)
+            'granted_by': admin_id
         }).execute()
         
+        # --- NEW: Announce the promotion in the group ---
+        try:
+            # Get the user's name for a friendly message
+            user_res = supabase.table('group_members').select('first_name').eq('user_id', target_user_id).single().execute()
+            target_user_name = user_res.data.get('first_name', 'The user') if user_res.data else 'The user'
+
+            # Format the announcement message
+            announcement_text = (
+                f"✅ **Permission Granted!**\n\n"
+                f"👤 User: <b>{escape(target_user_name)}</b>\n"
+                f"🔑 Has been granted permission to use the <code>/{command_name}</code> command by the admin."
+            )
+            # Announcement ko UPDATES_TOPIC_ID mein bhejenge
+            bot.send_message(GROUP_ID, announcement_text, parse_mode="HTML", message_thread_id=UPDATES_TOPIC_ID)
+        except Exception as announce_error:
+            print(f"Could not send promotion announcement to group: {announce_error}")
+            report_error_to_admin(f"Could not send promotion announcement for {target_user_id}: {announce_error}")
+        # --- End of New Logic ---
+
         button_label = DELEGATABLE_COMMANDS.get(command_name, command_name)
         bot.answer_callback_query(call.id, f"✅ Permission '{button_label}' granted!", show_alert=True)
         # Clean up the original message by removing the buttons
-        bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+        bot.edit_message_text(f"Permission for <code>/{command_name}</code> granted.", call.message.chat.id, call.message.message_id, parse_mode="HTML")
 
     except Exception as e:
         print(f"Error in permission callback: {traceback.format_exc()}")
+        report_error_to_admin(f"Error in permission callback: {traceback.format_exc()}")
         bot.answer_callback_query(call.id, "❌ An error occurred while granting permission.", show_alert=True)
+@bot.message_handler(commands=['viewperms'])
+@admin_required
+def handle_view_perms(msg: types.Message):
+    """Shows the permissions for a specific user."""
+    try:
+        parts = msg.text.split(' ')
+        if len(parts) < 2 or not parts[1].startswith('@'):
+            bot.reply_to(msg, "Please provide a username.\n<b>Usage:</b> <code>/viewperms @username</code>", parse_mode="HTML")
+            return
 
+        username_to_check = parts[1].lstrip('@')
+        user_response = supabase.table('group_members').select('user_id, first_name').eq('username', username_to_check).single().execute()
+        
+        if not user_response.data:
+            bot.reply_to(msg, f"❌ User <code>@{escape(username_to_check)}</code> not found.", parse_mode="HTML")
+            return
+            
+        target_user = user_response.data
+        perms_response = supabase.table('user_permissions').select('command_name').eq('user_id', target_user['user_id']).execute()
+        
+        if not perms_response.data:
+            bot.reply_to(msg, f"<b>{escape(target_user['first_name'])}</b> has no special permissions.", parse_mode="HTML")
+            return
+            
+        permissions_list = "\n".join([f"• <code>{p['command_name']}</code>" for p in perms_response.data])
+        bot.reply_to(msg, f"<b>Permissions for {escape(target_user['first_name'])}:</b>\n\n{permissions_list}", parse_mode="HTML")
+
+    except Exception as e:
+        report_error_to_admin(f"Error in /viewperms: {traceback.format_exc()}")
+        bot.reply_to(msg, "❌ An error occurred while fetching permissions.")
+
+
+@bot.message_handler(commands=['revoke'])
+@admin_required
+def handle_revoke_command(msg: types.Message):
+    """Starts the interactive flow to revoke a permission."""
+    try:
+        parts = msg.text.split(' ')
+        if len(parts) < 2 or not parts[1].startswith('@'):
+            bot.reply_to(msg, "Please provide a username.\n<b>Usage:</b> <code>/revoke @username</code>", parse_mode="HTML")
+            return
+
+        username_to_revoke = parts[1].lstrip('@')
+        user_response = supabase.table('group_members').select('user_id, first_name').eq('username', username_to_revoke).single().execute()
+        
+        if not user_response.data:
+            bot.reply_to(msg, f"❌ User <code>@{escape(username_to_revoke)}</code> not found.", parse_mode="HTML")
+            return
+            
+        target_user = user_response.data
+        perms_response = supabase.table('user_permissions').select('command_name').eq('user_id', target_user['user_id']).execute()
+
+        if not perms_response.data:
+            bot.reply_to(msg, f"<b>{escape(target_user['first_name'])}</b> has no permissions to revoke.", parse_mode="HTML")
+            return
+            
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        for perm in perms_response.data:
+            command_name = perm['command_name']
+            callback_data = f"revoke_{msg.from_user.id}_{target_user['user_id']}_{command_name}"
+            markup.add(types.InlineKeyboardButton(f"❌ Revoke {command_name}", callback_data=callback_data))
+
+        bot.reply_to(msg, f"Choose a permission to revoke from <b>{escape(target_user['first_name'])}</b>:", reply_markup=markup, parse_mode="HTML")
+
+    except Exception as e:
+        report_error_to_admin(f"Error in /revoke: {traceback.format_exc()}")
+        bot.reply_to(msg, "❌ An error occurred.")
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('revoke_'))
+def handle_revoke_permission_callback(call: types.CallbackQuery):
+    """Handles the permission revoking button click."""
+    try:
+        _, admin_id, target_user_id, command_name = call.data.split('_')
+
+        if call.from_user.id != int(admin_id):
+            bot.answer_callback_query(call.id, "You are not authorized to perform this action.", show_alert=True)
+            return
+
+        # Revoke the permission from the database
+        supabase.table('user_permissions').delete().match({'user_id': int(target_user_id), 'command_name': command_name}).execute()
+        
+        bot.answer_callback_query(call.id, f"✅ Permission '{command_name}' revoked!", show_alert=True)
+        bot.edit_message_text(f"Permission <code>{command_name}</code> was revoked.", call.message.chat.id, call.message.message_id, parse_mode="HTML")
+
+    except Exception as e:
+        report_error_to_admin(f"Error in revoke callback: {traceback.format_exc()}")
+        bot.answer_callback_query(call.id, "❌ An error occurred while revoking permission.", show_alert=True)
 
 @bot.message_handler(commands=['demote'])
 @admin_required
 def handle_demote_command(msg: types.Message):
     """
-    Demotes a user from 'contributor' back to 'member' using safe HTML for replies.
+    Revokes ALL special permissions from a user and resets their role.
     Usage: /demote @username
     """
     try:
         parts = msg.text.split(' ')
         if len(parts) < 2 or not parts[1].startswith('@'):
-            # THE FIX: Converted to safe HTML
             bot.reply_to(msg, "Please provide a username. \n<b>Usage:</b> <code>/demote @username</code>", parse_mode="HTML")
             return
 
@@ -2277,21 +2403,25 @@ def handle_demote_command(msg: types.Message):
         user_response = supabase.table('group_members').select('user_id, first_name').eq('username', username_to_demote).single().execute()
         
         if not user_response.data:
-            # THE FIX: Converted to safe HTML
             bot.reply_to(msg, f"❌ User <code>@{safe_username}</code> not found in my records.", parse_mode="HTML")
             return
             
         target_user = user_response.data
         target_user_id = target_user['user_id']
 
-        # Update their role back to 'member'
+        # --- NEW LOGIC ---
+        # Step 1: Naye permission table se saari permissions delete karna
+        supabase.table('user_permissions').delete().eq('user_id', target_user_id).execute()
+        
+        # Step 2: Purane role system ko bhi reset karna (for safety)
         supabase.table('quiz_activity').update({'user_role': 'member'}).eq('user_id', target_user_id).execute()
         
-        # THE FIX: Converted to safe HTML
-        bot.reply_to(msg, f"✅ Success! <b>@{safe_username}</b> has been returned to a <b>Member</b> role.", parse_mode="HTML")
+        # New, more accurate confirmation message
+        bot.reply_to(msg, f"✅ Success! All special permissions for <b>@{safe_username}</b> have been revoked.", parse_mode="HTML")
 
     except Exception as e:
         print(f"Error in /demote command: {traceback.format_exc()}")
+        report_error_to_admin(f"Error in /demote: {traceback.format_exc()}")
         bot.reply_to(msg, "❌ An error occurred while demoting the user.")
 
 
