@@ -5724,8 +5724,8 @@ def handle_stop_marathon_command(msg: types.Message):
 
     bot.send_message(msg.from_user.id, admin_confirmation, parse_mode="HTML")
     
-    # Generate results using the new, correct sequence
-    send_final_report_sequence(session_id)
+    # THIS IS THE CORRECTED LINE
+    send_marathon_results(session_id)
     
     # Clean up admin command message
     try:
@@ -5831,7 +5831,8 @@ def send_marathon_results(session_id):
         
         if efficiency_champion:
             eff_accuracy = (efficiency_champion['score'] / total_questions_asked * 100)
-            eff_avg_time = eff_champion['total_time'] / eff_champion['questions_answered'] if eff_champion['questions_answered'] > 0 else 0
+            # THIS IS THE CORRECTED LINE
+            eff_avg_time = efficiency_champion['total_time'] / efficiency_champion['questions_answered'] if efficiency_champion['questions_answered'] > 0 else 0
             card1_text += "⚡️ **EFFICIENCY CHAMPION** ⚡️\n"
             card1_text += f"💨 **{escape(efficiency_champion['name'])}** (Blazing fast answers!)\n"
             card1_text += f"> Score: **{efficiency_champion['score']}/{total_questions_asked} ({eff_accuracy:.1f}%)** | Avg. Time: **{eff_avg_time:.1f}s**\n\n"
