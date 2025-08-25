@@ -142,6 +142,7 @@ LEGEND_TIERS = {
     'SILVER': 60,     # Top 40%
     'BRONZE': 40      # Top 60%
 }
+APPRECIATION_STREAK = 3 # Days of consecutive quizzes for a shout-out
 
 # =============================================================================
 # 4. GOOGLE SHEETS INTEGRATION
@@ -326,6 +327,28 @@ def is_bot_mentioned(message):
     if not message.text:
         return False
     return f'@{BOT_USERNAME.lower()}' in message.text.lower()
+def is_bot_mentioned(message):
+    """
+    Checks if the bot's @username is mentioned in the message text.
+    This version is case-insensitive and more accurate.
+    """
+    if not message.text:
+        return False
+    return f'@{BOT_USERNAME.lower()}' in message.text.lower()
+
+# This is the new helper function
+def get_user_by_username(username_str: str):
+    """
+    Finds a user in the group_members table by their username.
+    Returns the user data dictionary if found, otherwise None.
+    """
+    try:
+        username_to_find = username_str.lstrip('@')
+        response = supabase.table('group_members').select('user_id, first_name').eq('username', username_to_find).single().execute()
+        return response.data
+    except Exception as e:
+        print(f"Error looking up user @{username_to_find}: {e}")
+        return None
 # =============================================================================
 # 5. HELPER FUNCTIONS (Continued) - Access Control
 # =============================================================================
@@ -577,7 +600,6 @@ def find_users_to_appreciate():
     # This first part is a data operation, so it stays here.
     supabase.rpc('reset_missed_streaks').execute()
     
-    APPRECIATION_STREAK = 3
     users_to_appreciate = supabase.rpc('get_users_to_appreciate', {'streak_target': APPRECIATION_STREAK}).execute().data or []
     return users_to_appreciate
 
@@ -845,15 +867,18 @@ def handle_add_resource(msg: types.Message):
     Starts the conversational flow for adding a new resource to the Vault.
     Accessible only by admins and contributors in private chat.
     """
+    user_id = msg.from_user.id
     if not msg.chat.type == 'private':
         bot.reply_to(msg, "🤫 Please use this command in a private chat with me.")
         return
 
+    # This is the new protective check
+    if user_id in user_states:
+        bot.reply_to(msg, "⚠️ You are already in the middle of another command. Please finish it or type /cancel before starting a new one.")
+        return
 
-
-    user_states[user_id] = {}  # Clear any previous state
+    user_states[user_id] = {'action': 'adding_resource'}  # Define the action
     
-    # THE FIX: Converted to safe HTML
     prompt_text = "Okay, let's add a new resource to the Vault.\n\n<b>Step 1 of 3:</b> Please upload the document/file now."
     prompt = bot.send_message(user_id, prompt_text, parse_mode="HTML")
     bot.register_next_step_handler(prompt, process_resource_file)
@@ -1510,16 +1535,16 @@ def format_holistic_analysis_message(user_name, analysis_data):
     topic_accuracies = [{'topic': topic, 'accuracy': (stats['correct'] / stats['total'] * 100) if stats['total'] > 0 else 0, 'count': stats['total']} for topic, stats in topic_stats.items()]
     sorted_topics = sorted(topic_accuracies, key=lambda x: x['accuracy'], reverse=True)
     msg = f"📊 **{escape(user_name)}'s Detailed Performance Analysis**\n\n<i>Here is a deep dive into your quiz performance across all formats.</i>\n━━━━━━━━━━━━━━━━━━\n\n"
-    msg += f"🎯 **Overall Performance**\n • <b>Total Questions Attempted:</b> {total_questions}\n • <b>Overall Accuracy:</b> {overall_accuracy:.1f}%\n\n"
+    msg += f"🎯 Overall Performance\n • <b>Total Questions Attempted:</b> {total_questions}\n • <b>Overall Accuracy:</b> {overall_accuracy:.1f}%\n\n"
     strongest_topics = [t for t in sorted_topics if t['accuracy'] >= 75 and t['count'] >= 3][:5]
     if strongest_topics:
-        msg += f"💪 **Your Top 5 Strongest Areas**\n"
+        msg += f"💪 Your Top 5 Strongest Areas\n"
         for t in strongest_topics: msg += f"  • <code>{escape(t['topic'])}</code> | <b>{t['accuracy']:.0f}%</b> <i>({t['count']} ques)</i>\n"
         msg += "\n"
     weakest_topics = [t for t in sorted_topics if t['accuracy'] < 60 and t['count'] >= 3][:5]
     if weakest_topics:
         weakest_topics.sort(key=lambda x: x['accuracy'])
-        msg += f"⚠️ **Your Top 5 Areas for Improvement**\n"
+        msg += f"⚠️ Your Top 5 Areas for Improvement\n"
         for t in weakest_topics: msg += f"  • <code>{escape(t['topic'])}</code> | <b>{t['accuracy']:.0f}%</b> <i>({t['count']} ques)</i>\n"
         msg += "\n"
     msg += f"💡 **Coach's Insight**\n<i>"
@@ -2446,14 +2471,12 @@ def handle_promote_command(msg: types.Message):
             bot.reply_to(msg, "Please provide a username.\n<b>Usage:</b> <code>/promote @username</code>", parse_mode="HTML")
             return
 
-        username_to_promote = parts[1].lstrip('@')
-        user_response = supabase.table('group_members').select('user_id, first_name').eq('username', username_to_promote).single().execute()
+        target_user = get_user_by_username(parts[1])
         
-        if not user_response.data:
-            bot.reply_to(msg, f"❌ User <code>@{escape(username_to_promote)}</code> not found in my database records.", parse_mode="HTML")
+        if not target_user:
+            bot.reply_to(msg, f"❌ User <code>{escape(parts[1])}</code> not found in my database records.", parse_mode="HTML")
             return
             
-        target_user = user_response.data
         target_user_id = target_user['user_id']
         
         # --- NEW ADMIN CHECK ---
