@@ -1363,17 +1363,18 @@ def send_next_battle_question(chat_id, session_id):
         idx = session['current_question_index']
         question = session['questions'][idx]
         
-        # --- NEW: Case Study Text Logic ---
         case_study_text = question.get('case_study_text')
         if case_study_text:
             try:
+                # THIS IS THE FIX: Replaces unsupported <br> tags with newlines
+                cleaned_case_study = case_study_text.replace('<br>', '\n').replace('<br/>', '\n').replace('<br />', '\n')
+                
                 header = f"📖 <b>Case Study for Question {idx + 1}</b>\n<pre>------------------</pre>\n"
-                full_message = header + case_study_text # escape() yahan se bhi hata diya gaya hai
+                full_message = header + cleaned_case_study
                 bot.send_message(chat_id, full_message, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
                 time.sleep(5) # Give users time to read
             except Exception as e:
                 print(f"Error sending case study text for Team Battle QID {question.get('id')}: {e}")
-        # --- End of Case Study Logic ---
         
         image_file_id = question.get('image_file_id')
         if image_file_id:
@@ -1406,6 +1407,7 @@ def send_next_battle_question(chat_id, session_id):
     except Exception as e:
         report_error_to_admin(f"Error in send_next_battle_question: {traceback.format_exc()}")
         bot.send_message(chat_id, "❌ Agla question bhejte waqt ek error aa gaya.")
+
 def update_battle_dashboard(chat_id, session_id, last_event=""):
     session = team_battle_session
     team1 = session['team1']
@@ -5529,8 +5531,6 @@ def send_marathon_question(session_id):
             session['is_active'] = False
     
     if is_quiz_over:
-        # --- THIS IS THE CHANGE ---
-        # It now calls the final report function directly, skipping the suspense message.
         send_marathon_results(session_id)
         return
 
@@ -5543,6 +5543,9 @@ def send_marathon_question(session_id):
     case_study_text = question_data.get('case_study_text')
     if case_study_text:
         try:
+            # THIS IS THE FIX: Replaces unsupported <br> tags with newlines
+            cleaned_case_study = case_study_text.replace('<br>', '\n').replace('<br/>', '\n').replace('<br />', '\n')
+            
             case_study_title = question_data.get('case_study_title')
             
             header = f"📖 <b>Case Study for Question {session['current_question_index'] + 1}</b>\n━━━━━━━━━━━━━━━━━━\n"
@@ -5550,7 +5553,7 @@ def send_marathon_question(session_id):
             if case_study_title:
                 header += f"<blockquote><b>Case Title: {escape(case_study_title)}</b></blockquote>\n"
             
-            full_message = header + case_study_text
+            full_message = header + cleaned_case_study
             bot.send_message(GROUP_ID, full_message, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
             time.sleep(5) 
         except Exception as e:
