@@ -3819,54 +3819,90 @@ def handle_webapp_data(msg: types.Message):
 @membership_required
 def handle_mystats_command(msg: types.Message):
     """
-    Fetches comprehensive stats and posts them, splitting the message if it's too long.
+    Fetches comprehensive stats and compares them with group averages.
     """
     user_id = msg.from_user.id
     user_name = escape(msg.from_user.first_name)
     try:
         response = supabase.rpc('get_user_stats', {'p_user_id': user_id}).execute()
-        stats = response.data
+        data = response.data
         reply_params = types.ReplyParameters(message_id=msg.message_id, allow_sending_without_reply=True)
 
-        if not stats or not stats[0].get('user_name'):
-            error_message = f"❌ <b>No Stats Found</b>\n👋 Hi <b>{user_name}</b>!\n🎯 <i>No quiz data found for you yet.</i>\n💡 <b>Get started:</b>\n• Participate in daily quizzes\n• Submit written practice\n🚀 <i>Your journey begins now!</i>"
+        user_stats = data.get('user')
+        group_stats = data.get('group')
+
+        if not user_stats or not user_stats.get('user_name'):
+            error_message = f"❌ <b>No Stats Found</b>\n👋 Hi <b>{user_name}</b>!\n🎯 <i>No quiz data found for you yet.</i>\n💡 Participate in quizzes and practice sessions to generate your snapshot!"
             bot.send_message(msg.chat.id, error_message, parse_mode="HTML", reply_parameters=reply_params)
             return
 
-        stats_data = stats[0]
-        stats_message = f"📊 <b>My Stats: {user_name}</b> 📊\n\n"
-        stats_message += f"━━ 🏆 <b>Rankings</b> ━━\n"
-        stats_message += f"• <b>All-Time:</b> {stats_data.get('all_time_rank') or 'Not Ranked'}\n"
-        stats_message += f"• <b>Weekly:</b> {stats_data.get('weekly_rank') or 'Not Ranked'}\n"
-        stats_message += f"• <b>Random Quiz:</b> {stats_data.get('random_quiz_rank') or 'Not Ranked'}\n\n"
-        stats_message += f"━━ 🎮 <b>Performance</b> ━━\n"
-        stats_message += f"• <b>Quizzes Played:</b> {stats_data.get('total_quizzes_played', 0)}\n"
-        stats_message += f"• <b>Random Quiz Score:</b> {stats_data.get('random_quiz_score', 0)} pts\n"
-        stats_message += f"• <b>Current Streak:</b> 🔥 {stats_data.get('current_streak', 0)}\n\n"
-        stats_message += f"━━ 📝 <b>Practice</b> ━━\n"
-        stats_message += f"• <b>Submissions:</b> {stats_data.get('total_submissions', 0)}\n"
-        stats_message += f"• <b>Avg. Performance:</b> {stats_data.get('average_performance', 0)}%\n"
-        stats_message += f"• <b>Copies Checked:</b> {stats_data.get('copies_checked', 0)}\n"
+        # --- 1. Define User Title based on Quizzes Played ---
+        quizzes_played = user_stats.get('total_quizzes_played') or 0
+        if quizzes_played >= 50: user_title = "Quiz Legend 👑"
+        elif quizzes_played >= 25: user_title = "Quiz Veteran 🎖️"
+        elif quizzes_played >= 10: user_title = "Regular Participant ⚔️"
+        elif quizzes_played >= 1: user_title = "Rising Star ⭐"
+        else: user_title = "Newcomer 🌱"
+
+        # --- 2. Build the Comparison Message ---
+        msg_text = f"📊 <b>{user_name}'s Performance Snapshot</b>\n━━━━━━━━━━━━━━━━━━\n"
+        msg_text += f"Your current rank is: <b>{user_title}</b>\n\n"
+        msg_text += "Here's how you stack up against the group average:\n\n"
+        msg_text += "📈 <b>Core Activity</b>\n"
         
-        # (Your existing coach's tip logic is preserved here)
-        coach_comment = ""
-        APPRECIATION_STREAK = 8; current_streak=stats_data.get('current_streak',0); total_quizzes=stats_data.get('total_quizzes_played',0); weekly_rank=stats_data.get('weekly_rank'); all_time_rank=stats_data.get('all_time_rank'); total_submissions=stats_data.get('total_submissions',0); avg_performance=stats_data.get('average_performance',0)
-        if current_streak>=APPRECIATION_STREAK: coach_comment=f"Gazab ki consistency! 🔥 {current_streak}-quiz ki streak pe ho, lage raho!"
-        elif current_streak==(APPRECIATION_STREAK-1): coach_comment="Bas ek aur quiz aur aapka naya streak milestone poora ho jayega! You can do it! 🚀"
-        elif weekly_rank==1: coach_comment="Is hafte ke Topper! Aap toh leaderboard par aag laga rahe ho! Keep it up! 👑"
-        elif all_time_rank is not None and all_time_rank<=10: coach_comment="All-Time Top 10 mein jagah banana aasan nahi. Aap toh legend ho! 🏛️"
-        elif total_submissions>0 and avg_performance>80: coach_comment="Aapki written practice performance outstanding hai! 80% se upar score karna kamaal hai. ✨"
-        else: coach_comment="Consistency hi success ki chaabi hai. Practice karte rahiye, aap aacha kar rahe hain! 👍"
+        # Quizzes Played Comparison
+        user_qp = quizzes_played
+        group_qp_avg = group_stats.get('avg_quizzes_played', 0)
+        qp_emoji = "🔼" if user_qp > group_qp_avg else "🔽" if user_qp < group_qp_avg else "─"
+        msg_text += f" • Quizzes Played: <b>{user_qp}</b> (Avg: {group_qp_avg:.0f}) {qp_emoji}\n"
+
+        # All-Time Score Comparison
+        user_score = user_stats.get('all_time_score') or 0
+        group_score_avg = group_stats.get('avg_all_time_score', 0)
+        score_emoji = "🔼" if user_score > group_score_avg else "🔽" if user_score < group_score_avg else "─"
+        msg_text += f" • All-Time Score: <b>{user_score/1000:.0f}k</b> (Avg: {group_score_avg/1000:.0f}k) {score_emoji}\n"
         
-        final_stats_message = stats_message + f"\n\n💡 <b>Coach's Tip:</b> {coach_comment}"
+        msg_text += f" • Current Streak: 🔥 <b>{user_stats.get('current_streak', 0)}</b>\n\n"
+
+        msg_text += "📝 <b>Written Practice</b>\n"
+        
+        # Submissions Comparison
+        user_sub = user_stats.get('total_submissions') or 0
+        group_sub_avg = group_stats.get('avg_submissions', 0)
+        sub_emoji = "🔼" if user_sub > group_sub_avg else "🔽" if user_sub < group_sub_avg else "─"
+        msg_text += f" • Submissions: <b>{user_sub}</b> (Avg: {group_sub_avg:.0f}) {sub_emoji}\n"
+        
+        # Practice Performance Comparison
+        user_perf = user_stats.get('average_performance') or 0
+        group_perf_avg = group_stats.get('avg_practice_performance', 0)
+        perf_emoji = "🔼" if user_perf > group_perf_avg else "🔽" if user_perf < group_perf_avg else "─"
+        msg_text += f" • Avg. Performance: <b>{user_perf:.0f}%</b> (Avg: {group_perf_avg:.0f}%) {perf_emoji}\n\n"
+
+        msg_text += "🏆 <b>Rankings</b>\n"
+        msg_text += f" • All-Time Rank: <b>#{user_stats.get('all_time_rank') or 'N/A'}</b>\n"
+        msg_text += f" • Weekly Rank: <b>#{user_stats.get('weekly_rank') or 'N/A'}</b>\n\n"
+        
+        # --- 3. Dynamic Insight ---
+        insight = ""
+        if user_perf > group_perf_avg and user_perf > 80:
+            insight = "Your Written Practice performance is exceptional, putting you well ahead of the curve. Keep submitting those high-quality answers!"
+        elif user_qp > group_qp_avg * 1.5:
+            insight = "Your consistency in playing quizzes is fantastic and a key driver of your high score. Keep up the great momentum!"
+        elif user_stats.get('current_streak', 0) >= 5:
+            insight = "A streak of 5 or more is amazing! Your daily dedication is truly paying off."
+        else:
+            insight = "You have a solid foundation. Focus on participating in the next few quizzes to boost your streak and climb the ranks!"
+
+        msg_text += f"💡 <b>Your Standout Stat</b>\n{insight}"
         
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("🗑️ Delete Stats", callback_data="delete_stats_msg"))
-        bot.send_message(msg.chat.id, final_stats_message, parse_mode="HTML", reply_markup=markup, reply_parameters=reply_params)
+        bot.send_message(msg.chat.id, msg_text, parse_mode="HTML", reply_markup=markup, reply_parameters=reply_params)
 
     except Exception as e:
         report_error_to_admin(traceback.format_exc())
         bot.reply_to(msg, "❌ <i>Unable to fetch your stats right now. Please try again later.</i>", parse_mode="HTML")
+
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('delete_stats_msg'))
 def handle_delete_stats_callback(call: types.CallbackQuery):
