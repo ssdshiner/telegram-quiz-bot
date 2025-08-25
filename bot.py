@@ -1833,6 +1833,7 @@ def handle_poll_answer(poll_answer: types.PollAnswer):
     It intelligently routes the answer to the correct logic for Team Battles,
     Marathons, or Random Quizzes.
     """
+    global team_battle_session
     poll_id_str = poll_answer.poll_id
     user_info = poll_answer.user
     selected_option = poll_answer.option_ids[0] if poll_answer.option_ids else None
