@@ -1515,45 +1515,72 @@ def handle_delete_message_callback(call: types.CallbackQuery):
         bot.answer_callback_query(call.id, "An error occurred.")
 
 
-def format_holistic_analysis_message(user_name, analysis_data):
-    """
-    This is the HELPER function. It takes raw data and formats it into a message.
-    """
-    if not analysis_data:
-        return f"📊 <b>{escape(user_name)}'s Performance Snapshot</b>\n\nNo quiz data found yet. Participate in quizzes to build your profile!"
-    
-    total_questions = len(analysis_data)
-    total_correct = sum(1 for item in analysis_data if item['is_correct'])
-    overall_accuracy = (total_correct / total_questions * 100) if total_questions > 0 else 0
-    topic_stats = {}
-    for item in analysis_data:
-        topic = item.get('topic', 'General Topics')
-        if not topic: topic = 'General Topics'
-        if topic not in topic_stats: topic_stats[topic] = {'correct': 0, 'total': 0}
-        topic_stats[topic]['total'] += 1
-        if item['is_correct']: topic_stats[topic]['correct'] += 1
-    topic_accuracies = [{'topic': topic, 'accuracy': (stats['correct'] / stats['total'] * 100) if stats['total'] > 0 else 0, 'count': stats['total']} for topic, stats in topic_stats.items()]
-    sorted_topics = sorted(topic_accuracies, key=lambda x: x['accuracy'], reverse=True)
-    msg = f"📊 **{escape(user_name)}'s Detailed Performance Analysis**\n\n<i>Here is a deep dive into your quiz performance across all formats.</i>\n━━━━━━━━━━━━━━━━━━\n\n"
-    msg += f"🎯 Overall Performance\n • <b>Total Questions Attempted:</b> {total_questions}\n • <b>Overall Accuracy:</b> {overall_accuracy:.1f}%\n\n"
-    strongest_topics = [t for t in sorted_topics if t['accuracy'] >= 75 and t['count'] >= 3][:5]
-    if strongest_topics:
-        msg += f"💪 Your Top 5 Strongest Areas\n"
-        for t in strongest_topics: msg += f"  • <code>{escape(t['topic'])}</code> | <b>{t['accuracy']:.0f}%</b> <i>({t['count']} ques)</i>\n"
-        msg += "\n"
-    weakest_topics = [t for t in sorted_topics if t['accuracy'] < 60 and t['count'] >= 3][:5]
-    if weakest_topics:
-        weakest_topics.sort(key=lambda x: x['accuracy'])
-        msg += f"⚠️ Your Top 5 Areas for Improvement\n"
-        for t in weakest_topics: msg += f"  • <code>{escape(t['topic'])}</code> | <b>{t['accuracy']:.0f}%</b> <i>({t['count']} ques)</i>\n"
-        msg += "\n"
-    msg += f"💡 **Coach's Insight**\n<i>"
-    if total_questions < 10: insight = "You've just started your journey! Keep participating to build a stronger profile. 🌱"
-    elif not weakest_topics and overall_accuracy >= 85: insight = f"Outstanding performance! You have no significant weak areas. Keep revising to maintain this excellent form! 🏆"
-    elif overall_accuracy > 80 and weakest_topics: insight = f"Your overall performance is excellent! To become truly unbeatable, focus on improving your accuracy in topics like '<b>{escape(weakest_topics[0]['topic'])}</b>'."
-    elif overall_accuracy > 60: insight = f"You have a solid foundation. Consistency is key. Keep practicing your weaker areas like '<b>{escape(weakest_topics[0]['topic'] if weakest_topics else 'some topics')}</b>' to see a great jump in your rank."
-    else: insight = "Let's build a stronger foundation. Start by revisiting the basics of your weakest topics. Every correct answer is progress!"
-    msg += f"{insight}</i>\n"
+def format_analysis_snapshot(user_name, topic_stats, type_stats):
+    if not topic_stats:
+        return f"📊 <b>{user_name}'s Performance Snapshot</b>\n\nNo quiz data found yet. Participate in quizzes to generate your report!"
+
+    # --- 1. Calculate Overall and Topic-Specific Stats ---
+    processed_topics = []
+    total_correct = 0
+    total_attempted = 0
+    total_time = 0
+    for topic in topic_stats:
+        total_correct += topic['total_correct']
+        total_attempted += topic['total_attempted']
+        total_time += topic['total_correct'] * topic['avg_time_per_question']
+        if topic['total_attempted'] > 0:
+            accuracy = (topic['total_correct'] / topic['total_attempted']) * 100
+            processed_topics.append({
+                'name': topic['topic'],
+                'accuracy': accuracy,
+                'avg_time': topic['avg_time_per_question']
+            })
+
+    overall_accuracy = (total_correct / total_attempted * 100) if total_attempted > 0 else 0
+    overall_avg_time = (total_time / total_correct) if total_correct > 0 else 0
+
+    # Filter and sort topics (require at least 2 questions for meaningful stats)
+    strongest = sorted([t for t in processed_topics if t['accuracy'] >= 80 and next((item for item in topic_stats if item["topic"] == t['name']), {}).get('total_attempted', 0) >= 2], key=lambda x: x['accuracy'], reverse=True)[:7]
+    weakest = sorted([t for t in processed_topics if t['accuracy'] < 65 and next((item for item in topic_stats if item["topic"] == t['name']), {}).get('total_attempted', 0) >= 2], key=lambda x: x['accuracy'])[:7]
+
+    # --- 2. Build The Message ---
+    msg = f"📊 <b>{user_name}'s Performance Snapshot</b>\n━━━━━━━━━━━━━━━━━━\n"
+    msg += f"🎯 {overall_accuracy:.0f}% Accuracy | 📚 {len(processed_topics)} Topics | ❓ {total_attempted} Ques\n"
+    msg += f" • <b>Avg. Time / Ques:</b> {overall_avg_time:.1f}s\n\n"
+
+    msg += "🧠 <b>Theory vs. Practical</b>\n"
+    if type_stats:
+        for q_type in type_stats:
+            type_accuracy = (q_type['total_correct'] / q_type['total_attempted'] * 100) if q_type['total_attempted'] > 0 else 0
+            msg += f" • <b>{q_type['question_type']}:</b> {type_accuracy:.0f}% Accuracy\n"
+    else:
+        msg += " • Not enough data yet.\n"
+
+    msg += "\n🏆 <b>Top 7 Strongest Topics</b>\n"
+    if strongest:
+        for i, t in enumerate(strongest, 1):
+            msg += f"  {i}. {escape(t['name'])} ({t['accuracy']:.0f}%)\n"
+    else:
+        msg += "  Keep playing to identify your strengths!\n"
+
+    msg += "\n📚 <b>Top 7 Improvement Areas</b>\n"
+    if weakest:
+        for i, t in enumerate(weakest, 1):
+            msg += f"  {i}. {escape(t['name'])} ({t['accuracy']:.0f}% | {t['avg_time']:.1f}s)\n"
+    else:
+        msg += "  No specific areas for improvement found yet. Great work!\n"
+
+    # --- 3. Generate Dynamic Insights (using proper HTML tags) ---
+    if weakest:
+        msg += f"\n⭐ <u>Smart Suggestion</u>\n"
+        msg += f"Your theory knowledge is a major strength! Apply that same foundational approach to practical questions in '<b>{escape(weakest[0]['name'])}</b>' to see a significant score boost.\n"
+
+        msg += f"\n⚠️ <u>Your Hidden Challenge</u>\n"
+        msg += f"Your biggest opportunity for improvement is <b>reducing time on Practical questions</b>. While your accuracy is good, speeding up here will give you a major advantage in exams.\n"
+
+        msg += f"\n🎯 <u>Your Next Milestone</u>\n"
+        msg += f"Aim to increase your accuracy in <code>{escape(weakest[0]['name'])}</code> to over 60% in your next 5 attempts. You can do it!"
+
     return msg
 
 @bot.message_handler(commands=['add_qm'])
@@ -3698,9 +3725,14 @@ def handle_my_analysis_command(msg: types.Message):
     user_name = escape(msg.from_user.first_name)
     
     try:
-        response = supabase.rpc('get_user_holistic_analysis', {'p_user_id': user_id}).execute()
+        # Step 1: Get stats grouped by topic (for strong/weak areas)
+        topic_stats_res = supabase.rpc('get_user_topic_stats', {'p_user_id': user_id}).execute()
         
-        analysis_text = format_holistic_analysis_message(user_name, response.data)
+        # Step 2: Get stats grouped by question type (for Theory vs Practical)
+        type_stats_res = supabase.rpc('get_user_question_type_stats', {'p_user_id': user_id}).execute()
+
+        # Step 3: Pass both sets of data to the formatting function
+        analysis_text = format_analysis_snapshot(user_name, topic_stats_res.data, type_stats_res.data)
         
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("🗑️ Delete This Analysis", callback_data="delete_analysis_msg"))
@@ -3717,18 +3749,6 @@ def handle_my_analysis_command(msg: types.Message):
             reply_markup=markup,
             reply_parameters=reply_params
         )
-
-        try:
-            if ANALYSIS_WEBAPP_URL:
-                dm_markup = types.InlineKeyboardMarkup()
-                dm_markup.add(types.InlineKeyboardButton("📊 Open Full Dashboard", url=ANALYSIS_WEBAPP_URL))
-                bot.send_message(
-                    chat_id=user_id,
-                    text="Here is the link to your full, interactive dashboard!",
-                    reply_markup=dm_markup
-                )
-        except Exception as dm_error:
-            print(f"Silent DM fail for {user_id}: {dm_error}")
 
     except Exception as e:
         report_error_to_admin(f"Error generating analysis for {user_id}:\n{traceback.format_exc()}")
