@@ -1845,23 +1845,21 @@ def handle_poll_answer(poll_answer: types.PollAnswer):
         with session_lock:
             # --- ROUTE 1: Check if it's a Team Battle poll ---
             if team_battle_session and poll_id_str == team_battle_session.get('current_poll_id'):
+                # (Your Team Battle logic is preserved here)
                 session = team_battle_session
                 user_id = poll_answer.user.id
                 user_name = poll_answer.user.first_name
                 chat_id = GROUP_ID
 
                 player_team_key = None
-                if user_id in session['team1']['members']:
-                    player_team_key = 'team1'
-                elif user_id in session['team2']['members']:
-                    player_team_key = 'team2'
+                if user_id in session['team1']['members']: player_team_key = 'team1'
+                elif user_id in session['team2']['members']: player_team_key = 'team2'
                 else:
                     added_team = add_late_joiner(user_id, user_name)
                     player_team_key = 'team1' if added_team['name'] == session['team1']['name'] else 'team2'
                     bot.send_message(chat_id, f"A new challenger appears! **{escape(user_name)}** joins **{escape(added_team['name'])}**!", parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
 
                 player_team = session[player_team_key]
-                
                 if 'player_stats' not in player_team: player_team['player_stats'] = {}
                 if user_id not in player_team['player_stats']:
                     player_team['player_stats'][user_id] = {'name': user_name, 'score': 0, 'total_time': 0, 'correct_answers': 0}
@@ -1869,25 +1867,16 @@ def handle_poll_answer(poll_answer: types.PollAnswer):
                 player_stats = player_team['player_stats'][user_id]
                 time_taken = (datetime.datetime.now(IST) - session['question_start_time']).total_seconds()
                 player_stats['total_time'] += time_taken
-
                 idx = session['current_question_index']
                 question = session['questions'][idx]
                 correct_option_index = ['A', 'B', 'C', 'D'].index(str(question.get('Correct Answer', 'A')).upper())
-                
-                last_event = ""
-                points_awarded = 0
-                
+                last_event, points_awarded = "", 0
                 if selected_option == correct_option_index:
                     points_awarded = 10 
                     if player_team.get('active_powerup') == 'BonusPoints':
-                        points_awarded *= 2
-                        player_team['active_powerup'] = None
-                    
+                        points_awarded *= 2; player_team['active_powerup'] = None
                     if not session.get('first_correct_user'):
-                        session['first_correct_user'] = user_id
-                        points_awarded += 5
-                        last_event += "⚡ Speed Demon! +5 bonus! "
-
+                        session['first_correct_user'] = user_id; points_awarded += 5; last_event += "⚡ Speed Demon! +5 bonus! "
                     player_stats['correct_answers'] += 1
                     last_event += f"{escape(user_name)} from {escape(player_team['name'])} answered correctly! **+{points_awarded} points!**"
                 else:
@@ -1895,45 +1884,26 @@ def handle_poll_answer(poll_answer: types.PollAnswer):
                 
                 player_stats['score'] += points_awarded
                 player_team['score'] = sum(p.get('score', 0) for p in player_team['player_stats'].values())
-                
                 update_battle_dashboard(chat_id, session['session_id'], last_event)
-                
                 session['current_question_index'] += 1
-                
                 MID_QUIZ_CHECKPOINT = 6
                 if session['current_question_index'] == MID_QUIZ_CHECKPOINT:
                     time.sleep(2)
-                    team1 = session['team1']
-                    team2 = session['team2']
-                    
+                    team1, team2 = session['team1'], session['team2']
                     leading_team = team1 if team1['score'] > team2['score'] else team2 if team2['score'] > team1['score'] else None
                     lagging_team = team2 if leading_team == team1 else team1 if leading_team == team2 else None
-
-                    report_text = (
-                        f"**---------- MID-QUIZ REPORT ----------**\n\n"
-                        f"**{escape(team1['name'])}**: {team1['score']} points\n"
-                        f"**{escape(team2['name'])}**: {team2['score']} points\n\n"
-                    )
-                    
-                    if leading_team:
-                        report_text += f"Looks like **{escape(leading_team['name'])}** is in the lead! Time for power-ups... ⚡"
-                    else:
-                        report_text += "It's a TIE! The battle is intense! Time for power-ups... ⚡"
-
+                    report_text = f"**---------- MID-QUIZ REPORT ----------**\n\n**{escape(team1['name'])}**: {team1['score']} points\n**{escape(team2['name'])}**: {team2['score']} points\n\n"
+                    if leading_team: report_text += f"Looks like **{escape(leading_team['name'])}** is in the lead! Time for power-ups... ⚡"
+                    else: report_text += "It's a TIE! The battle is intense! Time for power-ups... ⚡"
                     sent_report = bot.send_message(chat_id, report_text, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
                     delete_message_in_thread(chat_id, sent_report.message_id, 60)
-                    
                     trigger_powerup_selection(chat_id, leading_team, lagging_team) 
                     time.sleep(5)
-
                 if session['current_question_index'] < len(session['questions']):
-                    time.sleep(3)
-                    send_next_battle_question(chat_id, session['session_id'])
+                    time.sleep(3); send_next_battle_question(chat_id, session['session_id'])
                 else:
-                    send_final_battle_report(chat_id, session)
-                    team_battle_session = {} 
-                
-                return # Stop processing after handling team battle answer
+                    send_final_battle_report(chat_id, session); team_battle_session = {} 
+                return
 
             # --- ROUTE 2: Check if it's a Quiz Marathon poll ---
             session_id = str(GROUP_ID)
@@ -1941,16 +1911,10 @@ def handle_poll_answer(poll_answer: types.PollAnswer):
             if marathon_session and marathon_session.get('is_active') and poll_id_str == marathon_session.get('current_poll_id'):
                 participants = QUIZ_PARTICIPANTS.setdefault(session_id, {})
                 if user_info.id not in participants:
-                    participants[user_info.id] = {
-                        'name': user_info.first_name, 'user_name': user_info.username or user_info.first_name,
-                        'score': 0, 'total_time': 0, 'questions_answered': 0, 'correct_answer_times': [],
-                        'topic_scores': {}, 'performance_breakdown': {}
-                    }
+                    participants[user_info.id] = {'name': user_info.first_name, 'user_name': user_info.username or user_info.first_name, 'score': 0, 'total_time': 0, 'questions_answered': 0, 'correct_answer_times': [], 'topic_scores': {}, 'performance_breakdown': {}}
                 participant = participants[user_info.id]
                 
-                ist_tz = timezone(timedelta(hours=5, minutes=30))
-                time_taken = (datetime.datetime.now(ist_tz) - marathon_session['question_start_time']).total_seconds()
-                
+                time_taken = (datetime.datetime.now(IST) - marathon_session['question_start_time']).total_seconds()
                 question_idx = marathon_session['current_question_index'] - 1
                 question_data = marathon_session['questions'][question_idx]
                 correct_option_index = ['A', 'B', 'C', 'D'].index(str(question_data.get('Correct Answer', 'A')).upper())
@@ -1963,31 +1927,28 @@ def handle_poll_answer(poll_answer: types.PollAnswer):
                     participant['correct_answer_times'].append(time_taken)
 
                 topic = question_data.get('topic', 'General')
-                participant['topic_scores'].setdefault(topic, {'correct': 0, 'total': 0})
-                participant['topic_scores'][topic]['total'] += 1
-                if is_correct:
-                    participant['topic_scores'][topic]['correct'] += 1
-
                 q_type = question_data.get('question_type', 'Theory')
-                participant['performance_breakdown'].setdefault(topic, {})
-                participant['performance_breakdown'][topic].setdefault(q_type, {'correct': 0, 'total': 0, 'time': 0})
-                
+                participant['performance_breakdown'].setdefault(topic, {}).setdefault(q_type, {'correct': 0, 'total': 0, 'time': 0})
                 breakdown = participant['performance_breakdown'][topic][q_type]
-                breakdown['total'] += 1
-                breakdown['time'] += time_taken
-                if is_correct:
-                    breakdown['correct'] += 1
-                return # Stop processing after handling marathon answer
+                breakdown['total'] += 1; breakdown['time'] += time_taken
+                if is_correct: breakdown['correct'] += 1
+                
+                # --- NEW LOGIC: Collect per-question aggregate stats ---
+                marathon_session.setdefault('question_stats', {})
+                marathon_session['question_stats'].setdefault(question_idx, {'correct': 0, 'total': 0, 'time': 0})
+                q_stats = marathon_session['question_stats'][question_idx]
+                q_stats['total'] += 1
+                q_stats['time'] += time_taken
+                if is_correct: q_stats['correct'] += 1
+                # --- End of new logic ---
+                return
 
-        # --- ROUTE 3: Check if it's a Random Quiz poll (This runs if it's not a marathon/battle) ---
+        # --- ROUTE 3: Check if it's a Random Quiz poll ---
         active_poll_info = next((poll for poll in active_polls if poll['poll_id'] == poll_id_str), None)
         if active_poll_info and active_poll_info.get('type') == 'random_quiz':
             if selected_option == active_poll_info['correct_option_id']:
-                supabase.rpc('increment_score', {
-                    'user_id_in': user_info.id,
-                    'user_name_in': user_info.first_name
-                }).execute()
-            return # Stop processing after handling random quiz
+                supabase.rpc('increment_score', {'user_id_in': user_info.id, 'user_name_in': user_info.first_name}).execute()
+            return
 
     except Exception as e:
         print(f"Error in the master poll answer handler: {traceback.format_exc()}")
@@ -5529,7 +5490,9 @@ def send_marathon_question(session_id):
             session['is_active'] = False
     
     if is_quiz_over:
-        send_final_suspense_message(session_id)
+        # --- THIS IS THE CHANGE ---
+        # It now calls the final report function directly, skipping the suspense message.
+        send_marathon_results(session_id)
         return
 
     question_data = session['questions'][session['current_question_index']]
@@ -5546,7 +5509,6 @@ def send_marathon_question(session_id):
             header = f"📖 <b>Case Study for Question {session['current_question_index'] + 1}</b>\n━━━━━━━━━━━━━━━━━━\n"
             
             if case_study_title:
-                # --- THIS IS THE CORRECTED LINE ---
                 header += f"<blockquote><b>Case Title: {escape(case_study_title)}</b></blockquote>\n"
             
             full_message = header + case_study_text
@@ -5657,71 +5619,6 @@ def send_mid_quiz_update(session_id):
 
     bot.send_message(GROUP_ID, message, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
 
-
-def send_final_suspense_message(session_id):
-    """
-    Edits the Live Dashboard into a final suspense message to prevent clutter
-    before showing the results.
-    """
-    session = QUIZ_SESSIONS.get(session_id)
-    participants = QUIZ_PARTICIPANTS.get(session_id, {})
-    
-    # If there are no participants, we still need to clean up the session.
-    # The final report function will handle the "no participants" message.
-    if not participants:
-        threading.Timer(2, send_final_report_sequence, args=[session_id]).start()
-        # Clean up the dashboard
-        try:
-            bot.delete_message(GROUP_ID, session['dashboard_message_id'])
-        except:
-            pass
-        return
-    
-    sorted_participants = sorted(
-        participants.items(), 
-        key=lambda x: (x[1].get('score', 0), -x[1].get('total_time', 999999)), 
-        reverse=True
-    )
-    
-    total_questions = session['stats']['total_questions']
-    total_participants = len(sorted_participants)
-    
-    # --- NEW: Dynamic "Final Insight" Generation ---
-    final_insight = ""
-    if total_participants == 1:
-        final_insight = "A true solo performance! Calculating the final stats..."
-    else:
-        leader_score = sorted_participants[0][1].get('score', 0)
-        second_score = sorted_participants[1][1].get('score', 0)
-        if (leader_score - second_score) <= 5:
-            final_insight = "It was a photo finish! Every second counts in the final calculation..."
-        elif total_participants > 10:
-            final_insight = "What a massive battle! Compiling the full leaderboard and performance analytics..."
-        else:
-            final_insight = "The competition was intense! Running advanced analytics..."
-
-    # --- NEW: Edit the existing dashboard instead of sending a new message ---
-    suspense_message = f"""🏁 <b>MARATHON COMPLETE!</b> 🏁
-<pre>━━━━━━━━━━━━━━━━━━━━━━</pre>
-<b>FINAL STATS:</b>
-• <b>Questions:</b> {total_questions}
-• <b>Warriors:</b> {total_participants} Participants
-<pre>━━━━━━━━━━━━━━━━━━━━━━</pre>
-🥁 <b>Final Insight:</b>
-<i>{final_insight}</i>
-
-⏳ <b>Grand results reveal in 5 seconds...</b>"""
-
-    try:
-        # Edit the dashboard to show the suspense message
-        bot.edit_message_text(suspense_message, GROUP_ID, session['dashboard_message_id'], parse_mode="HTML")
-    except Exception as e:
-        print(f"Could not edit dashboard for suspense message: {e}")
-        # Fallback: if editing fails, send a new message
-        bot.send_message(GROUP_ID, suspense_message, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
-
-    # Wait 5 seconds before showing results
-    threading.Timer(5, send_final_report_sequence, args=[session_id]).start()
 
 # Enhanced Stop Marathon Command
 @bot.message_handler(commands=['roko'])
@@ -5839,146 +5736,129 @@ def calculate_legend_tier(user_score, total_questions, all_scores):
     else:
         return None
 
-def send_final_report_sequence(session_id):
-    """
-    UPGRADED: A bulletproof orchestrator that now only calls a single,
-    consolidated final report function to prevent clutter.
-    """
-    session = None
-    with session_lock:
-        session = QUIZ_SESSIONS.get(session_id)
-        if not session or session.get('results_sent'):
-            return
-        session['results_sent'] = True
-    
-    print(f"INFO: Starting final CONSOLIDATED report sequence for session {session_id}...")
-    
-    participants = QUIZ_PARTICIPANTS.get(session_id)
-    if not participants:
-        send_marathon_results(session_id) # This handles the no-participant message
-        return
-
-    try:
-        # We no longer send a separate performance analysis.
-        # We will only send the main, consolidated results.
-        send_marathon_results(session_id)
-        
-    except Exception as e:
-        print(f"An error occurred during the final report sequence: {traceback.format_exc()}")
-        report_error_to_admin(f"CRITICAL: Failed during final report sequence for session {session_id}:\n{e}")
-        send_marathon_results(session_id) # Attempt to clean up even if sending fails
-
 def send_marathon_results(session_id):
     """
-    UPGRADED: Generates and sends a single, clean, consolidated final report
-    and guarantees session cleanup.
+    Generates and sends the new two-card final report and guarantees session cleanup.
     """
     session = QUIZ_SESSIONS.get(session_id)
     if not session: return
 
     try:
         session['is_active'] = False
-        participants = QUIZ_PARTICIPANTS.get(session_id)
+        participants = QUIZ_PARTICIPANTS.get(session_id, {})
+        questions = session.get('questions', [])
+        total_questions_asked = len(questions)
         
-        total_questions_asked = session.get('current_question_index', 0)
-        
-        # Mark used questions in database
-        if session.get('questions') and total_questions_asked > 0:
-            try:
-                used_question_ids = [q['id'] for q in session['questions'][:total_questions_asked]]
-                if used_question_ids:
-                    supabase.table('quiz_questions').update({'used': True}).in_('id', used_question_ids).execute()
-            except Exception as e:
-                report_error_to_admin(f"Failed to mark marathon questions as used.\n\nError: {traceback.format_exc()}")
+        if total_questions_asked == 0: return
+
+        try:
+            used_question_ids = [q['id'] for q in questions]
+            if used_question_ids:
+                supabase.table('quiz_questions').update({'used': True}).in_('id', used_question_ids).execute()
+        except Exception as e:
+            report_error_to_admin(f"Failed to mark marathon questions as used.\n\nError: {traceback.format_exc()}")
         
         safe_quiz_title = escape(session.get('title', 'Quiz Marathon'))
 
         if not participants:
-            # Logic for no participants remains the same
-            duration = datetime.datetime.now() - session['stats']['start_time']
             no_participants_message = f"🏁 <b>MARATHON COMPLETED</b>\n\n🎯 <b>Quiz:</b> '{safe_quiz_title}'\n📊 <b>Questions:</b> {total_questions_asked} asked\n\n😅 No warriors joined this battle! Better luck next time."
             bot.send_message(GROUP_ID, no_participants_message, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
+            return
         
-        else:
-            sorted_items = sorted(
-                participants.items(), 
-                key=lambda item: (item[1]['score'], -item[1]['total_time']), 
-                reverse=True
-            )
-            
-            all_scores = [p['score'] for p in participants.values()]
-            
-            # --- Data Finalization Loop ---
-            achievements = {'pb': [], 'streak': []}
-            APPRECIATION_STREAK = 8
-            for user_id, p in sorted_items:
-                p['legend_tier'] = calculate_legend_tier(p['score'], total_questions_asked, all_scores)
-                
-                try: # Finalize data in DB
-                    supabase.rpc('finalize_marathon_user_data', {
-                        'p_user_id': user_id, 'p_user_name': p.get('user_name', p.get('name')),
-                        'p_score_achieved': p.get('score', 0), 'p_time_taken_seconds': p.get('total_time', 0),
-                        'p_performance_breakdown': p.get('performance_breakdown', {})
-                    }).execute()
-                except Exception as e:
-                    report_error_to_admin(f"Critical error finalizing data for user {user_id}: {e}")
+        # --- CARD 1: SCORECARD ---
+        sorted_participants = sorted(participants.values(), key=lambda p: (p.get('score', 0), -p.get('total_time', 9999)), reverse=True)
+        marathon_duration = datetime.datetime.now() - session['stats']['start_time']
+        
+        efficiency_champion = None
+        qualified_for_efficiency = [p for p in sorted_participants if p.get('questions_answered', 0) >= (total_questions_asked * 0.4)]
+        if len(qualified_for_efficiency) > 1:
+            qualified_for_efficiency.sort(key=lambda p: p.get('total_time', 9999) / p.get('questions_answered', 1))
+            for p in qualified_for_efficiency:
+                if p['name'] != sorted_participants[0]['name']:
+                    efficiency_champion = p
+                    break
 
-                # Check for achievements
-                pre_quiz_stats = supabase.rpc('get_pre_marathon_stats', {'p_user_ids': [user_id]}).execute().data
-                if pre_quiz_stats:
-                    if p['score'] > (pre_quiz_stats[0].get('highest_marathon_score') or 0):
-                        achievements['pb'].append(escape(p['name']))
-                    if (pre_quiz_stats[0].get('current_streak') or 0) + 1 == APPRECIATION_STREAK:
-                        achievements['streak'].append(escape(p['name']))
-            
-            # --- Build the Consolidated Report ---
-            marathon_duration = datetime.datetime.now() - session['stats']['start_time']
-            
-            results_text = f"🏁 <b>MARATHON RESULTS: '{safe_quiz_title}'</b> 🏁\n"
-            results_text += f"<pre>━━━━━━━━━━━━━━━━━━━━━━</pre>\n"
-            results_text += f"📊 {total_questions_asked} Questions | ⏱️ {format_duration(marathon_duration.total_seconds())} | 👥 {len(participants)} Warriors\n"
-            results_text += f"<pre>━━━━━━━━━━━━━━━━━━━━━━</pre>\n\n"
-            
-            # Champion Section
-            champion_data = sorted_items[0][1]
-            champion_name = escape(champion_data['name'])
-            champion_score = champion_data['score']
-            champion_accuracy = (champion_score / total_questions_asked * 100) if total_questions_asked > 0 else 0
-            results_text += f"👑   <b>MARATHON CHAMPION</b>   👑\n"
-            results_text += f"🏆   <b>{champion_name}</b>   🏆\n"
-            results_text += f"    Score: {champion_score}/{total_questions_asked} ({champion_accuracy:.1f}%)\n\n"
-            
-            # Top 10 Leaderboard Section
-            results_text += "🏆   <b>FINAL LEADERBOARD</b>   🏆\n"
-            rank_emojis = ["🥇", "🥈", "🥉"]
-            for i, (user_id, p) in enumerate(sorted_items[:10]):
-                rank = rank_emojis[i] if i < 3 else f"  <b>{i + 1}.</b>"
-                name = escape(p['name'])
-                display_name = (name[:15] + '..') if len(name) > 17 else name
-                dots = "." * (18 - len(display_name))
-                line = f"{rank} {display_name} {dots} {p['score']} pts"
-                if p.get('legend_tier'): line += f" {p['legend_tier']['emoji']}"
-                results_text += line + "\n"
-            
-            # Special Achievements Section
-            if achievements['pb'] or achievements['streak']:
-                results_text += f"\n<pre>━━━━━━━━━━━━━━━━━━━━━━</pre>\n\n"
-                results_text += "🎉   <b>SPECIAL ACHIEVEMENTS</b>   🎉\n"
-                if achievements['pb']:
-                    results_text += f"🔥 <b>Personal Best Score:</b> {', '.join(achievements['pb'])}\n"
-                if achievements['streak']:
-                    results_text += f"⚡ <b>Streak Master:</b> {', '.join(achievements['streak'])}\n"
+        card1_text = f"🏁 <b>MARATHON RESULTS: '{safe_quiz_title}'</b> 🏁\n"
+        card1_text += "━━━━━━━━━━━━━━━━━━\n"
+        card1_text += f"📊 {total_questions_asked} Questions | ⏱️ {format_duration(marathon_duration.total_seconds())} | 👥 {len(participants)} Warriors\n"
+        card1_text += "━━━━━━━━━━━━━━━━━━\n\n"
+        
+        champion = sorted_participants[0]
+        champ_accuracy = (champion['score'] / total_questions_asked * 100)
+        champ_avg_time = champion['total_time'] / champion['questions_answered'] if champion['questions_answered'] > 0 else 0
+        card1_text += "👑 **MARATHON CHAMPION** 👑\n"
+        card1_text += f"🏆 **{escape(champion['name'])}**\n"
+        card1_text += f"> Score: **{champion['score']}/{total_questions_asked} ({champ_accuracy:.1f}%)** | Avg. Time: **{champ_avg_time:.1f}s**\n\n"
+        
+        if efficiency_champion:
+            eff_accuracy = (efficiency_champion['score'] / total_questions_asked * 100)
+            eff_avg_time = eff_champion['total_time'] / eff_champion['questions_answered'] if eff_champion['questions_answered'] > 0 else 0
+            card1_text += "⚡️ **EFFICIENCY CHAMPION** ⚡️\n"
+            card1_text += f"💨 **{escape(efficiency_champion['name'])}** (Blazing fast answers!)\n"
+            card1_text += f"> Score: **{efficiency_champion['score']}/{total_questions_asked} ({eff_accuracy:.1f}%)** | Avg. Time: **{eff_avg_time:.1f}s**\n\n"
 
-            results_text += f"\nCongratulations to all participants!"
+        card1_text += "🏆 **FINAL LEADERBOARD** 🏆\n"
+        rank_emojis = ["🥇", "🥈", "🥉"]
+        for i, p in enumerate(sorted_participants[:20]):
+            rank = rank_emojis[i] if i < 3 else f"  <b>{i + 1}.</b>"
+            name = escape(p['name'])
+            accuracy = (p['score'] / total_questions_asked * 100)
+            avg_time = p['total_time'] / p['questions_answered'] if p['questions_answered'] > 0 else 0
+            card1_text += f"{rank} {name.ljust(15, '.')} {p['score']}/{total_questions_asked} ({accuracy:.0f}%) | {avg_time:.1f}s\n"
+
+        if len(sorted_participants) > 20: card1_text += "\n<small>Showing top 20 participants.</small>"
+        card1_text += "\nCongratulations to all participants! 🎉"
+        bot.send_message(GROUP_ID, card1_text, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
+        time.sleep(1)
+
+        # --- CARD 2: INSIGHTS ---
+        type_stats, topic_stats, difficulty_stats = {}, {}, {}
+        question_stats = session.get('question_stats', {})
+
+        for p_data in participants.values():
+            for topic, types in p_data.get('performance_breakdown', {}).items():
+                topic_stats.setdefault(topic, {'correct': 0, 'total': 0, 'time': 0})
+                topic_stats[topic]['correct'] += sum(d['correct'] for d in types.values())
+                topic_stats[topic]['total'] += sum(d['total'] for d in types.values())
+                topic_stats[topic]['time'] += sum(d['time'] for d in types.values())
+                for q_type, data in types.items():
+                    type_stats.setdefault(q_type, {'correct': 0, 'total': 0})
+                    type_stats[q_type]['correct'] += data['correct']
+                    type_stats[q_type]['total'] += data['total']
+        
+        card2_text = f"<blockquote>🔬 <b>QUIZ AUTOPSY: '{safe_quiz_title}'</b> 🔬</blockquote>\n"
+        card2_text += "━━━━━━━━━━━━━━━━━━\n\n"
+        
+        if type_stats:
+            card2_text += "<b>📊 Performance by Question Type:</b>\n"
+            for q_type, data in type_stats.items():
+                accuracy = (data['correct'] / data['total'] * 100) if data['total'] > 0 else 0
+                card2_text += f" • {q_type}: <b>{accuracy:.0f}% Accuracy</b>\n"
+            card2_text += "\n"
+
+        if question_stats:
+            hardest_q = min(question_stats.items(), key=lambda i: (i[1]['correct'] / i[1]['total']) if i[1]['total'] > 0 else 1)
+            slowest_q = max(question_stats.items(), key=lambda i: (i[1]['time'] / i[1]['total']) if i[1]['total'] > 0 else 0)
+            hardest_q_data = questions[hardest_q[0]]
+            slowest_q_data = questions[slowest_q[0]]
             
-            bot.send_message(GROUP_ID, results_text, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
-            
+            card2_text += "<b>⚠️ Most Challenging Questions:</b>\n"
+            card2_text += f" • Highest Errors: <b>Question #{hardest_q[0]+1}</b> ({escape(hardest_q_data.get('topic'))})\n"
+            card2_text += f" • Slowest Response: <b>Question #{slowest_q[0]+1}</b> ({escape(slowest_q_data.get('topic'))})\n\n"
+        
+        if topic_stats:
+            sorted_topics_error = sorted(topic_stats.items(), key=lambda i: (i[1]['correct']/i[1]['total']) if i[1]['total']>0 else 1)
+            sorted_topics_time = sorted(topic_stats.items(), key=lambda i: (i[1]['time']/i[1]['total']) if i[1]['total']>0 else 0, reverse=True)
+            card2_text += "<b>🎯 Most Challenging Topics:</b>\n"
+            if sorted_topics_error: card2_text += f" • Highest Errors: <b>{escape(sorted_topics_error[0][0])}</b>\n"
+            if sorted_topics_time: card2_text += f" • Slowest Response: <b>{escape(sorted_topics_time[0][0])}</b>\n"
+        
+        bot.send_message(GROUP_ID, card2_text, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
+
     finally:
-        # Guaranteed session cleanup
         print(f"Cleaning up session data for session_id: {session_id}")
         if session_id in QUIZ_SESSIONS: del QUIZ_SESSIONS[session_id]
         if session_id in QUIZ_PARTICIPANTS: del QUIZ_PARTICIPANTS[session_id]
-
 
 # =============================================================================
 # 8. TELEGRAM BOT HANDLERS - RANKING & ADMIN UTILITIES
