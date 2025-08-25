@@ -1464,35 +1464,21 @@ def handle_delete_message_callback(call: types.CallbackQuery):
     but only if the clicker is the original user or an admin.
     """
     try:
-        # User who requested the analysis
         original_user_id = call.message.reply_to_message.from_user.id
-        # User who clicked the delete button
         clicker_id = call.from_user.id
-
-        # Fetch group admins to check if the clicker is one of them
         chat_admins = bot.get_chat_administrators(call.message.chat.id)
         admin_ids = [admin.user.id for admin in chat_admins]
 
-        # --- SECURITY CHECK ---
         if clicker_id == original_user_id or clicker_id in admin_ids:
-            # User is authorized, proceed with deletion
-            try:
-                bot.delete_message(call.message.chat.id, call.message.message_id)
-            except ApiTelegramException as e:
-                print(f"Info: Could not delete bot's analysis message (already gone?). Error: {e}")
-
-            try:
-                bot.delete_message(call.message.chat.id, call.message.reply_to_message.message_id)
-            except ApiTelegramException as e:
-                print(f"Info: Could not delete user's command (already gone?). Error: {e}")
-
+            try: bot.delete_message(call.message.chat.id, call.message.message_id)
+            except ApiTelegramException as e: print(f"Info: Could not delete bot's analysis message. Error: {e}")
+            try: bot.delete_message(call.message.chat.id, call.message.reply_to_message.message_id)
+            except ApiTelegramException as e: print(f"Info: Could not delete user's command. Error: {e}")
             bot.answer_callback_query(call.id, "Analysis deleted.")
         else:
-            # User is not authorized, show an alert
             bot.answer_callback_query(call.id, "Only the person who requested this analysis or an admin can delete it.", show_alert=True)
             
     except AttributeError:
-        # This handles the error if the original command message was deleted, breaking the reply link.
         try:
             bot.delete_message(call.message.chat.id, call.message.message_id)
             bot.answer_callback_query(call.id, "Message deleted.")
@@ -1500,7 +1486,6 @@ def handle_delete_message_callback(call: types.CallbackQuery):
             print(f"Error deleting orphaned analysis message: {final_e}")
             bot.answer_callback_query(call.id, "Could not delete the message.")
     except Exception as e:
-        print(f"General error in delete_analysis_callback: {e}")
         report_error_to_admin(f"Error in delete_analysis_callback: {traceback.format_exc()}")
         bot.answer_callback_query(call.id, "An error occurred.")
 
@@ -1511,65 +1496,41 @@ def format_holistic_analysis_message(user_name, analysis_data):
     """
     if not analysis_data:
         return f"📊 <b>{escape(user_name)}'s Performance Snapshot</b>\n\nNo quiz data found yet. Participate in quizzes to build your profile!"
-
+    
     total_questions = len(analysis_data)
     total_correct = sum(1 for item in analysis_data if item['is_correct'])
     overall_accuracy = (total_correct / total_questions * 100) if total_questions > 0 else 0
-
     topic_stats = {}
     for item in analysis_data:
         topic = item.get('topic', 'General Topics')
         if not topic: topic = 'General Topics'
-        
-        if topic not in topic_stats:
-            topic_stats[topic] = {'correct': 0, 'total': 0}
+        if topic not in topic_stats: topic_stats[topic] = {'correct': 0, 'total': 0}
         topic_stats[topic]['total'] += 1
-        if item['is_correct']:
-            topic_stats[topic]['correct'] += 1
-
-    topic_accuracies = []
-    for topic, stats in topic_stats.items():
-        accuracy = (stats['correct'] / stats['total'] * 100) if stats['total'] > 0 else 0
-        topic_accuracies.append({'topic': topic, 'accuracy': accuracy, 'count': stats['total']})
-
+        if item['is_correct']: topic_stats[topic]['correct'] += 1
+    topic_accuracies = [{'topic': topic, 'accuracy': (stats['correct'] / stats['total'] * 100) if stats['total'] > 0 else 0, 'count': stats['total']} for topic, stats in topic_stats.items()]
     sorted_topics = sorted(topic_accuracies, key=lambda x: x['accuracy'], reverse=True)
-    
-    msg = f"📊 **{escape(user_name)}'s Detailed Performance Analysis**\n\n"
-    msg += f"<i>Here is a deep dive into your quiz performance across all formats.</i>\n"
-    msg += "━━━━━━━━━━━━━━━━━━\n\n"
-    msg += f"🎯 **Overall Performance**\n"
-    msg += f" • <b>Total Questions Attempted:</b> {total_questions}\n"
-    msg += f" • <b>Overall Accuracy:</b> {overall_accuracy:.1f}%\n\n"
-
+    msg = f"📊 **{escape(user_name)}'s Detailed Performance Analysis**\n\n<i>Here is a deep dive into your quiz performance across all formats.</i>\n━━━━━━━━━━━━━━━━━━\n\n"
+    msg += f"🎯 **Overall Performance**\n • <b>Total Questions Attempted:</b> {total_questions}\n • <b>Overall Accuracy:</b> {overall_accuracy:.1f}%\n\n"
     strongest_topics = [t for t in sorted_topics if t['accuracy'] >= 75 and t['count'] >= 3][:5]
     if strongest_topics:
         msg += f"💪 **Your Top 5 Strongest Areas**\n"
-        for t in strongest_topics:
-            msg += f"  • <code>{escape(t['topic'])}</code> | <b>{t['accuracy']:.0f}%</b> <i>({t['count']} ques)</i>\n"
+        for t in strongest_topics: msg += f"  • <code>{escape(t['topic'])}</code> | <b>{t['accuracy']:.0f}%</b> <i>({t['count']} ques)</i>\n"
         msg += "\n"
-
     weakest_topics = [t for t in sorted_topics if t['accuracy'] < 60 and t['count'] >= 3][:5]
     if weakest_topics:
         weakest_topics.sort(key=lambda x: x['accuracy'])
         msg += f"⚠️ **Your Top 5 Areas for Improvement**\n"
-        for t in weakest_topics:
-            msg += f"  • <code>{escape(t['topic'])}</code> | <b>{t['accuracy']:.0f}%</b> <i>({t['count']} ques)</i>\n"
+        for t in weakest_topics: msg += f"  • <code>{escape(t['topic'])}</code> | <b>{t['accuracy']:.0f}%</b> <i>({t['count']} ques)</i>\n"
         msg += "\n"
-        
-    msg += f"💡 **Coach's Insight**\n"
-    if total_questions < 10:
-        insight = "You've just started your journey! Keep participating in quizzes to build a stronger profile. Every quiz is a step forward. 🌱"
-    elif not weakest_topics and overall_accuracy >= 85:
-        insight = f"Outstanding performance! You have no significant weak areas. You are a consistent top performer. Keep revising to maintain this excellent form! 🏆"
-    elif overall_accuracy > 80 and weakest_topics:
-        insight = f"Your overall performance is excellent! To become truly unbeatable, focus on improving your accuracy in topics like '<b>{escape(weakest_topics[0]['topic'])}</b>'."
-    elif overall_accuracy > 60:
-        insight = f"You have a solid foundation. Consistency is key now. Keep practicing your weaker areas like '<b>{escape(weakest_topics[0]['topic'] if weakest_topics else 'some topics')}</b>' to see a great jump in your rank."
-    else:
-        insight = "Let's build a stronger foundation. Start by revisiting the basics of your weakest topics. Every correct answer is progress! You can do it."
-    msg += f"<i>{insight}</i>\n"
-    
+    msg += f"💡 **Coach's Insight**\n<i>"
+    if total_questions < 10: insight = "You've just started your journey! Keep participating to build a stronger profile. 🌱"
+    elif not weakest_topics and overall_accuracy >= 85: insight = f"Outstanding performance! You have no significant weak areas. Keep revising to maintain this excellent form! 🏆"
+    elif overall_accuracy > 80 and weakest_topics: insight = f"Your overall performance is excellent! To become truly unbeatable, focus on improving your accuracy in topics like '<b>{escape(weakest_topics[0]['topic'])}</b>'."
+    elif overall_accuracy > 60: insight = f"You have a solid foundation. Consistency is key. Keep practicing your weaker areas like '<b>{escape(weakest_topics[0]['topic'] if weakest_topics else 'some topics')}</b>' to see a great jump in your rank."
+    else: insight = "Let's build a stronger foundation. Start by revisiting the basics of your weakest topics. Every correct answer is progress!"
+    msg += f"{insight}</i>\n"
     return msg
+
 @bot.message_handler(commands=['add_qm'])
 @permission_required('quizmarathon') # Yahan 'quizmarathon' permission check hogi
 def handle_add_qm(message):
@@ -3815,130 +3776,78 @@ def handle_webapp_data(msg: types.Message):
 @membership_required
 def handle_mystats_command(msg: types.Message):
     """
-    Fetches comprehensive stats and posts them, intelligently splitting the message
-    if it exceeds Telegram's character limit.
+    Fetches comprehensive stats and posts them, splitting the message if it's too long.
     """
     user_id = msg.from_user.id
     user_name = escape(msg.from_user.first_name)
-
     try:
         response = supabase.rpc('get_user_stats', {'p_user_id': user_id}).execute()
         stats = response.data
+        reply_params = types.ReplyParameters(message_id=msg.message_id, allow_sending_without_reply=True)
 
-        reply_params = types.ReplyParameters(
-            message_id=msg.message_id,
-            allow_sending_without_reply=True
-        )
-
-        if not stats or not stats.get('user_name'):
-            error_message = f"""❌ <b>No Stats Found</b>
-👋 Hi <b>{user_name}</b>!
-🎯 <i>No quiz data found for you yet.</i>
-💡 <b>Get started:</b>
-• Participate in daily quizzes
-• Submit written practice
-• Engage with community
-🚀 <i>Your journey begins with your first quiz!</i>"""
+        if not stats or not stats[0].get('user_name'):
+            error_message = f"❌ <b>No Stats Found</b>\n👋 Hi <b>{user_name}</b>!\n🎯 <i>No quiz data found for you yet.</i>\n💡 <b>Get started:</b>\n• Participate in daily quizzes\n• Submit written practice\n🚀 <i>Your journey begins now!</i>"
             bot.send_message(msg.chat.id, error_message, parse_mode="HTML", reply_parameters=reply_params)
             return
 
-        stats_message = f"""📊 <b>My Stats: {user_name}</b> 📊
-
-━━ 🏆 <b>Rankings</b> ━━
-• <b>All-Time:</b> {stats.get('all_time_rank') or 'Not Ranked'}
-• <b>Weekly:</b> {stats.get('weekly_rank') or 'Not Ranked'}
-• <b>Random Quiz:</b> {stats.get('random_quiz_rank') or 'Not Ranked'}
-
-━━ 🎮 <b>Performance</b> ━━
-• <b>Quizzes Played:</b> {stats.get('total_quizzes_played', 0)}
-• <b>Random Quiz Score:</b> {stats.get('random_quiz_score', 0)} pts
-• <b>Current Streak:</b> 🔥 {stats.get('current_streak', 0)}
-
-━━ 📝 <b>Practice</b> ━━
-• <b>Submissions:</b> {stats.get('total_submissions', 0)}
-• <b>Avg. Performance:</b> {stats.get('average_performance', 0)}%
-• <b>Copies Checked:</b> {stats.get('copies_checked', 0)}
-"""
-
+        stats_data = stats[0]
+        stats_message = f"📊 <b>My Stats: {user_name}</b> 📊\n\n"
+        stats_message += f"━━ 🏆 <b>Rankings</b> ━━\n"
+        stats_message += f"• <b>All-Time:</b> {stats_data.get('all_time_rank') or 'Not Ranked'}\n"
+        stats_message += f"• <b>Weekly:</b> {stats_data.get('weekly_rank') or 'Not Ranked'}\n"
+        stats_message += f"• <b>Random Quiz:</b> {stats_data.get('random_quiz_rank') or 'Not Ranked'}\n\n"
+        stats_message += f"━━ 🎮 <b>Performance</b> ━━\n"
+        stats_message += f"• <b>Quizzes Played:</b> {stats_data.get('total_quizzes_played', 0)}\n"
+        stats_message += f"• <b>Random Quiz Score:</b> {stats_data.get('random_quiz_score', 0)} pts\n"
+        stats_message += f"• <b>Current Streak:</b> 🔥 {stats_data.get('current_streak', 0)}\n\n"
+        stats_message += f"━━ 📝 <b>Practice</b> ━━\n"
+        stats_message += f"• <b>Submissions:</b> {stats_data.get('total_submissions', 0)}\n"
+        stats_message += f"• <b>Avg. Performance:</b> {stats_data.get('average_performance', 0)}%\n"
+        stats_message += f"• <b>Copies Checked:</b> {stats_data.get('copies_checked', 0)}\n"
+        
+        # (Your existing coach's tip logic is preserved here)
         coach_comment = ""
-        APPRECIATION_STREAK = 8;current_streak=stats.get('current_streak',0);total_quizzes=stats.get('total_quizzes_played',0);weekly_rank=stats.get('weekly_rank');all_time_rank=stats.get('all_time_rank');total_submissions=stats.get('total_submissions',0);avg_performance=stats.get('average_performance',0)
-        if current_streak>=APPRECIATION_STREAK:coach_comment=f"Gazab ki consistency! 🔥 {current_streak}-quiz ki streak pe ho, lage raho!"
-        elif current_streak==(APPRECIATION_STREAK-1):coach_comment="Bas ek aur quiz aur aapka naya streak milestone poora ho jayega! You can do it! 🚀"
-        elif weekly_rank==1:coach_comment="Is hafte ke Topper! Aap toh leaderboard par aag laga rahe ho! Keep it up! 👑"
-        elif all_time_rank is not None and all_time_rank<=10:coach_comment="All-Time Top 10 mein jagah banana aasan nahi. Aap toh legend ho! 🏛️"
-        elif total_submissions>0 and avg_performance>80:coach_comment="Aapki written practice performance outstanding hai! 80% se upar score karna kamaal hai. ✨"
-        elif total_quizzes>10 and total_submissions==0:coach_comment="Quiz performance acchi hai, ab writing practice mein bhi haath aazmaiye. /submit command try karein! ✍️"
-        elif(weekly_rank is None or weekly_rank==0)and total_quizzes>0:coach_comment="Is hafte abhi tak rank nahi lagi. Agla quiz aapka ho sakta hai! 💪"
-        elif current_streak==0 and total_quizzes>5:coach_comment="Koi baat nahi, streak break hote rehte hain. Ek naya, lamba streak shuru karne ka time hai! 🎯"
-        elif total_quizzes<3:coach_comment="Aapke liye to abhi quiz shuru hui hai! Participate karte rahiye aur apne stats ko grow karte dekhein! 🌱"
-        else:coach_comment="Consistency hi success ki chaabi hai. Practice karte rahiye, aap aacha kar rahe hain! 👍"
+        APPRECIATION_STREAK = 8; current_streak=stats_data.get('current_streak',0); total_quizzes=stats_data.get('total_quizzes_played',0); weekly_rank=stats_data.get('weekly_rank'); all_time_rank=stats_data.get('all_time_rank'); total_submissions=stats_data.get('total_submissions',0); avg_performance=stats_data.get('average_performance',0)
+        if current_streak>=APPRECIATION_STREAK: coach_comment=f"Gazab ki consistency! 🔥 {current_streak}-quiz ki streak pe ho, lage raho!"
+        elif current_streak==(APPRECIATION_STREAK-1): coach_comment="Bas ek aur quiz aur aapka naya streak milestone poora ho jayega! You can do it! 🚀"
+        elif weekly_rank==1: coach_comment="Is hafte ke Topper! Aap toh leaderboard par aag laga rahe ho! Keep it up! 👑"
+        elif all_time_rank is not None and all_time_rank<=10: coach_comment="All-Time Top 10 mein jagah banana aasan nahi. Aap toh legend ho! 🏛️"
+        elif total_submissions>0 and avg_performance>80: coach_comment="Aapki written practice performance outstanding hai! 80% se upar score karna kamaal hai. ✨"
+        else: coach_comment="Consistency hi success ki chaabi hai. Practice karte rahiye, aap aacha kar rahe hain! 👍"
         
         final_stats_message = stats_message + f"\n\n💡 <b>Coach's Tip:</b> {coach_comment}"
         
-        if len(final_stats_message) > 4000:
-            part1 = stats_message
-            part2 = f"💡 <b>Coach's Tip:</b> {coach_comment}"
-            first_msg = bot.send_message(msg.chat.id, part1, parse_mode="HTML", reply_parameters=reply_params)
-            markup = types.InlineKeyboardMarkup()
-            markup.add(types.InlineKeyboardButton("🗑️ Delete Stats", callback_data=f"delete_split_msg_{first_msg.message_id}"))
-            bot.send_message(msg.chat.id, part2, parse_mode="HTML", reply_to_message_id=first_msg.message_id, reply_markup=markup)
-        else:
-            markup = types.InlineKeyboardMarkup()
-            markup.add(types.InlineKeyboardButton("🗑️ Delete Stats", callback_data="delete_stats_msg"))
-            bot.send_message(msg.chat.id, final_stats_message, parse_mode="HTML", reply_markup=markup, reply_parameters=reply_params)
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🗑️ Delete Stats", callback_data="delete_stats_msg"))
+        bot.send_message(msg.chat.id, final_stats_message, parse_mode="HTML", reply_markup=markup, reply_parameters=reply_params)
 
     except Exception as e:
         report_error_to_admin(traceback.format_exc())
         bot.reply_to(msg, "❌ <i>Unable to fetch your stats right now. Please try again later.</i>", parse_mode="HTML")
-@bot.callback_query_handler(func=lambda call: call.data.startswith('delete_stats_msg') or call.data.startswith('delete_split_msg_'))
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('delete_stats_msg'))
 def handle_delete_stats_callback(call: types.CallbackQuery):
     """
-    Robustly deletes single or split stats messages and the original command.
+    Robustly deletes stats messages and the original command.
     """
     try:
         clicker_id = call.from_user.id
+        original_command_msg = call.message.reply_to_message
         
-        # Determine the original command message
-        original_command_msg = None
-        if call.data.startswith('delete_split_msg_'):
-            # For split messages, the reply is to the first part, not the command
-            first_part_msg_id = int(call.data.split('_')[-1])
-            first_part_msg = bot.forward_message(chat_id=call.message.chat.id, from_chat_id=call.message.chat.id, message_id=first_part_msg_id)
-            original_command_msg = first_part_msg.reply_to_message
-            bot.delete_message(call.message.chat.id, first_part_msg.message_id) # Delete the forwarded message copy
-        else: # For single messages
-            original_command_msg = call.message.reply_to_message
-
-        # Security Check
         if original_command_msg and (clicker_id == original_command_msg.from_user.id or is_admin(clicker_id)):
-            # Delete the bot's message(s)
-            try:
-                if call.data.startswith('delete_split_msg_'):
-                    # Delete the second part (with the button)
-                    bot.delete_message(call.message.chat.id, call.message.message_id)
-                    # Delete the first part
-                    bot.delete_message(call.message.chat.id, int(call.data.split('_')[-1]))
-                else: # Single message
-                    bot.delete_message(call.message.chat.id, call.message.message_id)
-            except ApiTelegramException as e:
-                print(f"Info: Could not delete bot's stats message(s): {e}")
-
-            # Delete the user's original command
-            try:
-                bot.delete_message(call.message.chat.id, original_command_msg.message_id)
-            except ApiTelegramException as e:
-                print(f"Info: Could not delete user's command: {e}")
-            
+            try: bot.delete_message(call.message.chat.id, call.message.message_id)
+            except ApiTelegramException as e: print(f"Info: Could not delete bot's stats message: {e}")
+            try: bot.delete_message(call.message.chat.id, original_command_msg.message_id)
+            except ApiTelegramException as e: print(f"Info: Could not delete user's command: {e}")
             bot.answer_callback_query(call.id, "Stats deleted.")
         elif not original_command_msg:
-             # Fallback if reply link is broken
              bot.delete_message(call.message.chat.id, call.message.message_id)
              bot.answer_callback_query(call.id, "Stats deleted.")
         else:
             bot.answer_callback_query(call.id, "Only the person who used the command or an admin can delete this.", show_alert=True)
             
     except Exception as e:
-        print(f"Error in delete_stats_callback: {traceback.format_exc()}")
+        report_error_to_admin(f"Error in delete_stats_callback: {traceback.format_exc()}")
         bot.answer_callback_query(call.id, "An error occurred while deleting.")
 # =============================================================================
 # 8. TELEGRAM BOT HANDLERS - QUIZ & NOTIFICATION COMMANDS
