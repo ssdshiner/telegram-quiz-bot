@@ -1109,13 +1109,13 @@ def process_webapp_quiz_results(payload):
         report_error_to_admin(f"Error processing webapp quiz result for user {payload.get('userId')}:\n{traceback.format_exc()}")
 def process_webapp_quiz_results(data):
     """
-    UPGRADED: Handles different payloads from the web app based on the user's final plan.
-    1. 'quiz_completed_notification': Saves data and notifies the admin.
+    UPGRADED: Handles the automatic result submission from the web app.
+    It saves the data and sends a notification with a "Post" button to the admin.
     """
     try:
         payload_type = data.get('type')
         if payload_type != 'quiz_completed_notification':
-            return # This function only handles the automatic notification
+            return # This function now only handles the automatic notification
 
         user_id = data.get('userId')
         user_name = escape(data.get('userName', 'A participant'))
@@ -1188,6 +1188,9 @@ def handle_post_web_result_callback(call: types.CallbackQuery):
         
         bot.send_message(GROUP_ID, summary, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
         bot.edit_message_text(f"✅ Result for **{user_name}** has been posted to the group.", call.message.chat.id, call.message.message_id, parse_mode="HTML")
+        
+        # Mark as posted
+        supabase.table('web_quiz_results').update({'is_posted_to_group': True}).eq('id', result_id).execute()
 
     except Exception as e:
         report_error_to_admin(f"Error posting web result from callback: {traceback.format_exc()}")
@@ -2254,6 +2257,50 @@ def handle_web_result_command(msg: types.Message):
     except Exception as e:
         report_error_to_admin(f"Error in /webresult command: {traceback.format_exc()}")
         bot.send_message(msg.chat.id, "❌ An error occurred while fetching the results.")
+@bot.message_handler(commands=['debug_dm'])
+@admin_required
+def handle_debug_dm(msg: types.Message):
+    """
+    A temporary utility command for the admin to debug DM issues.
+    """
+    if not msg.chat.type == 'private':
+        bot.reply_to(msg, "🤫 Please use this command in a private chat with me.")
+        return
+
+    your_user_id = msg.from_user.id
+    configured_admin_id = ADMIN_USER_ID
+
+    debug_report = f"🕵️‍♂️ **DM Debug Report** 🕵️‍♂️\n\n"
+    debug_report += f"• **Your User ID (from this message):**\n  <code>{your_user_id}</code>\n"
+    debug_report += f"• **Configured ADMIN_USER_ID (from environment):**\n  <code>{configured_admin_id}</code>\n\n"
+
+    if your_user_id == configured_admin_id:
+        debug_report += "✅ **Status:** IDs match! This is correct.\n\n"
+    else:
+        debug_report += "❌ **Status:** IDs DO NOT MATCH! This is the problem. Please correct the `ADMIN_USER_ID` in your environment variables.\n\n"
+
+    debug_report += "Now, attempting to send a test DM to the configured ADMIN_USER_ID...\n"
+    bot.reply_to(msg, debug_report, parse_mode="HTML")
+
+    # --- Attempt to send the DM ---
+    try:
+        test_message = "Hello! This is a test message to confirm that I can send you a DM. If you see this, it's working!"
+        bot.send_message(configured_admin_id, test_message)
+        
+        final_report = "✅ **Test DM Result: SUCCESS!**\n\nThe test message was sent successfully. The DM functionality is working correctly."
+        bot.send_message(your_user_id, final_report)
+
+    except Exception as e:
+        # Provide the ACTUAL error message from the Telegram API
+        error_details = escape(str(e))
+        final_report = (
+            f"❌ **Test DM Result: FAILED!**\n\n"
+            f"I was unable to send a message to the configured ADMIN_USER_ID (<code>{configured_admin_id}</code>).\n\n"
+            f"<b>Here is the exact error from Telegram:</b>\n"
+            f"<pre>{error_details}</pre>\n\n"
+            f"Please check this error to find the root cause."
+        )
+        bot.send_message(your_user_id, final_report, parse_mode="HTML")
 @bot.message_handler(commands=['leaderboard'])
 @admin_required
 def handle_leaderboard(msg: types.Message):
