@@ -2073,33 +2073,65 @@ def handle_poll_answer(poll_answer: types.PollAnswer):
 @admin_required
 def handle_web_result_command(msg: types.Message):
     """
-    Fetches a summary of the latest web quiz results from Supabase.
+    Fetches a comprehensive analytics dashboard for all web quiz results.
     """
     if not msg.chat.type == 'private':
         bot.reply_to(msg, "🤫 Please use this command in a private chat with me.")
         return
 
     try:
-        # Fetch the last 20 results, ordered by most recent
-        response = supabase.table('web_quiz_results').select('*').order('created_at', desc=True).limit(20).execute()
-        
-        if not response.data:
+        # Call our new, powerful analytics function
+        response = supabase.rpc('get_web_quiz_analytics').execute()
+        analytics = response.data
+
+        if not analytics or not analytics.get('overall_stats') or analytics['overall_stats']['total_attempts'] == 0:
             bot.send_message(msg.chat.id, "📊 No web quiz results have been recorded yet.")
             return
 
-        results = response.data
-        total_participants = len(results)
-        avg_score = sum(r['score_percentage'] for r in results) / total_participants
+        # --- Build the Analytics Report ---
+        summary_text = "📊 <b>Web Quiz Analytics Dashboard</b> 📊\n"
+        summary_text += "━━━━━━━━━━━━━━━━━━\n\n"
 
-        summary_text = f"📊 **Latest Web Quiz Results Summary** 📊\n\n"
-        summary_text += f"👥 Total Participants: <b>{total_participants}</b>\n"
-        summary_text += f"🎯 Average Score: <b>{avg_score:.1f}%</b>\n\n"
-        summary_text += "--- <i>Recent Entries</i> ---\n"
+        # 1. Overall Stats
+        overall = analytics.get('overall_stats', {})
+        summary_text += "🌐 <b><u>Overall Summary</u></b>\n"
+        summary_text += f" • <b>Total Attempts:</b> {overall.get('total_attempts', 0)}\n"
+        summary_text += f" • <b>Unique Players:</b> {overall.get('unique_players', 0)}\n"
+        summary_text += f" • <b>Average Score:</b> {overall.get('average_score', 0):.1f}%\n\n"
 
-        for result in results[:10]: # Show the 10 most recent
-            user_name = escape(result.get('user_name', 'N/A'))
-            score = result.get('score_percentage', 0)
-            summary_text += f"• <b>{user_name}:</b> {score}%\n"
+        # 2. Quiz Set Insights
+        quiz_sets = analytics.get('quiz_set_stats')
+        if quiz_sets:
+            most_played = max(quiz_sets, key=lambda x: x['attempts'])
+            highest_score = max(quiz_sets, key=lambda x: x['avg_score'])
+            toughest_quiz = min(quiz_sets, key=lambda x: x['avg_score'])
+            
+            summary_text += "📚 <b><u>Quiz Set Insights</u></b>\n"
+            summary_text += f" • 🔥 <b>Most Popular:</b> {escape(most_played['quiz_set'])} ({most_played['attempts']} attempts)\n"
+            summary_text += f" • ✅ <b>Highest Scored:</b> {escape(highest_score['quiz_set'])} (Avg: {highest_score['avg_score']:.0f}%)\n"
+            summary_text += f" • ⚠️ <b>Toughest Quiz:</b> {escape(toughest_quiz['quiz_set'])} (Avg: {toughest_quiz['avg_score']:.0f}%)\n\n"
+
+        # 3. Top Performers
+        top_performers = analytics.get('top_performers')
+        if top_performers:
+            summary_text += "🏆 <b><u>Top 5 Performers (Best Score)</u></b>\n"
+            rank_emojis = ["🥇", "🥈", "🥉", "4.", "5."]
+            for i, performer in enumerate(top_performers):
+                user_name = escape(performer.get('user_name', 'N/A'))
+                score = performer.get('score_percentage', 0)
+                quiz_name = escape(performer.get('quiz_set', 'N/A'))
+                summary_text += f" {rank_emojis[i]} <b>{user_name}</b> - {score}% <i>(in {quiz_name})</i>\n"
+            summary_text += "\n"
+
+        # 4. Recent Activity
+        recent_activity = analytics.get('recent_activity')
+        if recent_activity:
+            summary_text += "🕓 <b><u>Recent 10 Attempts</u></b>\n"
+            for activity in recent_activity:
+                user_name = escape(activity.get('user_name', 'N/A'))
+                score = activity.get('score_percentage', 0)
+                quiz_name = escape(activity.get('quiz_set', 'N/A'))
+                summary_text += f" • <b>{user_name}:</b> {score}% in {quiz_name}\n"
 
         bot.send_message(msg.chat.id, summary_text, parse_mode="HTML")
 
