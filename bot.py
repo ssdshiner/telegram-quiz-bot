@@ -1150,7 +1150,35 @@ def handle_post_web_result_callback(call: types.CallbackQuery):
     except Exception as e:
         report_error_to_admin(f"Error posting web result from callback: {traceback.format_exc()}")
         bot.answer_callback_query(call.id, "Error posting result.", show_alert=True)
+def process_post_score_request(payload):
+    """
+    Handles a user's request to post their score, formats a message, and sends it to the group.
+    """
+    try:
+        user_name = escape(payload.get('userName', 'A Participant'))
+        score = payload.get('score', 0)
+        correct = payload.get('correct', 0)
+        total = payload.get('total', 0)
+        quiz_set = escape(payload.get('quizSet', 'Web Quiz'))
 
+        # Create the beautiful scorecard message
+        summary = f"🎉 <b>{user_name} has completed the Web Quiz!</b> 🎉\n\n"
+        summary += f"📚 <b>Topic:</b> {quiz_set}\n"
+        
+        if score >= 80:
+            summary += f"🏆 Score: <b>{score}%</b> (Outstanding Performance!)\n"
+        elif score >= 60:
+            summary += f"👍 Score: <b>{score}%</b> (Great Job!)\n"
+        else:
+            summary += f"🌱 Score: <b>{score}%</b> (Good Effort!)\n"
+            
+        summary += f"📊 Correct Answers: <b>{correct} out of {total}</b>."
+        
+        # Send the message to the main group's quiz topic
+        bot.send_message(GROUP_ID, summary, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
+
+    except Exception as e:
+        report_error_to_admin(f"Error in process_post_score_request for user {payload.get('userName')}:\n{traceback.format_exc()}")
 @bot.message_handler(content_types=['web_app_data'])
 @membership_required
 def handle_webapp_data(msg: types.Message):
@@ -1163,23 +1191,19 @@ def handle_webapp_data(msg: types.Message):
     if data_from_webapp.strip().startswith('{'):
         try:
             payload = json.loads(data_from_webapp)
-            if 'type' in payload and ('notification' in payload['type'] or 'result' in payload['type']):
+            payload_type = payload.get('type')
+
+            if payload_type == 'quiz_completed_notification':
+                # This is the automatic notification for the admin
                 process_webapp_quiz_results(payload)
                 return
+            elif payload_type == 'post_score_to_group':
+                # This is the user's request to post their score
+                process_post_score_request(payload)
+                return
+
         except json.JSONDecodeError:
             print("Received a non-JSON string that started with {.")
-    
-    msg.text = data_from_webapp
-    handler_to_call = COMMAND_ROUTER.get(msg.text)
-    
-    if msg.text.startswith('/need'):
-        handler_to_call = COMMAND_ROUTER.get('/need')
-
-    if handler_to_call:
-        try: handler_to_call(msg)
-        except Exception as e: report_error_to_admin(f"Error executing Web App command '{msg.text}':\n{traceback.format_exc()}")
-    else:
-        bot.send_message(msg.chat.id, f"Received an unknown action from the dashboard: {escape(msg.text)}")
 # =============================================================================
 # 8. TELEGRAM BOT HANDLERS - CORE COMMANDS
 # =============================================================================
