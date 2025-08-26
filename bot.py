@@ -1062,51 +1062,7 @@ def handle_webquiz_set_selection(call: types.CallbackQuery):
     except Exception as e:
         report_error_to_admin(f"Error in handle_webquiz_set_selection: {traceback.format_exc()}")
         bot.answer_callback_query(call.id, "An error occurred.", show_alert=True)
-def process_webapp_quiz_results(payload):
-    """
-    Processes web app quiz results, saves them via RPC, and sends a rich, ranked summary.
-    """
-    try:
-        # --- 1. Extract and prepare data ---
-        user_id = payload.get('userId')
-        user_name = payload.get('userName', 'A Participant')
-        quiz_set = payload.get('quizSet', 'Web Quiz')
-        score = payload.get('score', 0)
-        correct = payload.get('correct', 0)
-        total = payload.get('total', 0)
 
-        # --- 2. Call the new Supabase function to save data and get the rank ---
-        response = supabase.rpc('save_web_quiz_and_get_rank', {
-            'p_user_id': user_id,
-            'p_user_name': user_name,
-            'p_quiz_set': quiz_set,
-            'p_score_percentage': score,
-            'p_correct_answers': correct,
-            'p_total_questions': total
-        }).execute()
-        
-        rank = response.data
-        rank_emoji_map = {1: "🥇", 2: "🥈", 3: "🥉"}
-        rank_text = f"{rank_emoji_map.get(rank, '🏅')} Rank #{rank}"
-
-        # --- 3. Build the new, enriched result message ---
-        summary = f"🎉 <b>Web Quiz Result: {escape(user_name)}!</b> 🎉\n\n"
-        summary += f"📚 <b>Topic:</b> {escape(quiz_set)}\n"
-        summary += f"🏆 <b>Rank:</b> <u>{rank_text}</u> on this topic!\n\n"
-        
-        if score >= 90:
-            summary += f"Wow! An outstanding score of <b>{score}%</b>! Keep it up! 💎\n"
-        elif score >= 75:
-            summary += f"Excellent job! A solid score of <b>{score}%</b>. 👍\n"
-        else:
-            summary += f"Good effort! A score of <b>{score}%</b>. Keep practicing! 🌱\n"
-            
-        summary += f"You answered <b>{correct} out of {total}</b> questions correctly."
-        
-        bot.send_message(GROUP_ID, summary, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
-        
-    except Exception as e:
-        report_error_to_admin(f"Error processing webapp quiz result for user {payload.get('userId')}:\n{traceback.format_exc()}")
 def process_webapp_quiz_results(data):
     """
     Handles different payloads from the web app based on the user's final plan.
