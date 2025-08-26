@@ -3859,21 +3859,53 @@ def format_analysis_for_webapp(analysis_data, user_name):
 @membership_required
 def handle_my_analysis_command(msg: types.Message):
     """
-    Sends a rich, detailed, holistic analysis to the user and gives them control to delete it.
+    Sends a rich, detailed, UNIFIED analysis to the user.
     """
     user_id = msg.from_user.id
     user_name = escape(msg.from_user.first_name)
     
     try:
-        # Step 1: Get stats grouped by topic (for strong/weak areas)
-        topic_stats_res = supabase.rpc('get_user_topic_stats', {'p_user_id': user_id}).execute()
-        
-        # Step 2: Get stats grouped by question type (for Theory vs Practical)
-        type_stats_res = supabase.rpc('get_user_question_type_stats', {'p_user_id': user_id}).execute()
+        # Call our new unified analysis function
+        response = supabase.rpc('get_unified_user_analysis', {'p_user_id': user_id}).execute()
+        analysis_data = response.data
 
-        # Step 3: Pass both sets of data to the formatting function
-        analysis_text = format_analysis_snapshot(user_name, topic_stats_res.data, type_stats_res.data)
+        web_stats = analysis_data.get('web_quiz_stats')
+        marathon_stats = analysis_data.get('marathon_stats')
+
+        if not web_stats and not marathon_stats:
+            bot.reply_to(msg, f"📊 <b>{user_name}'s Analysis</b>\n\nNo quiz data found yet. Participate in quizzes to generate your report!")
+            return
+
+        msg_text = f"📊 <b>{user_name}'s Unified Analysis</b>\n━━━━━━━━━━━━━━━━━━\n\n"
         
+        # Display Web Quiz Analysis
+        if web_stats and web_stats.get('top_3_web_scores'):
+            msg_text += "<b>💻 <u>Web Quiz Performance</u></b>\n"
+            msg_text += "<b>Top 3 Scores:</b>\n"
+            for score in web_stats['top_3_web_scores']:
+                msg_text += f"  • {score['score']}% - <i>({escape(score['quiz_set'])})</i>\n"
+            
+            if web_stats.get('latest_strongest_topic'):
+                 msg_text += f"<b>Strongest Area:</b> {escape(web_stats['latest_strongest_topic'])}\n"
+            if web_stats.get('latest_weakest_topic'):
+                 msg_text += f"<b>Improvement Area:</b> {escape(web_stats['latest_weakest_topic'])}\n"
+            msg_text += "\n"
+
+        # Display Marathon Analysis
+        if marathon_stats and marathon_stats.get('topic_breakdown'):
+            msg_text += "<b>🏁 <u>Marathon Topic Breakdown</u></b>\n"
+            strongest = sorted([t for t in marathon_stats['topic_breakdown'] if t['accuracy'] >= 80], key=lambda x: x['accuracy'], reverse=True)[:3]
+            weakest = sorted([t for t in marathon_stats['topic_breakdown'] if t['accuracy'] < 65], key=lambda x: x['accuracy'])[:3]
+            
+            if strongest:
+                msg_text += "<b>Strongest Topics:</b>\n"
+                for t in strongest:
+                    msg_text += f"  • {escape(t['topic'])} ({t['accuracy']}%)\n"
+            if weakest:
+                msg_text += "<b>Improvement Areas:</b>\n"
+                for t in weakest:
+                    msg_text += f"  • {escape(t['topic'])} ({t['accuracy']}%)\n"
+
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("🗑️ Delete This Analysis", callback_data="delete_analysis_msg"))
         
@@ -3881,91 +3913,68 @@ def handle_my_analysis_command(msg: types.Message):
             message_id=msg.message_id,
             allow_sending_without_reply=True
         )
-
-        bot.send_message(
-            msg.chat.id,
-            analysis_text,
-            parse_mode="HTML",
-            reply_markup=markup,
-            reply_parameters=reply_params
-        )
+        bot.send_message(msg.chat.id, msg_text, parse_mode="HTML", reply_markup=markup, reply_parameters=reply_params)
 
     except Exception as e:
-        report_error_to_admin(f"Error generating analysis for {user_id}:\n{traceback.format_exc()}")
+        report_error_to_admin(f"Error generating unified analysis for {user_id}:\n{traceback.format_exc()}")
+        bot.reply_to(msg, "❌ An error occurred while generating your analysis.")
 
 @bot.message_handler(commands=['mystats'])
 @membership_required
 def handle_mystats_command(msg: types.Message):
     """
-    Fetches comprehensive stats and compares them with group averages.
+    Fetches comprehensive UNIFIED stats from both marathon and web quizzes.
     """
     user_id = msg.from_user.id
     user_name = escape(msg.from_user.first_name)
     try:
-        response = supabase.rpc('get_user_stats', {'p_user_id': user_id}).execute()
+        # Call the new unified database function
+        response = supabase.rpc('get_unified_user_stats', {'p_user_id': user_id}).execute()
         data = response.data
         reply_params = types.ReplyParameters(message_id=msg.message_id, allow_sending_without_reply=True)
 
         user_stats = data.get('user')
-        group_stats = data.get('group')
 
         if not user_stats or not user_stats.get('user_name'):
             error_message = f"❌ <b>No Stats Found</b>\n👋 Hi <b>{user_name}</b>!\n🎯 <i>No quiz data found for you yet.</i>\n💡 Participate in quizzes and practice sessions to generate your snapshot!"
             bot.send_message(msg.chat.id, error_message, parse_mode="HTML", reply_parameters=reply_params)
             return
 
-        # --- 1. Define User Title based on Quizzes Played ---
-        quizzes_played = user_stats.get('total_quizzes_played') or 0
+        # --- 1. Define User Title based on COMBINED Quizzes Played ---
+        quizzes_played = user_stats.get('combined_total_quizzes', 0)
         if quizzes_played >= 50: user_title = "Quiz Legend 👑"
         elif quizzes_played >= 25: user_title = "Quiz Veteran 🎖️"
         elif quizzes_played >= 10: user_title = "Regular Participant ⚔️"
         elif quizzes_played >= 1: user_title = "Rising Star ⭐"
         else: user_title = "Newcomer 🌱"
 
-        # --- 2. Build the Comparison Message ---
-        msg_text = f"📊 <b>{user_name}'s Performance Snapshot</b>\n━━━━━━━━━━━━━━━━━━\n"
+        # --- 2. Build the Unified Stats Message ---
+        msg_text = f"📊 <b>{user_name}'s Unified Performance Snapshot</b>\n━━━━━━━━━━━━━━━━━━\n"
         msg_text += f"Your current rank is: <b>{user_title}</b>\n\n"
-        msg_text += "Here's how you stack up against the group average:\n\n"
-        msg_text += "📈 <b>Core Activity</b>\n"
         
-        # Quizzes Played Comparison
-        user_qp = quizzes_played
-        group_qp_avg = group_stats.get('avg_quizzes_played', 0)
-        qp_emoji = "🔼" if user_qp > group_qp_avg else "🔽" if user_qp < group_qp_avg else "─"
-        msg_text += f" • Quizzes Played: <b>{user_qp}</b> (Avg: {group_qp_avg:.0f}) {qp_emoji}\n"
+        msg_text += "📈 <b>Quiz Activity</b>\n"
+        msg_text += f" • Total Quizzes Played: <b>{quizzes_played}</b>\n"
+        msg_text += f"   - Marathons: {user_stats.get('total_marathons_played', 0)}\n"
+        msg_text += f"   - Web Quizzes: {user_stats.get('total_webquizzes_played', 0)}\n"
+        
+        avg_web_score = user_stats.get('average_webquiz_score')
+        if avg_web_score is not None:
+            msg_text += f" • Avg. Web Quiz Score: <b>{avg_web_score:.0f}%</b>\n\n"
+        else:
+            msg_text += "\n"
 
-        # All-Time Score Comparison
-        user_score = user_stats.get('all_time_score') or 0
-        group_score_avg = group_stats.get('avg_all_time_score', 0)
-        score_emoji = "🔼" if user_score > group_score_avg else "🔽" if user_score < group_score_avg else "─"
-        msg_text += f" • All-Time Score: <b>{user_score/1000:.0f}k</b> (Avg: {group_score_avg/1000:.0f}k) {score_emoji}\n"
+        # Note: Written practice stats are now separate in /my_analysis for clarity
         
-        msg_text += f" • Current Streak: 🔥 <b>{user_stats.get('current_streak', 0)}</b>\n\n"
-
-        msg_text += "📝 <b>Written Practice</b>\n"
-        
-        # Submissions Comparison
-        user_sub = user_stats.get('total_submissions') or 0
-        group_sub_avg = group_stats.get('avg_submissions', 0)
-        sub_emoji = "🔼" if user_sub > group_sub_avg else "🔽" if user_sub < group_sub_avg else "─"
-        msg_text += f" • Submissions: <b>{user_sub}</b> (Avg: {group_sub_avg:.0f}) {sub_emoji}\n"
-        
-        # Practice Performance Comparison
-        user_perf = user_stats.get('average_performance') or 0
-        group_perf_avg = group_stats.get('avg_practice_performance', 0)
-        perf_emoji = "🔼" if user_perf > group_perf_avg else "🔽" if user_perf < group_perf_avg else "─"
-        msg_text += f" • Avg. Performance: <b>{user_perf:.0f}%</b> (Avg: {group_perf_avg:.0f}%) {perf_emoji}\n\n"
-
-        msg_text += "🏆 <b>Rankings</b>\n"
+        msg_text += "🏆 <b>Rankings (Marathon)</b>\n"
         msg_text += f" • All-Time Rank: <b>#{user_stats.get('all_time_rank') or 'N/A'}</b>\n"
         msg_text += f" • Weekly Rank: <b>#{user_stats.get('weekly_rank') or 'N/A'}</b>\n\n"
         
         # --- 3. Dynamic Insight ---
         insight = ""
-        if user_perf > group_perf_avg and user_perf > 80:
-            insight = "Your Written Practice performance is exceptional, putting you well ahead of the curve. Keep submitting those high-quality answers!"
-        elif user_qp > group_qp_avg * 1.5:
-            insight = "Your consistency in playing quizzes is fantastic and a key driver of your high score. Keep up the great momentum!"
+        if avg_web_score and avg_web_score > 85:
+            insight = "Your performance in the Web Quizzes is outstanding. Your conceptual clarity is a huge asset!"
+        elif quizzes_played > 25:
+            insight = "Your consistency in playing a high number of quizzes is fantastic and a key driver of your progress. Keep up the great momentum!"
         elif user_stats.get('current_streak', 0) >= 5:
             insight = "A streak of 5 or more is amazing! Your daily dedication is truly paying off."
         else:
