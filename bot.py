@@ -12,7 +12,7 @@ import threading
 import time
 import random
 import requests
-from flask import Flask, request
+from flask import Flask, request, json
 from telebot import TeleBot, types
 from telebot.apihelper import ApiTelegramException
 from oauth2client.service_account import ServiceAccountCredentials
@@ -880,6 +880,61 @@ def save_quiz_result():
         
         print(f"Successfully saved web quiz result for {data['userName']} via API.")
         return json.dumps({'status': 'success', 'message': 'Result saved.'}), 200
+
+    except Exception as e:
+        report_error_to_admin(f"Error in /api/save_result: {traceback.format_exc()}")
+        return json.dumps({'status': 'error', 'message': 'An internal server error occurred.'}), 500
+from flask_cors import CORS
+
+# Add this line right after app = Flask(__name__) to enable CORS
+CORS(app)
+
+@app.route('/api/save_result', methods=['POST'])
+def save_quiz_result():
+    """
+    API endpoint for the Web App to securely save a user's quiz result.
+    """
+    try:
+        data = request.json
+        # Basic validation
+        if not all(k in data for k in ['userId', 'userName', 'scorePercentage', 'correctAnswers', 'totalQuestions', 'quizSet']):
+            return json.dumps({'status': 'error', 'message': 'Missing required data fields.'}), 400
+
+        # --- SAVE TO SUPABASE ---
+        response = supabase.table('web_quiz_results').insert({
+            'user_id': data['userId'],
+            'user_name': data['userName'],
+            'quiz_set': data['quizSet'],
+            'score_percentage': data['scorePercentage'],
+            'correct_answers': data['correctAnswers'],
+            'total_questions': data['totalQuestions'],
+            'time_taken_seconds': data.get('timeTakenSeconds', 0),
+            'strongest_topic': data.get('strongestTopic', 'N/A'),
+            'weakest_topic': data.get('weakestTopic', 'N/A')
+        }).execute()
+        
+        new_result_id = response.data[0]['id']
+        print(f"API: Successfully saved web quiz result (ID: {new_result_id}) for {data['userName']}.")
+
+        # --- HANDLE ADMIN NOTIFICATION or GROUP POST ---
+        if data.get('postToGroup'):
+             # This block runs if the "Post Score to Group" button was clicked
+             process_post_score_request(data)
+        else:
+            # This block runs automatically when the quiz is completed
+            admin_summary = (
+                f"🔔 <b>New Web Quiz Submission!</b>\n\n"
+                f"👤 <b>User:</b> {escape(data['userName'])}\n"
+                f"📚 <b>Quiz:</b> {escape(data['quizSet'])}\n"
+                f"📊 <b>Score:</b> {data['scorePercentage']}% ({data['correctAnswers']}/{data['totalQuestions']})\n"
+                f"⏱️ <b>Time:</b> {data.get('timeTakenSeconds', 0)}s\n\n"
+                f"<i>Do you want to post this result in the group?</i>"
+            )
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("✅ Yes, Post to Group", callback_data=f"post_web_result_{new_result_id}"))
+            bot.send_message(ADMIN_USER_ID, admin_summary, parse_mode="HTML", reply_markup=markup)
+
+        return json.dumps({'status': 'success', 'message': 'Result processed.'}), 200
 
     except Exception as e:
         report_error_to_admin(f"Error in /api/save_result: {traceback.format_exc()}")
