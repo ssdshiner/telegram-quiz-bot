@@ -3873,8 +3873,7 @@ def handle_my_analysis_command(msg: types.Message):
         response = supabase.rpc('get_unified_user_analysis', {'p_user_id': user_id}).execute()
         analysis_data = response.data
 
-        # --- CORRECTED LINES ---
-        # The data is already the list we need, so we don't need the extra .get('json_agg')
+        # Extract the different pieces of data
         web_stats = analysis_data.get('web_quiz_stats')
         topic_stats = analysis_data.get('marathon_topic_stats')
         type_stats = analysis_data.get('marathon_type_stats')
@@ -3890,7 +3889,7 @@ def handle_my_analysis_command(msg: types.Message):
         if topic_stats:
             total_correct = sum(t['total_correct'] for t in topic_stats)
             total_attempted = sum(t['total_attempted'] for t in topic_stats)
-            total_time = sum(t['total_correct'] * t['avg_time_per_question'] for t in topic_stats)
+            total_time = sum(t['total_correct'] * t['avg_time_per_question'] for t in topic_stats if t.get('avg_time_per_question'))
             
             overall_accuracy = (total_correct / total_attempted * 100) if total_attempted > 0 else 0
             overall_avg_time = (total_time / total_correct) if total_correct > 0 else 0
@@ -3926,7 +3925,8 @@ def handle_my_analysis_command(msg: types.Message):
             if weakest:
                 for i, t in enumerate(weakest, 1):
                     accuracy = (t['total_correct'] / t['total_attempted'] * 100)
-                    main_message += f"  {i}. {escape(t['topic'])} ({accuracy:.0f}% | {t['avg_time_per_question']:.1f}s)\n"
+                    avg_time = t.get('avg_time_per_question', 0)
+                    main_message += f"  {i}. {escape(t['topic'])} ({accuracy:.0f}% | {avg_time:.1f}s)\n"
             else:
                 main_message += "  No specific areas for improvement found yet. Great work!\n"
         
@@ -3936,7 +3936,8 @@ def handle_my_analysis_command(msg: types.Message):
             web_quiz_section += "\n<b>💻 <u>Web Quiz Performance</u></b>\n"
             web_quiz_section += "<b>Top 3 Scores:</b>\n"
             for score in web_stats['top_3_web_scores']:
-                msg_text += f"  • {score['score']}% - <i>({escape(score['quiz_set'])})</i>\n"
+                # --- THIS IS THE CORRECTED LINE ---
+                web_quiz_section += f"  • {score['score']}% - <i>({escape(score['quiz_set'])})</i>\n"
             
             if web_stats.get('latest_strongest_topic'):
                  web_quiz_section += f"<b>Strongest Area:</b> {escape(web_stats['latest_strongest_topic'])}\n"
