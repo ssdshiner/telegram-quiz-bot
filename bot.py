@@ -873,7 +873,6 @@ def save_quiz_result():
             'quiz_set': data['quizSet'],
             'score_percentage': data['scorePercentage'],
             'correct_answers': data['correctAnswers'],
-            'attempted_questions': data.get('attemptedQuestions', 0), # Added this field
             'total_questions': data['totalQuestions'],
             'time_taken_seconds': data.get('timeTakenSeconds', 0),
             'strongest_topic': data.get('strongestTopic', 'N/A'),
