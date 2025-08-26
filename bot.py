@@ -883,25 +883,25 @@ def save_quiz_result():
         new_result_id = response.data[0]['id']
         print(f"API: Successfully saved web quiz result (ID: {new_result_id}) for {data['userName']}.")
 
-        # --- HANDLE ADMIN NOTIFICATION or GROUP POST ---
-        if data.get('postToGroup'):
-             # This block runs if the "Post Score to Group" button was clicked
-             process_post_score_request(data)
-        else:
-# This block runs automatically when the quiz is completed
-admin_summary = (
-    f"🔔 <b>New Web Quiz Submission!</b>\n\n"
-    f"👤 <b>User:</b> {escape(data['userName'])}\n"
-    f"📚 <b>Quiz:</b> {escape(data['quizSet'])}\n"
-    f"📊 <b>Score:</b> {data['scorePercentage']}% ({data.get('correctAnswers', 0)}/{data.get('totalQuestions', 0)})\n"
-    f"⏱️ <b>Time:</b> {data.get('timeTakenSeconds', 0)}s\n"
-    f"✅ <b>Correct:</b> {data.get('correctAnswers', 0)} questions\n"
-    f"📝 <b>Attempted:</b> {data.get('attemptedQuestions', 0)} questions\n\n"
-    f"<i>Do you want to post this result in the group?</i>"
-)
-            markup = types.InlineKeyboardMarkup()
-            markup.add(types.InlineKeyboardButton("✅ Yes, Post to Group", callback_data=f"post_web_result_{new_result_id}"))
-            bot.send_message(ADMIN_USER_ID, admin_summary, parse_mode="HTML", reply_markup=markup)
+# --- HANDLE ADMIN NOTIFICATION or GROUP POST ---
+if data.get('postToGroup'):
+    # This block runs if the "Post Score to Group" button was clicked
+    process_post_score_request(data)
+else:
+    # This block runs automatically when the quiz is completed
+    admin_summary = (
+        f"🔔 <b>New Web Quiz Submission!</b>\n\n"
+        f"👤 <b>User:</b> {escape(data['userName'])}\n"
+        f"📚 <b>Quiz:</b> {escape(data['quizSet'])}\n"
+        f"📊 <b>Score:</b> {data['scorePercentage']}% ({data.get('correctAnswers', 0)}/{data.get('totalQuestions', 0)})\n"
+        f"⏱️ <b>Time:</b> {data.get('timeTakenSeconds', 0)}s\n"
+        f"✅ <b>Correct:</b> {data.get('correctAnswers', 0)} questions\n"
+        f"📝 <b>Attempted:</b> {data.get('attemptedQuestions', 0)} questions\n\n"
+        f"<i>Do you want to post this result in the group?</i>"
+    )
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("✅ Yes, Post to Group", callback_data=f"post_web_result_{new_result_id}"))
+    bot.send_message(ADMIN_USER_ID, admin_summary, parse_mode="HTML", reply_markup=markup)
 
         return json.dumps({'status': 'success', 'message': 'Result processed.'}), 200
 
