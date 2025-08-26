@@ -1109,12 +1109,13 @@ def process_webapp_quiz_results(payload):
         report_error_to_admin(f"Error processing webapp quiz result for user {payload.get('userId')}:\n{traceback.format_exc()}")
 def process_webapp_quiz_results(data):
     """
-    UPGRADED: Handles different payloads from the web app with bulletproof checks.
+    Handles different payloads from the web app based on the user's final plan.
+    1. 'quiz_completed_notification': Saves data and notifies the admin.
     """
     try:
         payload_type = data.get('type')
         if payload_type != 'quiz_completed_notification':
-            return
+            return # This function only handles the automatic notification
 
         user_id = data.get('userId')
         user_name = escape(data.get('userName', 'A participant'))
@@ -1126,7 +1127,7 @@ def process_webapp_quiz_results(data):
         strongest = escape(data.get('strongestTopic', 'N/A'))
         weakest = escape(data.get('weakestTopic', 'N/A'))
         
-        # Save the full result to Supabase
+        # Save the full result to Supabase and get the new record's ID
         try:
             response = supabase.table('web_quiz_results').insert({
                 'user_id': user_id, 'user_name': user_name, 'quiz_set': quiz_set,
@@ -1134,25 +1135,10 @@ def process_webapp_quiz_results(data):
                 'time_taken_seconds': time_taken, 'strongest_topic': strongest, 'weakest_topic': weakest
             }).execute()
             
-            # --- THE BULLETPROOF CHECK ---
-            if not response.data or 'id' not in response.data[0]:
-                error_msg = "Database saved the result but did not return the new ID. Cannot create 'Post to Group' button."
-                print(error_msg)
-                report_error_to_admin(error_msg)
-                # Still send a simpler notification to the admin
-                admin_summary_no_button = (
-                    f"🔔 **New Web Quiz Submission (ID Fetch Failed)!**\n\n"
-                    f"👤 **User:** {user_name}\n"
-                    f"📊 **Score:** <b>{score}%</b> ({correct}/{total})"
-                )
-                bot.send_message(ADMIN_USER_ID, admin_summary_no_button, parse_mode="HTML")
-                return
-            # --- END OF CHECK ---
-
             new_result_id = response.data[0]['id']
             print(f"Successfully saved web quiz result (ID: {new_result_id}) for {user_name}.")
 
-            # Send the detailed notification to the admin's DM with the button
+            # Send a detailed notification to the admin's DM with a "Post to Group" button
             admin_summary = (
                 f"🔔 **New Web Quiz Submission!**\n\n"
                 f"👤 **User:** {user_name}\n"
@@ -1203,51 +1189,40 @@ def handle_post_web_result_callback(call: types.CallbackQuery):
         bot.send_message(GROUP_ID, summary, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
         bot.edit_message_text(f"✅ Result for **{user_name}** has been posted to the group.", call.message.chat.id, call.message.message_id, parse_mode="HTML")
         
-        # Mark as posted
         supabase.table('web_quiz_results').update({'is_posted_to_group': True}).eq('id', result_id).execute()
 
     except Exception as e:
         report_error_to_admin(f"Error posting web result from callback: {traceback.format_exc()}")
         bot.answer_callback_query(call.id, "Error posting result.", show_alert=True)
 
-# Yeh ab Web App Data ke liye Akela (Single), Final Handler hai
 @bot.message_handler(content_types=['web_app_data'])
 @membership_required
 def handle_webapp_data(msg: types.Message):
     """
-    Handles all data received from the Mini App, routing it correctly and robustly.
+    Handles all data received from the Mini App, routing it correctly.
     """
     data_from_webapp = msg.web_app_data.data
     print(f"Received data from Mini App: {data_from_webapp}")
 
-    # Step 1: Check if the data is a JSON string (for quiz results)
     if data_from_webapp.strip().startswith('{'):
         try:
             payload = json.loads(data_from_webapp)
-            # Agar yeh quiz result hai, to use process karke ruk jao
             if 'type' in payload and ('notification' in payload['type'] or 'result' in payload['type']):
                 process_webapp_quiz_results(payload)
                 return
         except json.JSONDecodeError:
             print("Received a non-JSON string that started with {.")
     
-    # Step 2: Agar quiz result nahi hai, to use command ki tarah process karo
     msg.text = data_from_webapp
     handler_to_call = COMMAND_ROUTER.get(msg.text)
     
-    # Special handling for commands with arguments like /need
     if msg.text.startswith('/need'):
         handler_to_call = COMMAND_ROUTER.get('/need')
 
     if handler_to_call:
-        try:
-            handler_to_call(msg)
-        except Exception as e:
-            error_message = f"Error executing Web App command '{msg.text}':\n{traceback.format_exc()}"
-            print(error_message)
-            report_error_to_admin(error_message)
+        try: handler_to_call(msg)
+        except Exception as e: report_error_to_admin(f"Error executing Web App command '{msg.text}':\n{traceback.format_exc()}")
     else:
-        # Fallback for unknown commands
         bot.send_message(msg.chat.id, f"Received an unknown action from the dashboard: {escape(msg.text)}")
 # =============================================================================
 # 8. TELEGRAM BOT HANDLERS - CORE COMMANDS
@@ -2213,7 +2188,7 @@ def handle_web_result_command(msg: types.Message):
         return
 
     try:
-        # Call our new, powerful analytics function
+        bot.send_message(msg.chat.id, "📊 Fetching Web Quiz Analytics... Please wait.")
         response = supabase.rpc('get_web_quiz_analytics').execute()
         analytics = response.data
 
@@ -2221,51 +2196,29 @@ def handle_web_result_command(msg: types.Message):
             bot.send_message(msg.chat.id, "📊 No web quiz results have been recorded yet.")
             return
 
-        # --- Build the Analytics Report ---
         summary_text = "📊 <b>Web Quiz Analytics Dashboard</b> 📊\n"
         summary_text += "━━━━━━━━━━━━━━━━━━\n\n"
-
-        # 1. Overall Stats
+        
         overall = analytics.get('overall_stats', {})
         summary_text += "🌐 <b><u>Overall Summary</u></b>\n"
         summary_text += f" • <b>Total Attempts:</b> {overall.get('total_attempts', 0)}\n"
         summary_text += f" • <b>Unique Players:</b> {overall.get('unique_players', 0)}\n"
         summary_text += f" • <b>Average Score:</b> {overall.get('average_score', 0):.1f}%\n\n"
 
-        # 2. Quiz Set Insights
-        quiz_sets = analytics.get('quiz_set_stats')
-        if quiz_sets:
-            most_played = max(quiz_sets, key=lambda x: x['attempts'])
-            highest_score = max(quiz_sets, key=lambda x: x['avg_score'])
-            toughest_quiz = min(quiz_sets, key=lambda x: x['avg_score'])
-            
-            summary_text += "📚 <b><u>Quiz Set Insights</u></b>\n"
-            summary_text += f" • 🔥 <b>Most Popular:</b> {escape(most_played['quiz_set'])} ({most_played['attempts']} attempts)\n"
-            summary_text += f" • ✅ <b>Highest Scored:</b> {escape(highest_score['quiz_set'])} (Avg: {highest_score['avg_score']:.0f}%)\n"
-            summary_text += f" • ⚠️ <b>Toughest Quiz:</b> {escape(toughest_quiz['quiz_set'])} (Avg: {toughest_quiz['avg_score']:.0f}%)\n\n"
-
-        # 3. Top Performers
         top_performers = analytics.get('top_performers')
         if top_performers:
             summary_text += "🏆 <b><u>Top 5 Performers (Best Score)</u></b>\n"
             rank_emojis = ["🥇", "🥈", "🥉", "4.", "5."]
             for i, performer in enumerate(top_performers):
-                user_name = escape(performer.get('user_name', 'N/A'))
-                score = performer.get('score_percentage', 0)
-                quiz_name = escape(performer.get('quiz_set', 'N/A'))
-                summary_text += f" {rank_emojis[i]} <b>{user_name}</b> - {score}% <i>(in {quiz_name})</i>\n"
+                summary_text += f" {rank_emojis[i]} <b>{escape(performer.get('user_name', 'N/A'))}</b> - {performer.get('score_percentage', 0)}%\n"
             summary_text += "\n"
 
-        # 4. Recent Activity
         recent_activity = analytics.get('recent_activity')
         if recent_activity:
             summary_text += "🕓 <b><u>Recent 10 Attempts</u></b>\n"
             for activity in recent_activity:
-                user_name = escape(activity.get('user_name', 'N/A'))
-                score = activity.get('score_percentage', 0)
-                quiz_name = escape(activity.get('quiz_set', 'N/A'))
-                summary_text += f" • <b>{user_name}:</b> {score}% in {quiz_name}\n"
-
+                summary_text += f" • <b>{escape(activity.get('user_name', 'N/A'))}:</b> {activity.get('score_percentage', 0)}%\n"
+        
         bot.send_message(msg.chat.id, summary_text, parse_mode="HTML")
 
     except Exception as e:
