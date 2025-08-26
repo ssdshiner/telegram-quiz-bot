@@ -750,12 +750,46 @@ def run_daily_checks():
         report_error_to_admin(f"Error in run_daily_checks:\n{traceback.format_exc()}")
 
 
+def cleanup_stale_user_states():
+    """
+    A janitor function that runs periodically to clean up abandoned user states.
+    It removes any state that is older than 1 hour (3600 seconds).
+    """
+    try:
+        current_time = time.time()
+        stale_users = []
+        for user_id, state in user_states.items():
+            # We will add the 'timestamp' key in the next step.
+            # This check ensures it doesn't crash before we do.
+            if 'timestamp' in state:
+                if (current_time - state['timestamp']) > 3600: # 1 hour
+                    stale_users.append(user_id)
+        
+        if stale_users:
+            for user_id in stale_users:
+                del user_states[user_id]
+            print(f"🧹 Janitor cleaned up {len(stale_users)} stale user state(s).")
+
+    except Exception as e:
+        print(f"Error during user state cleanup: {e}")
+
+
 def background_worker():
     """Runs all scheduled tasks in a continuous loop."""
     global last_daily_check_day, last_schedule_announce_day
 
+    # Run the state cleanup once every 5 minutes (300 seconds)
+    cleanup_interval = 300 
+    last_cleanup_time = time.time()
+
     while True:
         try:
+            now = time.time()
+            # --- NEW: Call the janitor function periodically ---
+            if (now - last_cleanup_time) > cleanup_interval:
+                cleanup_stale_user_states()
+                last_cleanup_time = now
+
             ist_tz = timezone(timedelta(hours=5, minutes=30))
             current_time_ist = datetime.datetime.now(ist_tz)
             current_day = current_time_ist.day
@@ -771,13 +805,11 @@ def background_worker():
             for task in scheduled_tasks[:]:
                 if current_time_ist >= task['run_at'].astimezone(ist_tz):
                     try:
-                        # THE FIX: Changed parse_mode to "HTML" to match the rest of the bot.
-                        # This ensures scheduled messages (like from /notify) are also safe.
                         bot.send_message(
                             task['chat_id'],
                             task['text'],
                             parse_mode="HTML",
-                            message_thread_id=task.get('message_thread_id') # Use topic ID if available
+                            message_thread_id=task.get('message_thread_id')
                         )
                         print(f"✅ Executed scheduled task: {task['text']}")
                     except Exception as task_error:
@@ -872,17 +904,16 @@ def handle_add_resource(msg: types.Message):
         bot.reply_to(msg, "🤫 Please use this command in a private chat with me.")
         return
 
-    # This is the new protective check
     if user_id in user_states:
         bot.reply_to(msg, "⚠️ You are already in the middle of another command. Please finish it or type /cancel before starting a new one.")
         return
 
-    user_states[user_id] = {'action': 'adding_resource'}  # Define the action
+    # THIS IS THE CHANGE: Added a timestamp
+    user_states[user_id] = {'action': 'adding_resource', 'timestamp': time.time()}
     
     prompt_text = "Okay, let's add a new resource to the Vault.\n\n<b>Step 1 of 3:</b> Please upload the document/file now."
     prompt = bot.send_message(user_id, prompt_text, parse_mode="HTML")
     bot.register_next_step_handler(prompt, process_resource_file)
-
 
 def process_resource_file(msg: types.Message):
     """Step 2: Receives the file and asks for keywords."""
@@ -972,55 +1003,75 @@ def process_resource_description(msg: types.Message):
 @membership_required
 def handle_web_quiz_command(msg: types.Message):
     """
-    Provides a simple button to launch the static web quiz.
+    Provides a hyperlink button to launch the web quiz, compatible with group chats.
     """
     try:
         user_id = msg.from_user.id
-        user_name = msg.from_user.first_name
+        user_name = escape(msg.from_user.first_name)
 
         if not WEBAPP_URL:
             report_error_to_admin("CRITICAL: WEBAPP_URL is not set!")
             bot.reply_to(msg, "❌ Error: The Web App URL is not configured.")
             return
 
-        # Create the simple URL with only the user's details
-        web_app_url = f"{WEBAPP_URL.rstrip('/')}/quiz/?user_id={user_id}&user_name={quote(user_name)}"
+        # The URL for the quiz, including user details
+        quiz_hyperlink = f"https://studyprosync.web.app/quiz/?user_id={user_id}&user_name={quote(user_name)}"
 
         markup = types.InlineKeyboardMarkup()
+        # THIS IS THE FIX: Changed from a 'web_app' button to a standard 'url' button
         markup.add(
-            types.InlineKeyboardButton("🚀 Launch Quiz Challenge", web_app=types.WebAppInfo(url=web_app_url))
+            types.InlineKeyboardButton("🚀 Start the Web Quiz!", url=quiz_hyperlink)
         )
         
-        # --- THIS IS THE FIX ---
-        # We use send_message to post it as a new message in the correct topic
+        # A more personalized message for the user
+        message_text = f"Hey <b>{user_name}</b>! Ready for a new challenge?\n\nClick the button below to launch the Web Quiz in your browser."
+        
         bot.send_message(
             msg.chat.id,
-            "Click the button below to start the quiz challenge!",
+            message_text,
+            parse_mode="HTML",
             reply_markup=markup,
             message_thread_id=msg.message_thread_id
         )
 
     except Exception as e:
         report_error_to_admin(f"Error in /webquiz command: {traceback.format_exc()}")
-# This is now a HELPER function, not a handler. Iske upar se decorator hata diya gaya hai.
-def process_webapp_quiz_results(data):
+def process_webapp_quiz_results(payload):
     """
-    Helper function to format and send the web app quiz results to the group.
+    Processes web app quiz results, saves them via RPC, and sends a rich, ranked summary.
     """
     try:
-        user_name = escape(data.get('userName', 'A participant'))
-        score = data.get('score', 0)
-        correct = data.get('correct', 0)
-        total = data.get('total', 0)
-        quiz_set = escape(data.get('quizSet', 'Web Quiz'))
+        # --- 1. Extract and prepare data ---
+        user_id = payload.get('userId')
+        user_name = payload.get('userName', 'A Participant')
+        quiz_set = payload.get('quizSet', 'Web Quiz')
+        score = payload.get('score', 0)
+        correct = payload.get('correct', 0)
+        total = payload.get('total', 0)
 
-        summary = f"🎉 **Web Quiz Result: {user_name}!** 🎉\n\n"
-        summary += f"📚 **Topic:** {quiz_set}\n"
+        # --- 2. Call the new Supabase function to save data and get the rank ---
+        response = supabase.rpc('save_web_quiz_and_get_rank', {
+            'p_user_id': user_id,
+            'p_user_name': user_name,
+            'p_quiz_set': quiz_set,
+            'p_score_percentage': score,
+            'p_correct_answers': correct,
+            'p_total_questions': total
+        }).execute()
         
-        if score >= 80:
-            summary += f"Wow! An outstanding score of <b>{score}%</b>! 🏆\n"
-        elif score >= 60:
-            summary += f"Great job! A solid score of <b>{score}%</b>. 👍\n"
+        rank = response.data
+        rank_emoji_map = {1: "🥇", 2: "🥈", 3: "🥉"}
+        rank_text = f"{rank_emoji_map.get(rank, '🏅')} Rank #{rank}"
+
+        # --- 3. Build the new, enriched result message ---
+        summary = f"🎉 <b>Web Quiz Result: {escape(user_name)}!</b> 🎉\n\n"
+        summary += f"📚 <b>Topic:</b> {escape(quiz_set)}\n"
+        summary += f"🏆 <b>Rank:</b> <u>{rank_text}</u> on this topic!\n\n"
+        
+        if score >= 90:
+            summary += f"Wow! An outstanding score of <b>{score}%</b>! Keep it up! 💎\n"
+        elif score >= 75:
+            summary += f"Excellent job! A solid score of <b>{score}%</b>. 👍\n"
         else:
             summary += f"Good effort! A score of <b>{score}%</b>. Keep practicing! 🌱\n"
             
@@ -1029,29 +1080,29 @@ def process_webapp_quiz_results(data):
         bot.send_message(GROUP_ID, summary, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
         
     except Exception as e:
-        report_error_to_admin(f"Error processing webapp quiz result: {traceback.format_exc()}")
+        report_error_to_admin(f"Error processing webapp quiz result for user {payload.get('userId')}:\n{traceback.format_exc()}")
 
-# Yeh ab Web App Data ke liye Akela (Single) Handler hai
 @bot.message_handler(content_types=['web_app_data'])
 @membership_required
 def handle_webapp_data(msg: types.Message):
     """
-    Handles data from the Mini App. It now understands both commands and JSON results.
+    Handles all data received from the Mini App, routing it correctly and robustly.
     """
     data_from_webapp = msg.web_app_data.data
     print(f"Received data from Mini App: {data_from_webapp}")
 
-    # Check if the data is a JSON string for quiz results
-    if data_from_webapp.strip().startswith('{'):
-        try:
-            payload = json.loads(data_from_webapp)
-            if payload.get('type') == 'webappQuizResult':
-                process_webapp_quiz_results(payload)
-                return
-        except json.JSONDecodeError:
-            print("Received a non-JSON string that started with {.")
-    
-    # Fallback to command router logic if it's not a quiz result
+    # --- NEW: More robust JSON parsing ---
+    try:
+        payload = json.loads(data_from_webapp)
+        # If it's a quiz result, process it and stop.
+        if payload.get('type') == 'webappQuizResult':
+            process_webapp_quiz_results(payload)
+            return
+    except json.JSONDecodeError:
+        # If it's not JSON, it must be a command string.
+        pass
+
+    # Fallback to command router logic if it wasn't a quiz result
     msg.text = data_from_webapp
     handler_to_call = COMMAND_ROUTER.get(msg.text)
     
@@ -1065,7 +1116,6 @@ def handle_webapp_data(msg: types.Message):
             report_error_to_admin(f"Error executing Web App command '{msg.text}':\n{traceback.format_exc()}")
     else:
         bot.send_message(msg.chat.id, f"Received an unknown action from the dashboard: {escape(msg.text)}")
-
 # =============================================================================
 # 8. TELEGRAM BOT HANDLERS - CORE COMMANDS
 # =============================================================================
@@ -1091,11 +1141,12 @@ def handle_add_rq(message):
         start_id = int(parts[1])
         user_id = message.from_user.id
         
-        # User ka state save karna taki bot ko pata rahe ki ye user photo bhejega
+        # THIS IS THE CHANGE: Added a timestamp
         user_states[user_id] = {
             'action': 'adding_rq_photos',
             'start_id': start_id,
-            'chat_id': message.chat.id
+            'chat_id': message.chat.id,
+            'timestamp': time.time()
         }
         
         bot.reply_to(message, f"Theek hai! ID {start_id} se shuru karke images add ki jayengi. Ab please saari photos ek saath album/batch mein bhejein.\n\nProcess rokne ke liye /cancel type karein.")
@@ -1629,20 +1680,17 @@ def handle_qm_set_selection(call: types.CallbackQuery):
         user_id = call.from_user.id
         chat_id = call.message.chat.id
         
-        # Step 1: Button ke data mein se set ka naam nikalna
         selected_set = call.data.split('_', 2)[-1]
-
-        # Acknowledge the button press to stop the loading icon
         bot.answer_callback_query(call.id)
 
-        # Step 2: User state ko save karna taki agle steps mein kaam aaye
+        # THIS IS THE CHANGE: Added a timestamp
         user_states[user_id] = {
             'action': 'adding_qm_photos',
             'set_name': selected_set,
-            'chat_id': chat_id
+            'chat_id': chat_id,
+            'timestamp': time.time()
         }
 
-        # Step 3: Database se uss set ka start aur end ID fetch karna
         response = supabase.table('quiz_presets').select('start_id, end_id').eq('set_name', selected_set).single().execute()
 
         if not response.data:
@@ -1653,7 +1701,6 @@ def handle_qm_set_selection(call: types.CallbackQuery):
         start_id = set_info['start_id']
         end_id = set_info['end_id']
 
-        # Step 4: Purane message ko edit karke user se ID maangna
         prompt_text = (
             f"Aapne '{selected_set}' select kiya hai. 👍\n\n"
             f"Is set ka valid ID range **{start_id}** se **{end_id}** tak hai.\n\n"
@@ -1661,8 +1708,6 @@ def handle_qm_set_selection(call: types.CallbackQuery):
         )
         
         prompt_message = bot.edit_message_text(prompt_text, chat_id, call.message.message_id)
-        
-        # Step 5: Bot ko batana ki agle message ka intezar karo
         bot.register_next_step_handler(prompt_message, process_qm_start_id)
 
     except Exception as e:
@@ -2350,7 +2395,8 @@ def handle_fileid_command(msg: types.Message):
         return
 
     admin_id = msg.from_user.id
-    user_states[admin_id] = {} # Clear any previous state
+    # THIS IS THE CHANGE: Added a timestamp
+    user_states[admin_id] = {'timestamp': time.time()}
     prompt = bot.send_message(admin_id, "Please send me the image you want to use for a quiz question.")
     bot.register_next_step_handler(prompt, process_fileid_image)
 
@@ -2364,7 +2410,8 @@ def process_fileid_image(msg: types.Message):
         return
 
     file_id = msg.photo[-1].file_id
-    user_states[admin_id] = {'image_file_id': file_id}
+    # THIS IS THE CHANGE: Added a timestamp
+    user_states[admin_id] = {'image_file_id': file_id, 'timestamp': time.time()}
     
     markup = types.InlineKeyboardMarkup()
     markup.add(
@@ -2372,7 +2419,6 @@ def process_fileid_image(msg: types.Message):
         types.InlineKeyboardButton("❌ No, Thanks", callback_data="add_fileid_no")
     )
     
-    # THE FIX: Converted to safe HTML
     message_text = (f"✅ Image received!\n\n"
                     f"Its File ID is:\n<code>{escape(file_id)}</code>\n\n"
                     f"Would you like to add this ID to a question in the <code>quiz_questions</code> table?")
@@ -2607,14 +2653,12 @@ def handle_view_perms(msg: types.Message):
             bot.reply_to(msg, "Please provide a username.\n<b>Usage:</b> <code>/viewperms @username</code>", parse_mode="HTML")
             return
 
-        username_to_check = parts[1].lstrip('@')
-        user_response = supabase.table('group_members').select('user_id, first_name').eq('username', username_to_check).single().execute()
-        
-        if not user_response.data:
-            bot.reply_to(msg, f"❌ User <code>@{escape(username_to_check)}</code> not found.", parse_mode="HTML")
+        # THIS IS THE CLEANED UP PART
+        target_user = get_user_by_username(parts[1])
+        if not target_user:
+            bot.reply_to(msg, f"❌ User <code>{escape(parts[1])}</code> not found.", parse_mode="HTML")
             return
             
-        target_user = user_response.data
         perms_response = supabase.table('user_permissions').select('command_name').eq('user_id', target_user['user_id']).execute()
         
         if not perms_response.data:
@@ -2639,14 +2683,12 @@ def handle_revoke_command(msg: types.Message):
             bot.reply_to(msg, "Please provide a username.\n<b>Usage:</b> <code>/revoke @username</code>", parse_mode="HTML")
             return
 
-        username_to_revoke = parts[1].lstrip('@')
-        user_response = supabase.table('group_members').select('user_id, first_name').eq('username', username_to_revoke).single().execute()
-        
-        if not user_response.data:
-            bot.reply_to(msg, f"❌ User <code>@{escape(username_to_revoke)}</code> not found.", parse_mode="HTML")
+        # THIS IS THE CLEANED UP PART
+        target_user = get_user_by_username(parts[1])
+        if not target_user:
+            bot.reply_to(msg, f"❌ User <code>{escape(parts[1])}</code> not found.", parse_mode="HTML")
             return
             
-        target_user = user_response.data
         perms_response = supabase.table('user_permissions').select('command_name').eq('user_id', target_user['user_id']).execute()
 
         if not perms_response.data:
@@ -2664,7 +2706,6 @@ def handle_revoke_command(msg: types.Message):
     except Exception as e:
         report_error_to_admin(f"Error in /revoke: {traceback.format_exc()}")
         bot.reply_to(msg, "❌ An error occurred.")
-
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('revoke_'))
 def handle_revoke_permission_callback(call: types.CallbackQuery):
@@ -2685,7 +2726,6 @@ def handle_revoke_permission_callback(call: types.CallbackQuery):
     except Exception as e:
         report_error_to_admin(f"Error in revoke callback: {traceback.format_exc()}")
         bot.answer_callback_query(call.id, "❌ An error occurred while revoking permission.", show_alert=True)
-
 @bot.message_handler(commands=['demote'])
 @admin_required
 def handle_demote_command(msg: types.Message):
@@ -2699,27 +2739,23 @@ def handle_demote_command(msg: types.Message):
             bot.reply_to(msg, "Please provide a username. \n<b>Usage:</b> <code>/demote @username</code>", parse_mode="HTML")
             return
 
-        username_to_demote = parts[1].lstrip('@')
-        safe_username = escape(username_to_demote)
-
-        user_response = supabase.table('group_members').select('user_id, first_name').eq('username', username_to_demote).single().execute()
+        safe_username = escape(parts[1])
         
-        if not user_response.data:
-            bot.reply_to(msg, f"❌ User <code>@{safe_username}</code> not found in my records.", parse_mode="HTML")
+        # THIS IS THE CLEANED UP PART
+        target_user = get_user_by_username(parts[1])
+        if not target_user:
+            bot.reply_to(msg, f"❌ User <code>{safe_username}</code> not found in my records.", parse_mode="HTML")
             return
             
-        target_user = user_response.data
         target_user_id = target_user['user_id']
 
-        # --- NEW LOGIC ---
-        # Step 1: Naye permission table se saari permissions delete karna
+        # Delete all permissions from the user_permissions table
         supabase.table('user_permissions').delete().eq('user_id', target_user_id).execute()
         
-        # Step 2: Purane role system ko bhi reset karna (for safety)
+        # Also reset their role in quiz_activity for good measure
         supabase.table('quiz_activity').update({'user_role': 'member'}).eq('user_id', target_user_id).execute()
         
-        # New, more accurate confirmation message
-        bot.reply_to(msg, f"✅ Success! All special permissions for <b>@{safe_username}</b> have been revoked.", parse_mode="HTML")
+        bot.reply_to(msg, f"✅ Success! All special permissions for <b>{safe_username}</b> have been revoked.", parse_mode="HTML")
 
     except Exception as e:
         print(f"Error in /demote command: {traceback.format_exc()}")
@@ -2736,20 +2772,18 @@ def handle_forwarded_message(msg: types.Message):
     """
     admin_id = msg.from_user.id
     
-    # This logic assumes the admin is forwarding from the main group.
     if msg.forward_from_message_id:
         original_message_id = msg.forward_from_message_id
         
-        # Save the context for the next step
+        # THIS IS THE CHANGE: Added a timestamp
         user_states[admin_id] = {
             'step': 'awaiting_quoted_reply',
-            'original_message_id': original_message_id
+            'original_message_id': original_message_id,
+            'timestamp': time.time()
         }
         
         bot.send_message(admin_id, "✅ Forward received. Please send your reply now (text, image, sticker, etc.). Use /cancel to stop.")
     else:
-        # This can happen if the original sender has privacy settings enabled.
-        # THE FIX: Converted to safe HTML
         error_message = ("❌ <b>Reply Failed.</b>\n\nI can't reply because the original message's ID is hidden, "
                          "likely due to the original sender's privacy settings.")
         bot.send_message(admin_id, error_message, parse_mode="HTML")
@@ -3320,7 +3354,8 @@ def handle_dm_command(msg: types.Message):
         return
         
     user_id = msg.from_user.id
-    user_states[user_id] = {'step': 'awaiting_recipient_choice'}
+    # THIS IS THE CHANGE: Added a timestamp
+    user_states[user_id] = {'step': 'awaiting_recipient_choice', 'timestamp': time.time()}
     
     markup = types.InlineKeyboardMarkup()
     markup.add(
@@ -3329,7 +3364,6 @@ def handle_dm_command(msg: types.Message):
         types.InlineKeyboardButton("Cancel", callback_data="dm_cancel")
     )
     
-    # THE FIX: Converted to safe HTML
     prompt_text = "💬 <b>Direct Message System</b>\n\nWho would you like to send a message to?"
     bot.send_message(user_id, prompt_text, reply_markup=markup, parse_mode="HTML")
 
@@ -4338,11 +4372,12 @@ def handle_announce_command(msg: types.Message):
         
     user_id = msg.from_user.id
     
-    # Initialize user state for announcement creation
+    # THIS IS THE CHANGE: Added a timestamp
     user_states[user_id] = {
         'step': 'awaiting_title',
         'action': 'create_announcement',
-        'data': {}
+        'data': {},
+        'timestamp': time.time()
     }
     
     welcome_message = """📣 <b>ANNOUNCEMENT CREATOR</b> 📣
@@ -6592,7 +6627,6 @@ def process_simple_review_marks(message, submission_id, total_marks):
         marks_input = message.text.strip()
         match = re.search(r'(\d+\.?\d*)', marks_input)
         if not match:
-            # THE FIX: Converted to safe HTML
             prompt = bot.reply_to(message, "❌ Invalid format. Please enter marks as a number (e.g., <code>7.5</code>).", parse_mode="HTML")
             bot.register_next_step_handler(prompt, process_simple_review_marks, submission_id, total_marks)
             return
@@ -6614,12 +6648,13 @@ def process_simple_review_marks(message, submission_id, total_marks):
         submission_data = supabase.table('practice_submissions').select('submitter_id').eq('submission_id', submission_id).single().execute().data
         submitter_info = supabase.table('all_time_scores').select('user_name').eq('user_id', submission_data['submitter_id']).single().execute().data
         
-        # THE FIX: Converted to safe HTML and escaped username
         submitter_name = escape(submitter_info.get('user_name', 'the submitter'))
         success_text = f"✅ Marks awarded! <b>{submitter_name}</b> scored <b>{marks_awarded}/{total_marks}</b> ({percentage}%)."
         bot.reply_to(message, success_text, parse_mode="HTML")
 
     except Exception as e:
+        # THIS IS THE NEW PART
+        bot.reply_to(message, "❌ An unexpected error occurred. Please try entering the marks again.")
         print(f"Error in process_simple_review_marks: {traceback.format_exc()}")
 
 
@@ -6657,13 +6692,15 @@ def process_both_q1_marks(message, submission_id, marks_dist):
             bot.register_next_step_handler(prompt, process_both_q1_marks, submission_id, marks_dist)
             return
         
-        # THE FIX: Converted to safe HTML
-        prompt_text = f"Got it. Now, please provide marks for <b>Question 2 (out of {marks_dist.get('q2')})</b>."
+        prompt_text = f"Got it. Q1 is worth <b>{marks_q1}</b> marks. Now, please provide the marks for <b>Question 2 (out of {marks_dist.get('q2')})</b>."
         prompt = bot.send_message(message.chat.id, prompt_text, parse_mode="HTML")
         bot.register_next_step_handler(prompt, process_both_q2_marks, submission_id, marks_dist, marks_q1)
     except (ValueError, TypeError):
         prompt = bot.reply_to(message, "❌ That's not a valid number. Please try again for Question 1.")
         bot.register_next_step_handler(prompt, process_both_q1_marks, submission_id, marks_dist)
+    except Exception as e:
+        bot.reply_to(message, "❌ An unexpected error occurred. Please try entering the marks for Question 1 again.")
+        print(f"Error in process_both_q1_marks: {traceback.format_exc()}")
 
 
 def process_both_q2_marks(message, submission_id, marks_dist, marks_q1):
@@ -6684,7 +6721,6 @@ def process_both_q2_marks(message, submission_id, marks_dist, marks_q1):
         submission_data = supabase.table('practice_submissions').select('submitter_id').eq('submission_id', submission_id).single().execute().data
         submitter_info = supabase.table('all_time_scores').select('user_name').eq('user_id', submission_data['submitter_id']).single().execute().data
         
-        # THE FIX: Converted to safe HTML and escaped username
         submitter_name = escape(submitter_info.get('user_name', 'the submitter'))
         success_text = f"✅ Marks awarded! <b>{submitter_name}</b> scored <b>{total_awarded}/{total_marks}</b> ({percentage}%)."
         bot.reply_to(message, success_text, parse_mode="HTML")
@@ -6692,6 +6728,9 @@ def process_both_q2_marks(message, submission_id, marks_dist, marks_q1):
     except (ValueError, TypeError):
         prompt = bot.reply_to(message, "❌ That's not a valid number. Please try again for Question 2.")
         bot.register_next_step_handler(prompt, process_both_q2_marks, submission_id, marks_dist, marks_q1)
+    except Exception as e:
+        bot.reply_to(message, "❌ An unexpected error occurred. Please try entering the marks for Question 2 again.")
+        print(f"Error in process_both_q2_marks: {traceback.format_exc()}")
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('review_single_'))
@@ -6729,7 +6768,6 @@ def process_single_question_marks(message, submission_id, question_choice, marks
         submission_data = supabase.table('practice_submissions').select('submitter_id').eq('submission_id', submission_id).single().execute().data
         submitter_info = supabase.table('all_time_scores').select('user_name').eq('user_id', submission_data['submitter_id']).single().execute().data
         
-        # THE FIX: Converted to safe HTML and escaped username
         submitter_name = escape(submitter_info.get('user_name', 'the submitter'))
         success_text = f"✅ Marks awarded! <b>{submitter_name}</b> scored <b>{marks_awarded}/{marks_for_q}</b> ({percentage}%) on the attempted question."
         bot.reply_to(message, success_text, parse_mode="HTML")
@@ -6737,6 +6775,9 @@ def process_single_question_marks(message, submission_id, question_choice, marks
     except (ValueError, TypeError):
         prompt = bot.reply_to(message, "❌ That's not a valid number. Please try again.")
         bot.register_next_step_handler(prompt, process_single_question_marks, submission_id, question_choice, marks_for_q)
+    except Exception as e:
+        bot.reply_to(message, "❌ An unexpected error occurred. Please try entering the marks again.")
+        print(f"Error in process_single_question_marks: {traceback.format_exc()}")
 # =============================================================================
 # 8. TELEGRAM BOT HANDLERS - QNA PRACTICE (SESSION START & REPORT)
 # =============================================================================
@@ -6934,10 +6975,9 @@ def handle_run_checks_command(msg: types.Message):
     bot.send_message(admin_id, "🔍 Running a 'Dry Run' of the daily checks... Please wait.")
 
     try:
-        final_warnings, first_warnings = find_inactive_users()
+        final_warnings, first_warnings, reminder_users, removal_users = find_inactive_users()
         appreciations = find_users_to_appreciate()
 
-        # THE FIX: Converted the entire preview report to safe HTML.
         preview_report = "📋 <b>Manual Check Preview</b>\n\n"
         has_actions = False
 
@@ -6963,11 +7003,15 @@ def handle_run_checks_command(msg: types.Message):
             bot.send_message(admin_id, "✅ Dry run complete. No users found for any warnings or appreciations today.")
             return
 
-        user_states[admin_id] = {'pending_actions': {
-            'final_warnings': final_warnings,
-            'first_warnings': first_warnings,
-            'appreciations': appreciations
-        }}
+        # THIS IS THE CHANGE: Added a timestamp
+        user_states[admin_id] = {
+            'pending_actions': {
+                'final_warnings': final_warnings,
+                'first_warnings': first_warnings,
+                'appreciations': appreciations
+            },
+            'timestamp': time.time()
+        }
 
         markup = types.InlineKeyboardMarkup()
         markup.add(
@@ -6979,7 +7023,6 @@ def handle_run_checks_command(msg: types.Message):
     except Exception as e:
         print(f"Error in /run_checks: {traceback.format_exc()}")
         bot.send_message(admin_id, "❌ An error occurred during the check.")
-
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('send_actions_'))
 def handle_run_checks_confirmation(call: types.CallbackQuery):
