@@ -62,7 +62,10 @@ except (ValueError, TypeError):
 # --- Bot and Flask App Initialization ---
 bot = TeleBot(BOT_TOKEN, threaded=False)
 app = Flask(__name__)
+from flask_cors import CORS
 
+# Add this line right after app = Flask(__name__) to enable CORS
+CORS(app)
 # --- Topic IDs ---
 UPDATES_TOPIC_ID = 2595
 QNA_TOPIC_ID = 2612
@@ -853,42 +856,6 @@ def check_uploader_role(user_id):
         print(f"Error checking user role for {user_id}: {e}")
     return False
 
-from flask_cors import CORS
-
-# Add this line right after app = Flask(__name__) to enable CORS
-CORS(app)
-
-@app.route('/api/save_result', methods=['POST'])
-def save_quiz_result():
-    """
-    API endpoint for the Web App to securely save a user's quiz result.
-    """
-    try:
-        data = request.json
-        # Basic validation
-        if not all(k in data for k in ['userId', 'userName', 'score', 'correct', 'total', 'quizSet']):
-            return json.dumps({'status': 'error', 'message': 'Missing required data fields.'}), 400
-
-        supabase.table('web_quiz_results').insert({
-            'user_id': data['userId'],
-            'user_name': data['userName'],
-            'quiz_set': data['quizSet'],
-            'score_percentage': data['score'],
-            'correct_answers': data['correct'],
-            'total_questions': data['total'],
-        }).execute()
-        
-        print(f"Successfully saved web quiz result for {data['userName']} via API.")
-        return json.dumps({'status': 'success', 'message': 'Result saved.'}), 200
-
-    except Exception as e:
-        report_error_to_admin(f"Error in /api/save_result: {traceback.format_exc()}")
-        return json.dumps({'status': 'error', 'message': 'An internal server error occurred.'}), 500
-from flask_cors import CORS
-
-# Add this line right after app = Flask(__name__) to enable CORS
-CORS(app)
-
 @app.route('/api/save_result', methods=['POST'])
 def save_quiz_result():
     """
@@ -1234,31 +1201,7 @@ def process_post_score_request(payload):
 
     except Exception as e:
         report_error_to_admin(f"Error in process_post_score_request for user {payload.get('userName')}:\n{traceback.format_exc()}")
-@bot.message_handler(content_types=['web_app_data'])
-@membership_required
-def handle_webapp_data(msg: types.Message):
-    """
-    Handles all data received from the Mini App, routing it correctly.
-    """
-    data_from_webapp = msg.web_app_data.data
-    print(f"Received data from Mini App: {data_from_webapp}")
 
-    if data_from_webapp.strip().startswith('{'):
-        try:
-            payload = json.loads(data_from_webapp)
-            payload_type = payload.get('type')
-
-            if payload_type == 'quiz_completed_notification':
-                # This is the automatic notification for the admin
-                process_webapp_quiz_results(payload)
-                return
-            elif payload_type == 'post_score_to_group':
-                # This is the user's request to post their score
-                process_post_score_request(payload)
-                return
-
-        except json.JSONDecodeError:
-            print("Received a non-JSON string that started with {.")
 # =============================================================================
 # 8. TELEGRAM BOT HANDLERS - CORE COMMANDS
 # =============================================================================
