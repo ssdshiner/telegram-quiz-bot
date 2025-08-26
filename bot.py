@@ -3639,8 +3639,12 @@ def handle_dm_conversation_steps(msg: types.Message):
 )
 def forward_user_reply_to_admin(msg: types.Message):
     """
-    Forwards a REGULAR USER's direct message to the admin.
+    Forwards a REGULAR USER's direct message to the admin, ignoring commands.
     """
+    # If the message is a command, ignore it so the proper command handler can take over.
+    if msg.text and msg.text.startswith('/'):
+        return
+
     user_info = msg.from_user
     
     admin_header = (
