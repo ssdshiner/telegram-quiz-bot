@@ -995,30 +995,32 @@ def process_resource_description(msg: types.Message):
 @membership_required
 def handle_web_quiz_command(msg: types.Message):
     """
-    Starts the setup for launching a dynamic web app quiz.
+    Sends a simple button to open the static Web App quiz.
     """
     try:
-        # Puraane flow ki tarah, pehle user se Quiz Set select karwayenge
-        response = supabase.table('quiz_presets').select('set_name, button_label').order('id').execute()
-        if not response.data:
-            bot.reply_to(msg, "❌ No Quiz Sets found in the database to launch a web quiz.")
+        user_id = msg.from_user.id
+        user_name = msg.from_user.first_name
+
+        if not WEBAPP_URL:
+            report_error_to_admin("CRITICAL: WEBAPP_URL is not set!")
+            bot.reply_to(msg, "❌ Error: Web App URL is not configured.")
             return
 
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        buttons = [
-            types.InlineKeyboardButton(
-                preset['button_label'],
-                callback_data=f"webquiz_select_{preset['set_name']}"
-            ) for preset in response.data
-        ]
-        
-        for i in range(0, len(buttons), 2):
-            if i + 1 < len(buttons): markup.row(buttons[i], buttons[i+1])
-            else: markup.row(buttons[i])
+        # Simple URL with user details, pointing to your /quiz/ folder
+        web_app_url = f"{WEBAPP_URL.rstrip('/')}/quiz/?user_id={user_id}&user_name={quote(user_name)}"
 
-        bot.reply_to(msg, "🚀 Please choose a Quiz Set to launch in the Web App:", reply_markup=markup)
+        markup = types.InlineKeyboardMarkup()
+        markup.add(
+            types.InlineKeyboardButton("🚀 Start Web Quiz Challenge", web_app=types.WebAppInfo(url=web_app_url))
+        )
+        
+        bot.reply_to(
+            msg,
+            "Ready to test your knowledge? Click the button below to start the interactive quiz!",
+            reply_markup=markup
+        )
     except Exception as e:
-        report_error_to_admin(f"Error in /webquiz setup: {traceback.format_exc()}")
+        report_error_to_admin(f"Error in /webquiz command: {traceback.format_exc()}")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('webquiz_select_'))
 def handle_webquiz_set_selection(call: types.CallbackQuery):
