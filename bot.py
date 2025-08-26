@@ -3873,10 +3873,11 @@ def handle_my_analysis_command(msg: types.Message):
         response = supabase.rpc('get_unified_user_analysis', {'p_user_id': user_id}).execute()
         analysis_data = response.data
 
-        # Extract the different pieces of data
+        # --- CORRECTED LINES ---
+        # The data is already the list we need, so we don't need the extra .get('json_agg')
         web_stats = analysis_data.get('web_quiz_stats')
-        topic_stats = analysis_data.get('marathon_topic_stats', {}).get('json_agg')
-        type_stats = analysis_data.get('marathon_type_stats', {}).get('json_agg')
+        topic_stats = analysis_data.get('marathon_topic_stats')
+        type_stats = analysis_data.get('marathon_type_stats')
 
         if not topic_stats and (not web_stats or not web_stats.get('top_3_web_scores')):
             bot.reply_to(msg, f"📊 <b>{user_name}'s Analysis</b>\n\nNo quiz data found yet. Participate in quizzes to generate your report!")
@@ -3935,7 +3936,7 @@ def handle_my_analysis_command(msg: types.Message):
             web_quiz_section += "\n<b>💻 <u>Web Quiz Performance</u></b>\n"
             web_quiz_section += "<b>Top 3 Scores:</b>\n"
             for score in web_stats['top_3_web_scores']:
-                web_quiz_section += f"  • {score['score']}% - <i>({escape(score['quiz_set'])})</i>\n"
+                msg_text += f"  • {score['score']}% - <i>({escape(score['quiz_set'])})</i>\n"
             
             if web_stats.get('latest_strongest_topic'):
                  web_quiz_section += f"<b>Strongest Area:</b> {escape(web_stats['latest_strongest_topic'])}\n"
