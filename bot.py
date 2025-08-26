@@ -3974,17 +3974,18 @@ def handle_my_analysis_command(msg: types.Message):
 @membership_required
 def handle_mystats_command(msg: types.Message):
     """
-    Fetches comprehensive UNIFIED stats from both marathon and web quizzes.
+    Fetches comprehensive, unified stats and compares them with group averages.
     """
     user_id = msg.from_user.id
     user_name = escape(msg.from_user.first_name)
     try:
-        # Call the new unified database function
+        # Call the new, all-powerful unified database function
         response = supabase.rpc('get_unified_user_stats', {'p_user_id': user_id}).execute()
         data = response.data
         reply_params = types.ReplyParameters(message_id=msg.message_id, allow_sending_without_reply=True)
 
         user_stats = data.get('user')
+        group_stats = data.get('group')
 
         if not user_stats or not user_stats.get('user_name'):
             error_message = f"❌ <b>No Stats Found</b>\n👋 Hi <b>{user_name}</b>!\n🎯 <i>No quiz data found for you yet.</i>\n💡 Participate in quizzes and practice sessions to generate your snapshot!"
@@ -3992,40 +3993,63 @@ def handle_mystats_command(msg: types.Message):
             return
 
         # --- 1. Define User Title based on COMBINED Quizzes Played ---
-        quizzes_played = user_stats.get('combined_total_quizzes', 0)
+        total_marathons = user_stats.get('total_marathons_played', 0)
+        total_webquizzes = user_stats.get('total_webquizzes_played', 0)
+        quizzes_played = total_marathons + total_webquizzes
+        
         if quizzes_played >= 50: user_title = "Quiz Legend 👑"
         elif quizzes_played >= 25: user_title = "Quiz Veteran 🎖️"
         elif quizzes_played >= 10: user_title = "Regular Participant ⚔️"
         elif quizzes_played >= 1: user_title = "Rising Star ⭐"
         else: user_title = "Newcomer 🌱"
 
-        # --- 2. Build the Unified Stats Message ---
-        msg_text = f"📊 <b>{user_name}'s Unified Performance Snapshot</b>\n━━━━━━━━━━━━━━━━━━\n"
+        # --- 2. Build the Full, Combined Stats Message ---
+        msg_text = f"📊 <b>{user_name}'s Performance Snapshot</b>\n━━━━━━━━━━━━━━━━━━\n"
         msg_text += f"Your current rank is: <b>{user_title}</b>\n\n"
+        msg_text += "Here's how you stack up against the group average:\n\n"
         
-        msg_text += "📈 <b>Quiz Activity</b>\n"
-        msg_text += f" • Total Quizzes Played: <b>{quizzes_played}</b>\n"
-        msg_text += f"   - Marathons: {user_stats.get('total_marathons_played', 0)}\n"
-        msg_text += f"   - Web Quizzes: {user_stats.get('total_webquizzes_played', 0)}\n"
+        # --- Core Activity Section (Combined) ---
+        msg_text += "📈 <b>Core Activity</b>\n"
+        user_qp = quizzes_played
+        group_qp_avg = group_stats.get('avg_quizzes_played', 0) or 0
+        qp_emoji = "🔼" if user_qp > group_qp_avg else "🔽" if user_qp < group_qp_avg else "─"
+        msg_text += f" • Quizzes Played: <b>{user_qp}</b> (Avg: {group_qp_avg:.0f}) {qp_emoji}\n"
+        msg_text += f"   - <i>Marathons: {total_marathons} | Web Quizzes: {total_webquizzes}</i>\n"
+
+        user_score = user_stats.get('all_time_score') or 0
+        group_score_avg = group_stats.get('avg_all_time_score', 0) or 0
+        score_emoji = "🔼" if user_score > group_score_avg else "🔽" if user_score < group_score_avg else "─"
+        msg_text += f" • All-Time Score: <b>{user_score/1000:.0f}k</b> (Avg: {group_score_avg/1000:.0f}k) {score_emoji}\n"
         
         avg_web_score = user_stats.get('average_webquiz_score')
         if avg_web_score is not None:
-            msg_text += f" • Avg. Web Quiz Score: <b>{avg_web_score:.0f}%</b>\n\n"
-        else:
-            msg_text += "\n"
+            msg_text += f" • Avg. Web Quiz Score: <b>{avg_web_score:.0f}%</b>\n"
 
-        # Note: Written practice stats are now separate in /my_analysis for clarity
+        msg_text += f" • Current Streak: 🔥 <b>{user_stats.get('current_streak', 0)}</b>\n\n"
+
+        # --- Written Practice Section ---
+        msg_text += "📝 <b>Written Practice</b>\n"
+        user_sub = user_stats.get('total_submissions', 0) or 0
+        group_sub_avg = group_stats.get('avg_submissions', 0) or 0
+        sub_emoji = "🔼" if user_sub > group_sub_avg else "🔽" if user_sub < group_sub_avg else "─"
+        msg_text += f" • Submissions: <b>{user_sub}</b> (Avg: {group_sub_avg:.0f}) {sub_emoji}\n"
         
-        msg_text += "🏆 <b>Rankings (Marathon)</b>\n"
+        user_perf = user_stats.get('average_performance', 0) or 0
+        group_perf_avg = group_stats.get('avg_practice_performance', 0) or 0
+        perf_emoji = "🔼" if user_perf > group_perf_avg else "🔽" if user_perf < group_perf_avg else "─"
+        msg_text += f" • Avg. Performance: <b>{user_perf:.0f}%</b> (Avg: {group_perf_avg:.0f}%) {perf_emoji}\n\n"
+
+        # --- Rankings Section ---
+        msg_text += "🏆 <b>Rankings</b>\n"
         msg_text += f" • All-Time Rank: <b>#{user_stats.get('all_time_rank') or 'N/A'}</b>\n"
         msg_text += f" • Weekly Rank: <b>#{user_stats.get('weekly_rank') or 'N/A'}</b>\n\n"
         
         # --- 3. Dynamic Insight ---
         insight = ""
-        if avg_web_score and avg_web_score > 85:
-            insight = "Your performance in the Web Quizzes is outstanding. Your conceptual clarity is a huge asset!"
-        elif quizzes_played > 25:
-            insight = "Your consistency in playing a high number of quizzes is fantastic and a key driver of your progress. Keep up the great momentum!"
+        if user_perf > (group_perf_avg or 0) and user_perf > 80:
+            insight = "Your Written Practice performance is exceptional, putting you well ahead of the curve. Keep submitting those high-quality answers!"
+        elif user_qp > (group_qp_avg or 0) * 1.5:
+            insight = "Your consistency in playing quizzes is fantastic and a key driver of your high score. Keep up the great momentum!"
         elif user_stats.get('current_streak', 0) >= 5:
             insight = "A streak of 5 or more is amazing! Your daily dedication is truly paying off."
         else:
