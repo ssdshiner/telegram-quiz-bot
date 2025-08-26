@@ -327,14 +327,6 @@ def is_bot_mentioned(message):
     if not message.text:
         return False
     return f'@{BOT_USERNAME.lower()}' in message.text.lower()
-def is_bot_mentioned(message):
-    """
-    Checks if the bot's @username is mentioned in the message text.
-    This version is case-insensitive and more accurate.
-    """
-    if not message.text:
-        return False
-    return f'@{BOT_USERNAME.lower()}' in message.text.lower()
 
 # This is the new helper function
 def get_user_by_username(username_str: str):
@@ -1003,39 +995,71 @@ def process_resource_description(msg: types.Message):
 @membership_required
 def handle_web_quiz_command(msg: types.Message):
     """
-    Provides a hyperlink button to launch the web quiz, compatible with group chats.
+    Starts the setup for launching a dynamic web app quiz.
     """
     try:
-        user_id = msg.from_user.id
-        user_name = escape(msg.from_user.first_name)
+        # Puraane flow ki tarah, pehle user se Quiz Set select karwayenge
+        response = supabase.table('quiz_presets').select('set_name, button_label').order('id').execute()
+        if not response.data:
+            bot.reply_to(msg, "❌ No Quiz Sets found in the database to launch a web quiz.")
+            return
+
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        buttons = [
+            types.InlineKeyboardButton(
+                preset['button_label'],
+                callback_data=f"webquiz_select_{preset['set_name']}"
+            ) for preset in response.data
+        ]
+        
+        for i in range(0, len(buttons), 2):
+            if i + 1 < len(buttons): markup.row(buttons[i], buttons[i+1])
+            else: markup.row(buttons[i])
+
+        bot.reply_to(msg, "🚀 Please choose a Quiz Set to launch in the Web App:", reply_markup=markup)
+    except Exception as e:
+        report_error_to_admin(f"Error in /webquiz setup: {traceback.format_exc()}")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('webquiz_select_'))
+def handle_webquiz_set_selection(call: types.CallbackQuery):
+    """
+    Handles the preset selection and provides the final Web App button.
+    """
+    try:
+        selected_set = call.data.split('_', 2)[-1]
+        user_id = call.from_user.id
+        user_name = call.from_user.first_name
 
         if not WEBAPP_URL:
             report_error_to_admin("CRITICAL: WEBAPP_URL is not set!")
-            bot.reply_to(msg, "❌ Error: The Web App URL is not configured.")
+            bot.answer_callback_query(call.id, "Error: Web App URL is not configured.", show_alert=True)
             return
 
-        # The URL for the quiz, including user details
-        quiz_hyperlink = f"https://studyprosync.web.app/quiz/?user_id={user_id}&user_name={quote(user_name)}"
+        # Correctly constructs the full URL for the web app
+        web_app_url = f"{WEBAPP_URL.rstrip('/')}/quiz/?user_id={user_id}&user_name={quote(user_name)}&quiz_set={quote(selected_set)}"
 
         markup = types.InlineKeyboardMarkup()
-        # THIS IS THE FIX: Changed from a 'web_app' button to a standard 'url' button
+        
+        # --- THE FIX IS HERE ---
+        # Humne 'url=' ko 'web_app=types.WebAppInfo(url=...)' se badal diya hai
         markup.add(
-            types.InlineKeyboardButton("🚀 Start the Web Quiz!", url=quiz_hyperlink)
+            types.InlineKeyboardButton(
+                f"🚀 Launch '{escape(selected_set)}' Challenge", 
+                web_app=types.WebAppInfo(url=web_app_url)
+            )
         )
         
-        # A more personalized message for the user
-        message_text = f"Hey <b>{user_name}</b>! Ready for a new challenge?\n\nClick the button below to launch the Web Quiz in your browser."
-        
-        bot.send_message(
-            msg.chat.id,
-            message_text,
-            parse_mode="HTML",
+        bot.answer_callback_query(call.id)
+        bot.edit_message_text(
+            f"You have selected: <b>{escape(selected_set)}</b>.\n\nClick the button below to start the challenge!",
+            call.message.chat.id,
+            call.message.message_id,
             reply_markup=markup,
-            message_thread_id=msg.message_thread_id
+            parse_mode="HTML"
         )
-
     except Exception as e:
-        report_error_to_admin(f"Error in /webquiz command: {traceback.format_exc()}")
+        report_error_to_admin(f"Error in handle_webquiz_set_selection: {traceback.format_exc()}")
+        bot.answer_callback_query(call.id, "An error occurred.", show_alert=True)
 def process_webapp_quiz_results(payload):
     """
     Processes web app quiz results, saves them via RPC, and sends a rich, ranked summary.
@@ -1081,7 +1105,93 @@ def process_webapp_quiz_results(payload):
         
     except Exception as e:
         report_error_to_admin(f"Error processing webapp quiz result for user {payload.get('userId')}:\n{traceback.format_exc()}")
+def process_webapp_quiz_results(data):
+    """
+    UPGRADED: Handles different payloads from the web app based on the user's final plan.
+    1. 'quiz_completed_notification': Saves data and notifies the admin.
+    """
+    try:
+        payload_type = data.get('type')
+        if payload_type != 'quiz_completed_notification':
+            return # This function only handles the automatic notification
 
+        user_id = data.get('userId')
+        user_name = escape(data.get('userName', 'A participant'))
+        score = data.get('score', 0)
+        correct = data.get('correct', 0)
+        total = data.get('total', 0)
+        quiz_set = escape(data.get('quizSet', 'Web Quiz'))
+        time_taken = data.get('timeTakenSeconds', 0)
+        strongest = escape(data.get('strongestTopic', 'N/A'))
+        weakest = escape(data.get('weakestTopic', 'N/A'))
+        
+        # Save the full result to Supabase and get the new record's ID
+        try:
+            response = supabase.table('web_quiz_results').insert({
+                'user_id': user_id, 'user_name': user_name, 'quiz_set': quiz_set,
+                'score_percentage': score, 'correct_answers': correct, 'total_questions': total,
+                'time_taken_seconds': time_taken, 'strongest_topic': strongest, 'weakest_topic': weakest
+            }).execute()
+            
+            new_result_id = response.data[0]['id']
+            print(f"Successfully saved web quiz result (ID: {new_result_id}) for {user_name}.")
+
+            # Send a detailed notification to the admin's DM with a "Post to Group" button
+            admin_summary = (
+                f"🔔 **New Web Quiz Submission!**\n\n"
+                f"👤 **User:** {user_name}\n"
+                f"📚 **Quiz:** {quiz_set}\n"
+                f"📊 **Score:** <b>{score}%</b> ({correct}/{total})\n"
+                f"⏱️ **Time:** {time_taken}s\n\n"
+                f"<i>Do you want to post this result in the group?</i>"
+            )
+            
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("✅ Yes, Post to Group", callback_data=f"post_web_result_{new_result_id}"))
+            bot.send_message(ADMIN_USER_ID, admin_summary, parse_mode="HTML", reply_markup=markup)
+
+        except Exception as db_error:
+            report_error_to_admin(f"Error saving/notifying web quiz result: {traceback.format_exc()}")
+        
+    except Exception as e:
+        report_error_to_admin(f"Error processing webapp quiz result: {traceback.format_exc()}")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('post_web_result_'))
+def handle_post_web_result_callback(call: types.CallbackQuery):
+    """
+    Handles the admin's decision to post a web quiz result to the group.
+    """
+    try:
+        result_id = int(call.data.split('_')[-1])
+        bot.answer_callback_query(call.id, "Fetching result to post...")
+
+        response = supabase.table('web_quiz_results').select('*').eq('id', result_id).single().execute()
+        if not response.data:
+            bot.edit_message_text("❌ Error: Could not find this result in the database.", call.message.chat.id, call.message.message_id)
+            return
+
+        result = response.data
+        user_name = escape(result.get('user_name', 'A participant'))
+        score = result.get('score_percentage', 0)
+        correct = result.get('correct_answers', 0)
+        total = result.get('total_questions', 0)
+        quiz_set = escape(result.get('quiz_set', 'Web Quiz'))
+        
+        summary = f"🎉 **Web Quiz Result for {user_name}!** 🎉\n\n"
+        summary += f"📚 **Topic:** {quiz_set}\n"
+        if score >= 80: summary += f"Wow! An outstanding score of <b>{score}%</b>! 🏆\n"
+        elif score >= 60: summary += f"Great job! A solid score of <b>{score}%</b>. 👍\n"
+        else: summary += f"Good effort! A score of <b>{score}%</b>. Keep practicing! 🌱\n"
+        summary += f"They answered <b>{correct} out of {total}</b> questions correctly."
+        
+        bot.send_message(GROUP_ID, summary, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
+        bot.edit_message_text(f"✅ Result for **{user_name}** has been posted to the group.", call.message.chat.id, call.message.message_id, parse_mode="HTML")
+
+    except Exception as e:
+        report_error_to_admin(f"Error posting web result from callback: {traceback.format_exc()}")
+        bot.answer_callback_query(call.id, "Error posting result.", show_alert=True)
+
+# Yeh ab Web App Data ke liye Akela (Single), Final Handler hai
 @bot.message_handler(content_types=['web_app_data'])
 @membership_required
 def handle_webapp_data(msg: types.Message):
@@ -1091,21 +1201,22 @@ def handle_webapp_data(msg: types.Message):
     data_from_webapp = msg.web_app_data.data
     print(f"Received data from Mini App: {data_from_webapp}")
 
-    # --- NEW: More robust JSON parsing ---
-    try:
-        payload = json.loads(data_from_webapp)
-        # If it's a quiz result, process it and stop.
-        if payload.get('type') == 'webappQuizResult':
-            process_webapp_quiz_results(payload)
-            return
-    except json.JSONDecodeError:
-        # If it's not JSON, it must be a command string.
-        pass
-
-    # Fallback to command router logic if it wasn't a quiz result
+    # Step 1: Check if the data is a JSON string (for quiz results)
+    if data_from_webapp.strip().startswith('{'):
+        try:
+            payload = json.loads(data_from_webapp)
+            # Agar yeh quiz result hai, to use process karke ruk jao
+            if 'type' in payload and ('notification' in payload['type'] or 'result' in payload['type']):
+                process_webapp_quiz_results(payload)
+                return
+        except json.JSONDecodeError:
+            print("Received a non-JSON string that started with {.")
+    
+    # Step 2: Agar quiz result nahi hai, to use command ki tarah process karo
     msg.text = data_from_webapp
     handler_to_call = COMMAND_ROUTER.get(msg.text)
     
+    # Special handling for commands with arguments like /need
     if msg.text.startswith('/need'):
         handler_to_call = COMMAND_ROUTER.get('/need')
 
@@ -1113,8 +1224,11 @@ def handle_webapp_data(msg: types.Message):
         try:
             handler_to_call(msg)
         except Exception as e:
-            report_error_to_admin(f"Error executing Web App command '{msg.text}':\n{traceback.format_exc()}")
+            error_message = f"Error executing Web App command '{msg.text}':\n{traceback.format_exc()}"
+            print(error_message)
+            report_error_to_admin(error_message)
     else:
+        # Fallback for unknown commands
         bot.send_message(msg.chat.id, f"Received an unknown action from the dashboard: {escape(msg.text)}")
 # =============================================================================
 # 8. TELEGRAM BOT HANDLERS - CORE COMMANDS
@@ -3825,68 +3939,6 @@ def handle_my_analysis_command(msg: types.Message):
 
     except Exception as e:
         report_error_to_admin(f"Error generating analysis for {user_id}:\n{traceback.format_exc()}")
-
-def process_webapp_quiz_result(data):
-    """
-    Helper function to format and send the web app quiz results to the group.
-    """
-    try:
-        user_name = escape(data.get('userName', 'A participant'))
-        score = data.get('score', 0)
-        correct = data.get('correct', 0)
-        total = data.get('total', 0)
-        quiz_set = escape(data.get('quizSet', 'Web Quiz'))
-
-        summary = f"🎉 **Web Quiz Result for {user_name}!** 🎉\n\n"
-        summary += f"📚 **Topic:** {quiz_set}\n"
-        
-        if score >= 80:
-            summary += f"Wow! An outstanding score of <b>{score}%</b>! 🏆\n"
-        elif score >= 60:
-            summary += f"Great job! A solid score of <b>{score}%</b>. 👍\n"
-        else:
-            summary += f"Good effort! A score of <b>{score}%</b>. Keep practicing! 🌱\n"
-            
-        summary += f"You answered <b>{correct} out of {total}</b> questions correctly."
-        
-        bot.send_message(GROUP_ID, summary, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
-        
-    except Exception as e:
-        report_error_to_admin(f"Error processing webapp quiz result: {traceback.format_exc()}")
-
-
-@bot.message_handler(content_types=['web_app_data'])
-@membership_required
-def handle_webapp_data(msg: types.Message):
-    """
-    Handles all data received from the Mini App, routing it correctly.
-    """
-    data_from_webapp = msg.web_app_data.data
-    print(f"Received data from Mini App: {data_from_webapp}")
-
-    if data_from_webapp.strip().startswith('{'):
-        try:
-            payload = json.loads(data_from_webapp)
-            if payload.get('type') == 'webappQuizResult':
-                process_webapp_quiz_result(payload)
-                return
-        except json.JSONDecodeError:
-            print("Received a non-JSON string that started with {.")
-    
-    msg.text = data_from_webapp
-    handler_to_call = COMMAND_ROUTER.get(msg.text)
-    
-    if msg.text.startswith('/need'):
-        handler_to_call = COMMAND_ROUTER.get('/need')
-
-    if handler_to_call:
-        try:
-            handler_to_call(msg)
-        except Exception as e:
-            report_error_to_admin(f"Error executing Web App command '{msg.text}':\n{traceback.format_exc()}")
-    else:
-        bot.send_message(msg.chat.id, f"Received an unknown action from the dashboard: {escape(msg.text)}")
-
 
 @bot.message_handler(commands=['mystats'])
 @membership_required
