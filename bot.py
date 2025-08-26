@@ -3859,53 +3859,100 @@ def format_analysis_for_webapp(analysis_data, user_name):
 @membership_required
 def handle_my_analysis_command(msg: types.Message):
     """
-    Sends a rich, detailed, UNIFIED analysis to the user.
+    Sends a rich, detailed, UNIFIED analysis to the user in the desired combined format.
     """
     user_id = msg.from_user.id
     user_name = escape(msg.from_user.first_name)
     
     try:
-        # Call our new unified analysis function
+        # Call our powerful unified analysis function
         response = supabase.rpc('get_unified_user_analysis', {'p_user_id': user_id}).execute()
         analysis_data = response.data
 
+        # Extract the different pieces of data
         web_stats = analysis_data.get('web_quiz_stats')
-        marathon_stats = analysis_data.get('marathon_stats')
+        topic_stats = analysis_data.get('marathon_topic_stats', {}).get('json_agg')
+        type_stats = analysis_data.get('marathon_type_stats', {}).get('json_agg')
 
-        if not web_stats and not marathon_stats:
+        if not topic_stats and (not web_stats or not web_stats.get('top_3_web_scores')):
             bot.reply_to(msg, f"📊 <b>{user_name}'s Analysis</b>\n\nNo quiz data found yet. Participate in quizzes to generate your report!")
             return
 
-        msg_text = f"📊 <b>{user_name}'s Unified Analysis</b>\n━━━━━━━━━━━━━━━━━━\n\n"
+        # --- PART 1: Rebuild the original, detailed Marathon analysis ---
+        main_message = f"📊 <b>{user_name}'s Performance Snapshot</b>\n━━━━━━━━━━━━━━━━━━\n"
+        weakest_topic_for_suggestion = None
+
+        if topic_stats:
+            total_correct = sum(t['total_correct'] for t in topic_stats)
+            total_attempted = sum(t['total_attempted'] for t in topic_stats)
+            total_time = sum(t['total_correct'] * t['avg_time_per_question'] for t in topic_stats)
+            
+            overall_accuracy = (total_correct / total_attempted * 100) if total_attempted > 0 else 0
+            overall_avg_time = (total_time / total_correct) if total_correct > 0 else 0
+
+            main_message += f"🎯 {overall_accuracy:.0f}% Accuracy | 📚 {len(topic_stats)} Topics | ❓ {total_attempted} Ques\n"
+            main_message += f" • <b>Avg. Time / Ques:</b> {overall_avg_time:.1f}s\n\n"
+
+            main_message += "🧠 <b>Theory vs. Practical</b>\n"
+            if type_stats:
+                for q_type in type_stats:
+                    type_accuracy = (q_type['total_correct'] / q_type['total_attempted'] * 100) if q_type['total_attempted'] > 0 else 0
+                    main_message += f" • <b>{q_type['question_type']}:</b> {type_accuracy:.0f}% Accuracy\n"
+            else:
+                main_message += " • Not enough data yet.\n"
+            main_message += "\n"
+
+            strongest = sorted([t for t in topic_stats if (t['total_correct']/t['total_attempted']*100) >= 80], key=lambda x: (x['total_correct']/x['total_attempted']), reverse=True)[:7]
+            weakest = sorted([t for t in topic_stats if (t['total_correct']/t['total_attempted']*100) < 65], key=lambda x: (x['total_correct']/x['total_attempted']))[:7]
+            
+            if weakest:
+                weakest_topic_for_suggestion = weakest[0]
+
+            main_message += "🏆 <b>Top 7 Strongest Topics</b>\n"
+            if strongest:
+                for i, t in enumerate(strongest, 1):
+                    accuracy = (t['total_correct'] / t['total_attempted'] * 100)
+                    main_message += f"  {i}. {escape(t['topic'])} ({accuracy:.0f}%)\n"
+            else:
+                main_message += "  Keep playing to identify your strengths!\n"
+            main_message += "\n"
+
+            main_message += "📚 <b>Top 7 Improvement Areas</b>\n"
+            if weakest:
+                for i, t in enumerate(weakest, 1):
+                    accuracy = (t['total_correct'] / t['total_attempted'] * 100)
+                    main_message += f"  {i}. {escape(t['topic'])} ({accuracy:.0f}% | {t['avg_time_per_question']:.1f}s)\n"
+            else:
+                main_message += "  No specific areas for improvement found yet. Great work!\n"
         
-        # Display Web Quiz Analysis
+        # --- PART 2: Create the Web Quiz performance section ---
+        web_quiz_section = ""
         if web_stats and web_stats.get('top_3_web_scores'):
-            msg_text += "<b>💻 <u>Web Quiz Performance</u></b>\n"
-            msg_text += "<b>Top 3 Scores:</b>\n"
+            web_quiz_section += "\n<b>💻 <u>Web Quiz Performance</u></b>\n"
+            web_quiz_section += "<b>Top 3 Scores:</b>\n"
             for score in web_stats['top_3_web_scores']:
-                msg_text += f"  • {score['score']}% - <i>({escape(score['quiz_set'])})</i>\n"
+                web_quiz_section += f"  • {score['score']}% - <i>({escape(score['quiz_set'])})</i>\n"
             
             if web_stats.get('latest_strongest_topic'):
-                 msg_text += f"<b>Strongest Area:</b> {escape(web_stats['latest_strongest_topic'])}\n"
+                 web_quiz_section += f"<b>Strongest Area:</b> {escape(web_stats['latest_strongest_topic'])}\n"
             if web_stats.get('latest_weakest_topic'):
-                 msg_text += f"<b>Improvement Area:</b> {escape(web_stats['latest_weakest_topic'])}\n"
-            msg_text += "\n"
+                 web_quiz_section += f"<b>Improvement Area:</b> {escape(web_stats['latest_weakest_topic'])}\n"
+        
+        # --- PART 3: Add the Smart Suggestions from the old format ---
+        suggestions_section = ""
+        if weakest_topic_for_suggestion:
+            weakest_topic_name = escape(weakest_topic_for_suggestion['topic'])
+            suggestions_section += f"\n⭐ <u>Smart Suggestion</u>\n"
+            suggestions_section += f"Your theory knowledge is a major strength! Apply that same foundational approach to practical questions in '<b>{weakest_topic_name}</b>' to see a significant score boost.\n"
+            suggestions_section += f"\n⚠️ <u>Your Hidden Challenge</u>\n"
+            suggestions_section += f"Your biggest opportunity for improvement is <b>reducing time on Practical questions</b>. While your accuracy is good, speeding up here will give you a major advantage in exams.\n"
+            suggestions_section += f"\n🎯 <u>Your Next Milestone</u>\n"
+            suggestions_section += f"Aim to increase your accuracy in <b>{weakest_topic_name}</b> to over 60% in your next 5 attempts. You can do it!"
 
-        # Display Marathon Analysis
-        if marathon_stats and marathon_stats.get('topic_breakdown'):
-            msg_text += "<b>🏁 <u>Marathon Topic Breakdown</u></b>\n"
-            strongest = sorted([t for t in marathon_stats['topic_breakdown'] if t['accuracy'] >= 80], key=lambda x: x['accuracy'], reverse=True)[:3]
-            weakest = sorted([t for t in marathon_stats['topic_breakdown'] if t['accuracy'] < 65], key=lambda x: x['accuracy'])[:3]
-            
-            if strongest:
-                msg_text += "<b>Strongest Topics:</b>\n"
-                for t in strongest:
-                    msg_text += f"  • {escape(t['topic'])} ({t['accuracy']}%)\n"
-            if weakest:
-                msg_text += "<b>Improvement Areas:</b>\n"
-                for t in weakest:
-                    msg_text += f"  • {escape(t['topic'])} ({t['accuracy']}%)\n"
+        # --- PART 4: Assemble the final message in the correct order ---
+        final_message = main_message + web_quiz_section + suggestions_section
 
+        # --- PART 5: Send the final, combined message ---
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("🗑️ Delete This Analysis", callback_data="delete_analysis_msg"))
         
@@ -3913,7 +3960,7 @@ def handle_my_analysis_command(msg: types.Message):
             message_id=msg.message_id,
             allow_sending_without_reply=True
         )
-        bot.send_message(msg.chat.id, msg_text, parse_mode="HTML", reply_markup=markup, reply_parameters=reply_params)
+        bot.send_message(msg.chat.id, final_message, parse_mode="HTML", reply_markup=markup, reply_parameters=reply_params)
 
     except Exception as e:
         report_error_to_admin(f"Error generating unified analysis for {user_id}:\n{traceback.format_exc()}")
