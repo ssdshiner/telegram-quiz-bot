@@ -888,15 +888,17 @@ def save_quiz_result():
              # This block runs if the "Post Score to Group" button was clicked
              process_post_score_request(data)
         else:
-            # This block runs automatically when the quiz is completed
-            admin_summary = (
-                f"🔔 <b>New Web Quiz Submission!</b>\n\n"
-                f"👤 <b>User:</b> {escape(data['userName'])}\n"
-                f"📚 <b>Quiz:</b> {escape(data['quizSet'])}\n"
-                f"📊 <b>Score:</b> {data['scorePercentage']}% ({data['correctAnswers']}/{data['totalQuestions']})\n"
-                f"⏱️ <b>Time:</b> {data.get('timeTakenSeconds', 0)}s\n\n"
-                f"<i>Do you want to post this result in the group?</i>"
-            )
+# This block runs automatically when the quiz is completed
+admin_summary = (
+    f"🔔 <b>New Web Quiz Submission!</b>\n\n"
+    f"👤 <b>User:</b> {escape(data['userName'])}\n"
+    f"📚 <b>Quiz:</b> {escape(data['quizSet'])}\n"
+    f"📊 <b>Score:</b> {data['scorePercentage']}% ({data.get('correctAnswers', 0)}/{data.get('totalQuestions', 0)})\n"
+    f"⏱️ <b>Time:</b> {data.get('timeTakenSeconds', 0)}s\n"
+    f"✅ <b>Correct:</b> {data.get('correctAnswers', 0)} questions\n"
+    f"📝 <b>Attempted:</b> {data.get('attemptedQuestions', 0)} questions\n\n"
+    f"<i>Do you want to post this result in the group?</i>"
+)
             markup = types.InlineKeyboardMarkup()
             markup.add(types.InlineKeyboardButton("✅ Yes, Post to Group", callback_data=f"post_web_result_{new_result_id}"))
             bot.send_message(ADMIN_USER_ID, admin_summary, parse_mode="HTML", reply_markup=markup)
@@ -1178,9 +1180,10 @@ def process_post_score_request(payload):
     """
     try:
         user_name = escape(payload.get('userName', 'A Participant'))
-        score = payload.get('score', 0)
-        correct = payload.get('correct', 0)
-        total = payload.get('total', 0)
+        # Use the standardized key names to match the web app
+        score = payload.get('scorePercentage', 0)
+        correct = payload.get('correctAnswers', 0)
+        total = payload.get('totalQuestions', 0)
         quiz_set = escape(payload.get('quizSet', 'Web Quiz'))
 
         # Create the beautiful scorecard message
