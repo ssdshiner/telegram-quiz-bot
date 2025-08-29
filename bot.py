@@ -226,6 +226,18 @@ def report_error_to_admin(error_message: str):
 def is_admin(user_id):
     """Checks if a user is the bot admin."""
     return user_id == ADMIN_USER_ID
+def has_permission(user_id, command_name):
+    """
+    Checks if a user is the main admin OR has a specific permission.
+    """
+    if is_admin(user_id):
+        return True
+    try:
+        res = supabase.rpc('check_user_permission', {'p_user_id': user_id, 'p_command_name': command_name}).execute()
+        return res.data
+    except Exception as e:
+        print(f"Error in has_permission check for {user_id} on '{command_name}': {e}")
+        return False
 def has_any_permission(user_id):
     """Checks if a user has been granted any permission in the database."""
     try:
@@ -943,19 +955,28 @@ def process_resource_file(msg: types.Message):
         file_type = msg.document.mime_type
     elif msg.photo:
         file_id = msg.photo[-1].file_id
+        # Photos don't have a file_name, so we create a default one
+        file_name = f"photo_{msg.date}.jpg"
         file_type = "image/jpeg"
     elif msg.video:
         file_id = msg.video.file_id
         file_name = msg.video.file_name
         file_type = msg.video.mime_type
+    elif msg.audio:
+        # --- THIS IS THE NEW PART ---
+        file_id = msg.audio.file_id
+        file_name = msg.audio.file_name or f"audio_{msg.date}.mp3" # Use a default name if one isn't provided
+        file_type = msg.audio.mime_type
     else:
-        prompt = bot.reply_to(msg, "That doesn't seem to be a valid file. Please upload a document, photo, or video.\n\nOr type /cancel to stop.")
+        # --- ERROR MESSAGE IS UPDATED HERE ---
+        prompt = bot.reply_to(msg, "That doesn't seem to be a valid file. Please upload a document, photo, video, or audio file.\n\nOr type /cancel to stop.")
         bot.register_next_step_handler(prompt, process_resource_file)
         return
 
-    user_states[user_id] = {'file_id': file_id, 'file_name': file_name, 'file_type': file_type}
+    user_states[user_id]['file_id'] = file_id
+    user_states[user_id]['file_name'] = file_name
+    user_states[user_id]['file_type'] = file_type
     
-    # THE FIX: Converted to safe HTML and escaped the file_name variable
     prompt_text = (f"✅ File received: <code>{escape(file_name)}</code>\n\n"
                    f"<b>Step 2 of 3:</b> Now, please provide search keywords for this file, separated by commas.\n\n"
                    f"<i>Example:</i> <code>accounts, as19, leases, notes</code>")
@@ -5616,7 +5637,10 @@ def process_marathon_question_count(msg: types.Message):
     """
     user_id = msg.from_user.id
     try:
-        if not is_admin(user_id): return # Extra safety check
+        # --- THIS IS THE CORRECTED SECURITY CHECK ---
+        # It now checks for the specific 'quizmarathon' permission, not just the main admin.
+        if not has_permission(user_id, 'quizmarathon'): 
+            return
 
         state_data = user_states.get(user_id, {})
         selected_set = state_data.get('selected_set')
