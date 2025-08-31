@@ -50,6 +50,8 @@ GOOGLE_SHEET_KEY = os.getenv('GOOGLE_SHEET_KEY')
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 ANALYSIS_WEBAPP_URL = os.getenv('ANALYSIS_WEBAPP_URL')
+# Master switch to pause daily inactivity/appreciation checks
+PAUSE_DAILY_CHECKS = True
 
 # --- Type Casting with Error Handling ---
 try:
@@ -689,6 +691,12 @@ def run_daily_checks():
     """
     Runs all daily automated tasks including warnings, reminders, and removal notices.
     """
+    # --- THIS IS THE NEW PART ---
+    # Check the master switch. If it's True, stop the function immediately.
+    if PAUSE_DAILY_CHECKS:
+        print("ℹ️ Daily checks are currently paused. Skipping.")
+        return
+
     try:
         print("Starting daily automated checks...")
         
@@ -755,7 +763,6 @@ def run_daily_checks():
     except Exception as e:
         print(f"❌ Error during daily checks: {e}")
         report_error_to_admin(f"Error in run_daily_checks:\n{traceback.format_exc()}")
-
 
 def cleanup_stale_user_states():
     """
