@@ -1248,6 +1248,13 @@ def _build_admin_main_menu():
     
     text = f"👑 <b>Admin Control Panel</b> 👑\n<i>Bot Status: {health_status}</i>\n\nWelcome, Admin. Please choose a category to manage:"
     return text, markup
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('admin_'))
+def handle_admin_callbacks(call: types.CallbackQuery):
+    """
+    Master handler for all admin dashboard navigation with a robust command router.
+    """
+    global PAUSE_DAILY_CHECKS
 # This is the new, reliable Command Router. It maps button names to their functions.
 ADMIN_COMMAND_ROUTER = {
     'quizmarathon': start_marathon_setup, 'teambattle': handle_team_battle_command,
@@ -1264,12 +1271,6 @@ ADMIN_COMMAND_ROUTER = {
     'activity_report': handle_activity_report, 'bdhai': handle_congratulate_command,
     'prunedms': handle_prune_dms, 'sync_members': handle_sync_members
 }
-@bot.callback_query_handler(func=lambda call: call.data.startswith('admin_'))
-def handle_admin_callbacks(call: types.CallbackQuery):
-    """
-    Master handler for all admin dashboard navigation with a robust command router.
-    """
-    global PAUSE_DAILY_CHECKS
     bot.answer_callback_query(call.id)
     parts = call.data.split('_', 1)
     menu = parts[1]
