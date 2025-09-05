@@ -1059,13 +1059,16 @@ def handle_add_resource(msg: types.Message):
     
     prompt_text = "Okay, let's add a new resource to the Vault.\n\n<b>Step 1:</b> Please upload the document, audio, photo, or video file now."
     prompt = bot.send_message(user_id, prompt_text, parse_mode="HTML")
-    bot.register_next_step_handler(prompt, process_resource_file_step_1)
 
+@bot.message_handler(
+    func=lambda msg: user_states.get(msg.from_user.id, {}).get('step') == 'awaiting_file',
+    content_types=['document', 'photo', 'video', 'audio']
+)
 def process_resource_file_step_1(msg: types.Message):
-    """Step 1: Receives the file and asks for the Group."""
+    """Step 1: Receives the file (using a state-based handler) and asks for the Group."""
     user_id = msg.from_user.id
     
-    # Ensure user is in the correct state
+    # Redundant state check, but good for safety
     if user_states.get(user_id, {}).get('step') != 'awaiting_file':
         return
 
@@ -1078,9 +1081,11 @@ def process_resource_file_step_1(msg: types.Message):
         file_id, file_name, file_type = msg.video.file_id, msg.video.file_name, msg.video.mime_type
     elif msg.audio:
         file_id, file_name, file_type = msg.audio.file_id, msg.audio.file_name or f"audio_{msg.date}.mp3", msg.audio.mime_type
+    
+    # This 'else' should ideally not be reached because of the content_types filter, but it's a good fallback.
     else:
-        prompt = safe_reply(msg, "That's not a valid file. Please upload a document, photo, video, or audio file.\n\nOr type /cancel to stop.")
-        bot.register_next_step_handler(prompt, process_resource_file_step_1)
+        safe_reply(msg, "That's not a valid file type. The process has been cancelled. Please start again with /add_resource.")
+        if user_id in user_states: del user_states[user_id]
         return
 
     user_states[user_id].update({
