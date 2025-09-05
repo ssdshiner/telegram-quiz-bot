@@ -3448,7 +3448,7 @@ def handle_interlink_callbacks(call: types.CallbackQuery):
 @membership_required
 def handle_listfile_command(msg: types.Message):
     """
-    Shows the main menu for the new Advanced Vault Browser.
+    Shows the main menu for the new Advanced Vault Browser using the robust send_message method.
     """
     try:
         supabase.rpc('update_chat_activity', {'p_user_id': msg.from_user.id, 'p_user_name': msg.from_user.username or msg.from_user.first_name}).execute()
@@ -3461,11 +3461,24 @@ def handle_listfile_command(msg: types.Message):
             types.InlineKeyboardButton("🔵 Group 1", callback_data="v_group_Group 1"),
             types.InlineKeyboardButton("🟢 Group 2", callback_data="v_group_Group 2")
         )
-        bot.reply_to(msg, "🗂️ Welcome to the CA Vault!\n\nPlease select a Group to begin.", reply_markup=markup)
+        
+        # Using the more robust send_message with reply_parameters
+        reply_params = types.ReplyParameters(
+            message_id=msg.message_id,
+            allow_sending_without_reply=True
+        )
+        
+        bot.send_message(
+            msg.chat.id, 
+            "🗂️ Welcome to the CA Vault!\n\nPlease select a Group to begin.", 
+            reply_markup=markup,
+            reply_parameters=reply_params
+        )
         
     except Exception as e:
         report_error_to_admin(f"Error in /listfile: {traceback.format_exc()}")
-        safe_reply(msg, "❌ An error occurred while opening the Vault.")
+        # The universal safe reply patch will handle this automatically
+        bot.send_message(msg.chat.id, "❌ An error occurred while opening the Vault.")
 # =============================================================================
 # 8. TELEGRAM BOT HANDLERS - VAULT & DM
 # =============================================================================
@@ -5781,14 +5794,23 @@ def process_marathon_question_count(msg: types.Message):
         bot.edit_message_text("❌ A critical error occurred during the Pre-Flight Check.", msg.chat.id, state_data.get('setup_message_id'))
 
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith('preflight_'))
+@bot.callback_query_handler(func=lambda call: call.data.startswith('preflight_') or call.data == 'back_to_marathon_setup')
 def handle_preflight_action_callback(call: types.CallbackQuery):
     """
     Handles the admin's choice after the Pre-Flight Check report.
     """
     user_id = call.from_user.id
-    action = call.data.split('_')[1]
+    
+    # Handle the "Back" button separately
+    if call.data == 'back_to_marathon_setup':
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+        # Re-run the initial setup command
+        fake_message = call.message
+        fake_message.from_user = call.from_user
+        start_marathon_setup(fake_message)
+        return
 
+    action = call.data.split('_')[1]
     state_data = user_states.get(user_id, {})
     good_questions = state_data.get('good_questions')
 
@@ -7507,86 +7529,85 @@ def handle_unknown_messages(msg: types.Message):
 
 
 # =============================================================================
-# 18. MAIN EXECUTION BLOCK (ROBUST & DETAILED LOGGING)
+# 18. MAIN EXECUTION BLOCK (ENHANCED WITH HEALTH CHECKS)
 # =============================================================================
 
-# This setup logic runs once when your service on Render starts.
 print("\n" + "="*50)
-print("🤖 INITIALIZING BOT: Starting the setup sequence...")
+print("🤖 INITIALIZING BOT: Starting the setup and health check sequence...")
 print("="*50)
 
 # --- STEP 1: CHECKING ENVIRONMENT VARIABLES ---
-print("STEP 1: Checking environment variables...")
-required_vars = [
-    'BOT_TOKEN', 'SERVER_URL', 'GROUP_ID', 'ADMIN_USER_ID', 'SUPABASE_URL',
-    'SUPABASE_KEY'
-]
+print("\n--- STEP 1: Checking Environment Variables ---")
+required_vars = ['BOT_TOKEN', 'SERVER_URL', 'GROUP_ID', 'ADMIN_USER_ID', 'SUPABASE_URL', 'SUPABASE_KEY']
 missing_vars = [var for var in required_vars if not os.getenv(var)]
 if missing_vars:
     print("❌ FATAL: The following critical environment variables are missing:")
     for var in missing_vars:
         print(f"  - {var}")
-    print("\nPlease set these variables on Render and restart the bot.")
     exit()
-print("✅ STEP 1: All required environment variables are loaded successfully.\n")
+print("✅ All required environment variables are loaded.")
 
-# --- STEP 2: LOADING PERSISTENT DATA FROM SUPABASE ---
-print("STEP 2: Loading persistent data from Supabase...")
+# --- STEP 2: TELEGRAM API HEALTH CHECK ---
+print("\n--- STEP 2: Checking Telegram API Connection ---")
+try:
+    bot_info = bot.get_me()
+    print(f"✅ Telegram connection successful. Bot Name: {bot_info.first_name}, Bot Username: @{bot_info.username}")
+except Exception as e:
+    print(f"❌ FATAL: Could not connect to Telegram API. Check your BOT_TOKEN. Error: {e}")
+    exit()
+
+# --- STEP 3: SUPABASE HEALTH CHECK ---
+print("\n--- STEP 3: Checking Supabase Connection ---")
+try:
+    # Perform a simple, quick query to test the connection and credentials
+    response = supabase.table('quiz_presets').select('id', count='exact').limit(1).execute()
+    print(f"✅ Supabase connection successful. Found {response.count} quiz presets.")
+except Exception as e:
+    print(f"❌ FATAL: Could not connect to Supabase. Check URL/KEY and network access rules. Error: {e}")
+    exit()
+
+# --- STEP 4: LOADING PERSISTENT DATA ---
+print("\n--- STEP 4: Loading Persistent Data from Supabase ---")
 try:
     load_data()
+    print("✅ Data loading process completed.")
 except Exception as e:
-    print(f"❌ FAILED: Could not load data from Supabase. Error: {e}")
-print("✅ STEP 2: Data loading process completed.\n")
+    print(f"⚠️ WARNING: Could not load persistent data from Supabase. Bot will start with a fresh state. Error: {e}")
 
 
-# --- STEP 3: INITIALIZING GOOGLE SHEETS ---
-print("STEP 3: Initializing Google Sheets connection...")
-try:
-    initialize_gsheet()
-except Exception as e:
-    print(f"❌ FAILED: Could not initialize Google Sheets. Error: {e}")
-print("✅ STEP 3: Google Sheets initialization completed.\n")
-
-# --- STEP 4: STARTING BACKGROUND SCHEDULER ---
-print("STEP 4: Starting background scheduler thread...")
+# --- STEP 5: STARTING BACKGROUND SCHEDULER ---
+print("\n--- STEP 5: Starting Background Scheduler Thread ---")
 try:
     scheduler_thread = threading.Thread(target=background_worker, daemon=True)
     scheduler_thread.start()
-    print("✅ STEP 4: Background scheduler is now running in a separate thread.\n")
+    print("✅ Background scheduler is now running.")
 except Exception as e:
     print(f"❌ FATAL: Failed to start the background scheduler. Error: {e}")
     report_error_to_admin(f"FATAL ERROR: The background worker thread could not be started:\n{e}")
     exit()
 
-# --- STEP 5: SETTING TELEGRAM WEBHOOK ---
-print("STEP 5: Setting Telegram webhook...")
+# --- STEP 6: SETTING TELEGRAM WEBHOOK ---
+print("\n--- STEP 6: Setting Telegram Webhook ---")
 try:
     bot.remove_webhook()
     time.sleep(1)
     webhook_url = f"{SERVER_URL.rstrip('/')}/{BOT_TOKEN}"
     bot.set_webhook(url=webhook_url)
-    print(f"✅ STEP 5: Webhook is set successfully to: {webhook_url}\n")
+    print(f"✅ Webhook is set successfully to: {webhook_url}")
 except Exception as e:
     print(f"❌ FATAL: Could not set the webhook. Telegram updates will not be received. Error: {e}")
     report_error_to_admin(f"FATAL ERROR: Failed to set webhook. The bot will not work:\n{e}")
     exit()
 
 # --- FINAL STATUS ---
-print("="*50)
+print("\n" + "="*50)
 print("🚀 BOT IS LIVE AND READY FOR UPDATES 🚀")
 print("="*50 + "\n")
-# --- COMMAND ROUTER FOR WEB APP ---
-# Yahan hum ek dictionary banayenge jo Web App se aaye commands ko unke function se jodegi
-COMMAND_ROUTER = {
-    '/todayquiz': handle_today_quiz,
-    '/kalkaquiz': handle_tomorrow_quiz,
-    '/listfile': handle_listfile_command,
-    '/mystats': handle_mystats_command,
-    '/my_analysis': handle_my_analysis_command,
-    '/need': handle_need_command # Ye startswith ke liye alag se handle hoga
-}
 
 if __name__ == '__main__':
+    # This block is for local testing only and will not run on Render
     port = int(os.environ.get("PORT", 10000))
     print(f"Starting Flask development server for local testing on http://0.0.0.0:{port}")
+    # To test locally without a webhook, you would use bot.polling()
+    # For now, we keep app.run() for webhook testing if needed
     app.run(host="0.0.0.0", port=port)
