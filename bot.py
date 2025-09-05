@@ -114,6 +114,44 @@ def new_make_request(token,
 apihelper._make_request = new_make_request
 print("✅ Applied network stability patch.")
 # =============================================================================
+# 2.6. UNIVERSAL SAFE REPLY PATCH
+# =============================================================================
+# This patch makes all bot replies resilient to "message not found" errors.
+
+original_send_message = bot.send_message  # Save the original function
+
+def safe_send_message_wrapper(chat_id, text, **kwargs):
+    """
+    A patched version of send_message that automatically handles errors
+    when the message to be replied to has been deleted.
+    """
+    # Check if this is a reply action
+    if 'reply_parameters' in kwargs and kwargs['reply_parameters'] is not None:
+        try:
+            # Attempt to send the message with the reply parameters
+            return original_send_message(chat_id, text, **kwargs)
+        except ApiTelegramException as e:
+            # If it fails specifically because the message is not found...
+            if "message to be replied not found" in e.description:
+                print(f"INFO: Original message was deleted. Sending message without reply.")
+                # ...remove the reply parameter and try again.
+                kwargs.pop('reply_parameters')
+                return original_send_message(chat_id, text, **kwargs)
+            else:
+                # If it's a different error, raise it so we know about it
+                raise e
+    else:
+        # If it's not a reply, just use the original function
+        return original_send_message(chat_id, text, **kwargs)
+
+# Replace the library's function with our new, safer version
+bot.send_message = safe_send_message_wrapper
+# Also replace reply_to, as it sometimes uses a different internal path
+original_reply_to = bot.reply_to
+bot.reply_to = safe_send_message_wrapper
+
+print("✅ Applied universal safe reply patch.")
+# =============================================================================
 # =============3 Supabase Client Initialization================================
 supabase: Client = None
 try:
@@ -344,7 +382,6 @@ def is_bot_mentioned(message):
     if not message.text:
         return False
     return f'@{BOT_USERNAME.lower()}' in message.text.lower()
-
 # This is the new helper function
 def get_user_by_username(username_str: str):
     """
@@ -4093,7 +4130,7 @@ def handle_mystats_command(msg: types.Message):
 
     except Exception as e:
         report_error_to_admin(traceback.format_exc())
-        bot.reply_to(msg, "❌ <i>Unable to fetch your stats right now. Please try again later.</i>", parse_mode="HTML")
+        safe_reply(msg, "❌ <i>Unable to fetch your stats right now. Please try again later.</i>", parse_mode="HTML")
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('delete_stats_msg'))
