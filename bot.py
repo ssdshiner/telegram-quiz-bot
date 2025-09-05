@@ -1207,7 +1207,217 @@ def process_resource_description_step_6(msg: types.Message):
         # Clean up the state to end the conversation
         if user_id in user_states:
             del user_states[user_id]
+@bot.message_handler(commands=['admin'])
+@admin_required
+def handle_admin_command(msg: types.Message):
+    """
+    Displays the main, multi-level admin control panel.
+    """
+    if not msg.chat.type == 'private':
+        safe_reply(msg, "🤫 Please use the <code>/admin</code> command in a private chat with me.", parse_mode="HTML")
+        return
 
+    # Dynamic Health Check
+    try:
+        bot.get_me()
+        supabase.table('quiz_presets').select('id', count='exact').limit(1).execute()
+        health_status = "✅ All Systems Operational"
+    except Exception:
+        health_status = "⚠️ Warning: A subsystem may be down"
+
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("🧠 Quiz & Practice", callback_data="admin_quiz"),
+        types.InlineKeyboardButton("🗂️ Content & Vault", callback_data="admin_content"),
+        types.InlineKeyboardButton("👥 Member Tools", callback_data="admin_member"),
+        types.InlineKeyboardButton("📈 Reports & Ranks", callback_data="admin_reports"),
+        types.InlineKeyboardButton("⚙️ Bot Settings", callback_data="admin_settings")
+    )
+    
+    text = f"👑 <b>Admin Control Panel</b> 👑\n<i>Bot Status: {health_status}</i>\n\nWelcome, Admin. Please choose a category to manage:"
+    bot.send_message(msg.chat.id, text, reply_markup=markup, parse_mode="HTML")
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('admin_'))
+def handle_admin_callbacks(call: types.CallbackQuery):
+    """
+    Master handler for all admin dashboard navigation.
+    """
+    bot.answer_callback_query(call.id)
+    parts = call.data.split('_', 1)
+    menu = parts[1]
+    
+    # --- Helper to create a 'Back' button ---
+    def back_button(target_menu='main'):
+        return types.InlineKeyboardButton("↩️ Back", callback_data=f"admin_{target_menu}")
+
+    try:
+        # --- MAIN MENU ---
+        if menu == 'main':
+            # This is called when a user clicks a "Back" button to return to the main dashboard.
+            # It's the same logic as the initial /admin command.
+            handle_admin_command(call.message)
+            return
+
+        # --- QUIZ & PRACTICE MENU ---
+        elif menu == 'quiz':
+            markup = types.InlineKeyboardMarkup(row_width=2)
+            session_id = str(GROUP_ID)
+            
+            # This is the "conditional logic" for the marathon button
+            if QUIZ_SESSIONS.get(session_id, {}).get('is_active'):
+                markup.add(types.InlineKeyboardButton("🛑 Stop Marathon", callback_data="admin_cmd_roko"))
+            else:
+                markup.add(types.InlineKeyboardButton("🏁 Start Marathon", callback_data="admin_cmd_quizmarathon"))
+
+            markup.add(
+                types.InlineKeyboardButton("🎲 Post Random Quiz", callback_data="admin_cmd_randomquiz"),
+                types.InlineKeyboardButton("🖼️ Post Visual Quiz", callback_data="admin_cmd_randomquizvisual"),
+                types.InlineKeyboardButton("⚔️ Start Team Battle", callback_data="admin_cmd_teambattle"),
+                types.InlineKeyboardButton("🔔 Send Notify", callback_data="admin_cmd_notify")
+            )
+            markup.add(back_button('main'))
+            text = "🧠 **Quiz & Practice**\nTheek hai, chaliye quiz manage karte hain. Kya karna hai?"
+            bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
+
+        # --- CONTENT & VAULT MENU ---
+        elif menu == 'content':
+            markup = types.InlineKeyboardMarkup(row_width=1)
+            markup.add(
+                types.InlineKeyboardButton("➕ Add File to Vault", callback_data="admin_cmd_add_resource"),
+                types.InlineKeyboardButton("🖼️ Add Images to Quizzes", callback_data="admin_content_add_images"),
+                types.InlineKeyboardButton("💬 Manage Quotes & Tips", callback_data="admin_content_quotes"),
+                types.InlineKeyboardButton("📣 Make Announcement", callback_data="admin_cmd_announce"),
+                types.InlineKeyboardButton("🚀 Post Countdown", callback_data="admin_cmd_examcountdown")
+            )
+            markup.add(back_button('main'))
+            text = "🗂️ **Content & Vault**\nContent manage karna hai? Boliye kya karein."
+            bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
+
+        # --- MEMBER TOOLS MENU ---
+        elif menu == 'member':
+            markup = types.InlineKeyboardMarkup(row_width=2)
+            markup.add(
+                types.InlineKeyboardButton("⬆️ Grant Permission", callback_data="admin_cmd_promote"),
+                types.InlineKeyboardButton("⬇️ Revoke Permission", callback_data="admin_cmd_revoke"),
+                types.InlineKeyboardButton("🗑️ Revoke All (Demote)", callback_data="admin_cmd_demote"),
+                types.InlineKeyboardButton("👀 View Permissions", callback_data="admin_cmd_viewperms"),
+                types.InlineKeyboardButton("💬 Send Direct Message (DM)", callback_data="admin_cmd_dm")
+            )
+            markup.add(back_button('main'))
+            text = "👥 **Member Tools**\nMember management ke liye tools hazir hain."
+            bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
+
+        # --- REPORTS & RANKS MENU ---
+        elif menu == 'reports':
+            markup = types.InlineKeyboardMarkup(row_width=2)
+            markup.add(
+                types.InlineKeyboardButton("🏆 All-Time Ranks", callback_data="admin_cmd_alltimerankers"),
+                types.InlineKeyboardButton("📅 Weekly Ranks", callback_data="admin_cmd_rankers"),
+                types.InlineKeyboardButton("🎲 Random Quiz Leaderboard", callback_data="admin_cmd_leaderboard"),
+                types.InlineKeyboardButton("💻 Web Quiz Results", callback_data="admin_cmd_webresult"),
+                types.InlineKeyboardButton("📈 Group Activity Report", callback_data="admin_cmd_activity_report"),
+                types.InlineKeyboardButton("🎉 Congratulate Winners", callback_data="admin_cmd_bdhai")
+            )
+            markup.add(back_button('main'))
+            text = "📈 **Reports & Ranks**\nGroup ki performance dekhni hai? Yeh lijiye."
+            bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
+            
+        # --- BOT SETTINGS MENU ---
+        elif menu == 'settings':
+            markup = types.InlineKeyboardMarkup(row_width=1)
+            # Dynamic button for daily checks
+            if PAUSE_DAILY_CHECKS:
+                markup.add(types.InlineKeyboardButton("▶️ Resume Daily Warnings", callback_data="admin_toggle_pause"))
+            else:
+                markup.add(types.InlineKeyboardButton("⏸️ Pause Daily Warnings", callback_data="admin_toggle_pause"))
+            
+            markup.add(
+                types.InlineKeyboardButton("🧹 Prune DM List", callback_data="admin_cmd_prunedms"),
+                types.InlineKeyboardButton("🔄 Sync Members", callback_data="admin_cmd_sync_members")
+            )
+            markup.add(back_button('main'))
+            text = "⚙️ **Bot Settings**\nBot ke core settings yahan se control karein."
+            bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
+
+        # --- SUB-MENUS ---
+        elif menu == 'content_add_images':
+            markup = types.InlineKeyboardMarkup(row_width=1)
+            markup.add(
+                types.InlineKeyboardButton("🎲 Add to Random Quiz", callback_data="admin_cmd_add_rq"),
+                types.InlineKeyboardButton("🏁 Add to Marathon Quiz", callback_data="admin_cmd_add_qm")
+            )
+            markup.add(back_button('content'))
+            text = "🖼️ **Add Images to Quizzes**\nOkay, kaunse quiz system ke liye image add karni hai?"
+            bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
+        
+        elif menu == 'content_quotes':
+            markup = types.InlineKeyboardMarkup(row_width=1)
+            markup.add(
+                types.InlineKeyboardButton("✨ Send Motivational Quote", callback_data="admin_cmd_motivate"),
+                types.InlineKeyboardButton("💡 Send Study Tip", callback_data="admin_cmd_studytip"),
+                types.InlineKeyboardButton("♻️ Reset Content Usage", callback_data="admin_cmd_reset_content")
+            )
+            markup.add(back_button('content'))
+            text = "💬 **Manage Quotes & Tips**\nChaliye group ko thoda motivate karte hain."
+            bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
+
+        # --- COMMAND HANDLERS ---
+        elif menu.startswith('cmd_'):
+            command_name = menu.split('_', 1)[1]
+            # For simple commands, we can call the handler directly
+            simple_commands = ['randomquiz', 'randomquizvisual', 'roko', 'rankers', 'alltimerankers', 
+                               'leaderboard', 'webresult', 'bdhai', 'activity_report', 'motivate', 
+                               'studytip', 'examcountdown', 'prunedms', 'sync_members', 'reset_content']
+            
+            # For commands that need user input
+            conversational_commands = {
+                'quizmarathon': "Okay, starting marathon setup...",
+                'teambattle': "Okay, starting team battle setup...",
+                'notify': "Please provide the minutes (e.g., /notify 15):",
+                'add_resource': "Okay, starting the resource upload process...",
+                'add_rq': "Okay, starting the Random Quiz image upload process...",
+                'add_qm': "Okay, starting the Marathon Quiz image upload process...",
+                'promote': "Please provide the username (e.g., /promote @username):",
+                'revoke': "Please provide the username (e.g., /revoke @username):",
+                'demote': "Please provide the username (e.g., /demote @username):",
+                'viewperms': "Please provide the username (e.g., /viewperms @username):",
+                'dm': "Okay, starting the Direct Message process...",
+                'announce': "Okay, starting the announcement creator..."
+            }
+
+            if command_name in simple_commands:
+                bot.edit_message_text(f"✅ Executing `/{command_name}`...", call.message.chat.id, call.message.message_id)
+                # We create a fake message object so the handler works as expected
+                fake_message = call.message
+                fake_message.from_user = call.from_user
+                # Find the actual handler function and call it
+                handler = globals().get(f"handle_{command_name}")
+                if handler:
+                    handler(fake_message)
+            elif command_name in conversational_commands:
+                bot.edit_message_text(f"Okay, switching to the `/{command_name}` command. Please follow the instructions in the new message.", call.message.chat.id, call.message.message_id)
+                # Create a fake message and call the handler to start the conversation
+                fake_message = call.message
+                fake_message.from_user = call.from_user
+                handler = globals().get(f"handle_{command_name}_command") or globals().get(f"handle_{command_name}")
+                if handler:
+                    handler(fake_message)
+            else:
+                bot.answer_callback_query(call.id, "This command is not yet implemented.", show_alert=True)
+                
+        # --- SETTINGS TOGGLE ---
+        elif menu == 'toggle_pause':
+            global PAUSE_DAILY_CHECKS
+            PAUSE_DAILY_CHECKS = not PAUSE_DAILY_CHECKS
+            bot.answer_callback_query(call.id, f"Daily checks are now {'PAUSED' if PAUSE_DAILY_CHECKS else 'ACTIVE'}.")
+            # Refresh the settings menu to show the new state
+            handle_admin_callbacks(type('obj', (object,), {'data': 'admin_settings', 'message': call.message, 'id': call.id}))
+
+
+    except Exception as e:
+        report_error_to_admin(f"Error in admin dashboard: {traceback.format_exc()}")
+        bot.answer_callback_query(call.id, "An error occurred in the dashboard.", show_alert=True)
 @bot.message_handler(commands=['webquiz'])
 @membership_required
 def handle_web_quiz_command(msg: types.Message):
