@@ -5666,6 +5666,144 @@ Use <code>/quizmarathon</code> anytime!
 <i>No worries - we're here when you're ready!</i>"""
 
     bot.send_message(call.from_user.id, cancel_message, parse_mode="HTML")
+def _run_preflight_check(questions_to_check):
+    """
+    Scans a list of questions for data integrity and API compatibility.
+    Returns a list of good questions and a report of any bad ones.
+    """
+    good_questions = []
+    bad_question_report = []
+
+    for q in questions_to_check:
+        errors = []
+        # 1. Data Completeness Check
+        if not q.get('Question') or not q.get('Option A') or not q.get('Option B') or not q.get('Option C') or not q.get('Option D') or not q.get('Correct Answer'):
+            errors.append("Missing essential data (Question, Options, or Correct Answer).")
+        
+        # 2. Telegram API Limit Check
+        if len(q.get('Question', '')) > 300:
+            errors.append(f"Question text is too long ({len(q.get('Question'))}/300 chars).")
+        for opt in ['A', 'B', 'C', 'D']:
+            if len(q.get(f'Option {opt}', '')) > 100:
+                errors.append(f"Option {opt} is too long ({len(q.get(f'Option {opt}'))}/100 chars).")
+        if len(q.get('Explanation', '')) > 200:
+            errors.append(f"Explanation is too long ({len(q.get('Explanation'))}/200 chars).")
+
+        if not errors:
+            good_questions.append(q)
+        else:
+            bad_question_report.append({'id': q.get('id'), 'errors': errors})
+            
+    return good_questions, bad_question_report
+
+
+def process_marathon_question_count(msg: types.Message):
+    """
+    Processes question count, fetches questions, and runs the PRE-FLIGHT CHECK
+    with "smart fetch" logic to replace bad questions automatically.
+    """
+    user_id = msg.from_user.id
+    try:
+        if not has_permission(user_id, 'quizmarathon'): return
+
+        state_data = user_states.get(user_id, {})
+        selected_set = state_data.get('selected_set')
+        setup_message_id = state_data.get('setup_message_id')
+
+        if not selected_set or not setup_message_id:
+            bot.send_message(user_id, "❌ **Session Lost.** Please restart with /quizmarathon.", parse_mode="HTML")
+            return
+        
+        if not msg.text or not msg.text.strip().isdigit():
+            prompt = safe_reply(msg, "❌ Invalid input. Please enter just a number.")
+            bot.register_next_step_handler(prompt, process_marathon_question_count)
+            return
+            
+        num_questions_requested = int(msg.text.strip())
+
+        bot.edit_message_text(f"✅ Understood. Fetching {num_questions_requested} questions for '{escape(selected_set)}' and running Pre-Flight Check...", msg.chat.id, setup_message_id)
+        
+        good_questions = []
+        bad_question_report = []
+        fetched_ids = set()
+        attempts = 0
+        
+        while len(good_questions) < num_questions_requested and attempts < 3:
+            needed = num_questions_requested - len(good_questions)
+            
+            query = supabase.table('quiz_questions').select('*').eq('quiz_set', selected_set).eq('used', False)
+            if fetched_ids:
+                query = query.not_.in_('id', list(fetched_ids))
+            
+            questions_res = query.limit(needed).execute()
+
+            if not questions_res.data:
+                break 
+
+            newly_fetched = questions_res.data
+            validated_good, validation_report = _run_preflight_check(newly_fetched)
+            
+            good_questions.extend(validated_good)
+            bad_question_report.extend(validation_report)
+            
+            for q in newly_fetched:
+                fetched_ids.add(q['id'])
+            
+            attempts += 1
+        
+        user_states[user_id]['good_questions'] = good_questions
+
+        if not bad_question_report:
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("🚀 Launch Marathon to Group", callback_data="preflight_launch"))
+            markup.add(types.InlineKeyboardButton("❌ Cancel", callback_data="preflight_cancel"))
+            report_text = f"✅ **Pre-Flight Check Passed!**\n\nI've validated all <b>{len(good_questions)}</b> requested questions. No issues found.\n\nReady to launch?"
+        else:
+            report_text = f"⚠️ **Pre-Flight Check Complete.**\n\n"
+            if good_questions:
+                 report_text += f"I successfully validated <b>{len(good_questions)}</b> questions, but found issues with <b>{len(bad_question_report)}</b> other(s) that couldn't be replaced:\n\n"
+            else:
+                report_text += f"I could not find any valid questions. Found issues with <b>{len(bad_question_report)}</b> questions:\n\n"
+
+            for report in bad_question_report[:5]:
+                report_text += f" • <b>ID {report['id']}:</b> {escape(report['errors'][0])}\n"
+            
+            markup = types.InlineKeyboardMarkup()
+            if good_questions:
+                markup.add(types.InlineKeyboardButton(f"✅ Launch with {len(good_questions)} Good Questions", callback_data="preflight_launch"))
+            markup.add(types.InlineKeyboardButton("🔄 Choose a Different Set", callback_data="back_to_marathon_setup"))
+            markup.add(types.InlineKeyboardButton("❌ Cancel & I'll Fix Them", callback_data="preflight_cancel"))
+
+        bot.edit_message_text(report_text, msg.chat.id, setup_message_id, reply_markup=markup, parse_mode="HTML")
+
+    except Exception as e:
+        report_error_to_admin(f"Error in process_marathon_question_count: {traceback.format_exc()}")
+        bot.edit_message_text("❌ A critical error occurred during the Pre-Flight Check.", msg.chat.id, state_data.get('setup_message_id'))
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('preflight_'))
+def handle_preflight_action_callback(call: types.CallbackQuery):
+    """
+    Handles the admin's choice after the Pre-Flight Check report.
+    """
+    user_id = call.from_user.id
+    action = call.data.split('_')[1]
+
+    state_data = user_states.get(user_id, {})
+    good_questions = state_data.get('good_questions')
+
+    if action == "launch":
+        if not good_questions:
+            bot.edit_message_text("❌ No valid questions to launch. Please cancel and fix the data.", call.message.chat.id, call.message.message_id)
+            return
+        
+        _launch_marathon_session(user_id, call.message.chat.id, call.message.message_id, good_questions)
+    
+    elif action == "cancel":
+        bot.edit_message_text("❌ Marathon setup cancelled by admin.", call.message.chat.id, call.message.message_id)
+
+    if user_id in user_states:
+        del user_states[user_id]
 
 
 def _launch_marathon_session(user_id, chat_id, message_id, questions_to_run):
@@ -5722,100 +5860,10 @@ def _launch_marathon_session(user_id, chat_id, message_id, questions_to_run):
         send_marathon_question(session_id)
         
     except Exception as e:
-        report_error_to_admin(f"Error in _launch_marathon_session:\n{e}")
+        report_error_to_admin(f"Error in _launch_marathon_session:\n{traceback.format_exc()}")
         error_message = "🚨 **CRITICAL ERROR:** Marathon setup failed during final launch."
         bot.edit_message_text(error_message, chat_id, message_id, parse_mode="HTML")
 
-
-def process_marathon_question_count(msg: types.Message):
-    """
-    Processes question count, fetches questions, and runs the PRE-FLIGHT CHECK
-    with a new "smart fetch" logic to replace bad questions automatically.
-    """
-    user_id = msg.from_user.id
-    try:
-        if not has_permission(user_id, 'quizmarathon'): return
-
-        state_data = user_states.get(user_id, {})
-        selected_set = state_data.get('selected_set')
-        setup_message_id = state_data.get('setup_message_id')
-
-        if not selected_set or not setup_message_id:
-            bot.send_message(user_id, "❌ **Session Lost.** Please restart with /quizmarathon.", parse_mode="HTML")
-            return
-        
-        if not msg.text or not msg.text.strip().isdigit():
-            prompt = safe_reply(msg, "❌ Invalid input. Please enter just a number.")
-            bot.register_next_step_handler(prompt, process_marathon_question_count)
-            return
-            
-        num_questions_requested = int(msg.text.strip())
-
-        bot.edit_message_text(f"✅ Understood. Fetching {num_questions_requested} questions for '{escape(selected_set)}' and running Pre-Flight Check...", msg.chat.id, setup_message_id)
-        
-        # --- NEW "SMART FETCH" LOGIC ---
-        good_questions = []
-        bad_question_report = []
-        fetched_ids = set()
-        attempts = 0
-        
-        while len(good_questions) < num_questions_requested and attempts < 3:
-            needed = num_questions_requested - len(good_questions)
-            
-            # Fetch questions that haven't been fetched in this session yet
-            query = supabase.table('quiz_questions').select('*').eq('quiz_set', selected_set).eq('used', False)
-            if fetched_ids:
-                query = query.not_.in_('id', list(fetched_ids))
-            
-            questions_res = query.limit(needed).execute()
-
-            if not questions_res.data:
-                break # Stop if no more questions are available in the database
-
-            # Validate the newly fetched batch
-            newly_fetched = questions_res.data
-            validated_good, validation_report = _run_preflight_check(newly_fetched)
-            
-            good_questions.extend(validated_good)
-            bad_question_report.extend(validation_report)
-            
-            # Keep track of all IDs we've seen to avoid fetching them again
-            for q in newly_fetched:
-                fetched_ids.add(q['id'])
-            
-            attempts += 1
-        # --- END OF "SMART FETCH" LOGIC ---
-        
-        user_states[user_id]['good_questions'] = good_questions
-
-        if not bad_question_report:
-            # SCENARIO A: All questions are perfect
-            markup = types.InlineKeyboardMarkup()
-            markup.add(types.InlineKeyboardButton("🚀 Launch Marathon to Group", callback_data="preflight_launch"))
-            markup.add(types.InlineKeyboardButton("❌ Cancel", callback_data="preflight_cancel"))
-            report_text = f"✅ **Pre-Flight Check Passed!**\n\nI've validated all <b>{len(good_questions)}</b> requested questions. No issues found.\n\nReady to launch?"
-        else:
-            # SCENARIO B: Some questions had errors (even after trying to replace them)
-            report_text = f"⚠️ **Pre-Flight Check Complete.**\n\n"
-            if good_questions:
-                 report_text += f"I successfully validated <b>{len(good_questions)}</b> questions, but found issues with <b>{len(bad_question_report)}</b> other(s) that couldn't be replaced:\n\n"
-            else:
-                report_text += f"I could not find any valid questions. Found issues with <b>{len(bad_question_report)}</b> questions:\n\n"
-
-            for report in bad_question_report[:5]: # Show details for up to 5 bad questions
-                report_text += f" • <b>ID {report['id']}:</b> {escape(report['errors'][0])}\n"
-            
-            markup = types.InlineKeyboardMarkup()
-            if good_questions:
-                markup.add(types.InlineKeyboardButton(f"✅ Launch with {len(good_questions)} Good Questions", callback_data="preflight_launch"))
-            markup.add(types.InlineKeyboardButton("🔄 Choose a Different Set", callback_data="back_to_marathon_setup"))
-            markup.add(types.InlineKeyboardButton("❌ Cancel & I'll Fix Them", callback_data="preflight_cancel"))
-
-        bot.edit_message_text(report_text, msg.chat.id, setup_message_id, reply_markup=markup, parse_mode="HTML")
-
-    except Exception as e:
-        report_error_to_admin(f"Error in process_marathon_question_count: {traceback.format_exc()}")
-        bot.edit_message_text("❌ A critical error occurred during the Pre-Flight Check.", msg.chat.id, state_data.get('setup_message_id'))
 def _format_marathon_poll_question(question_data, current_idx, total_questions):
     """
     Helper function to create the formatted text for the marathon poll question.
