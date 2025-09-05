@@ -1243,6 +1243,9 @@ def handle_admin_callbacks(call: types.CallbackQuery):
     """
     Master handler for all admin dashboard navigation.
     """
+    # THIS IS THE FIX: The global declaration is now at the top of the function.
+    global PAUSE_DAILY_CHECKS
+
     bot.answer_callback_query(call.id)
     parts = call.data.split('_', 1)
     menu = parts[1]
@@ -1254,8 +1257,6 @@ def handle_admin_callbacks(call: types.CallbackQuery):
     try:
         # --- MAIN MENU ---
         if menu == 'main':
-            # This is called when a user clicks a "Back" button to return to the main dashboard.
-            # It's the same logic as the initial /admin command.
             handle_admin_command(call.message)
             return
 
@@ -1264,7 +1265,6 @@ def handle_admin_callbacks(call: types.CallbackQuery):
             markup = types.InlineKeyboardMarkup(row_width=2)
             session_id = str(GROUP_ID)
             
-            # This is the "conditional logic" for the marathon button
             if QUIZ_SESSIONS.get(session_id, {}).get('is_active'):
                 markup.add(types.InlineKeyboardButton("🛑 Stop Marathon", callback_data="admin_cmd_roko"))
             else:
@@ -1326,7 +1326,6 @@ def handle_admin_callbacks(call: types.CallbackQuery):
         # --- BOT SETTINGS MENU ---
         elif menu == 'settings':
             markup = types.InlineKeyboardMarkup(row_width=1)
-            # Dynamic button for daily checks
             if PAUSE_DAILY_CHECKS:
                 markup.add(types.InlineKeyboardButton("▶️ Resume Daily Warnings", callback_data="admin_toggle_pause"))
             else:
@@ -1365,42 +1364,27 @@ def handle_admin_callbacks(call: types.CallbackQuery):
         # --- COMMAND HANDLERS ---
         elif menu.startswith('cmd_'):
             command_name = menu.split('_', 1)[1]
-            # For simple commands, we can call the handler directly
             simple_commands = ['randomquiz', 'randomquizvisual', 'roko', 'rankers', 'alltimerankers', 
                                'leaderboard', 'webresult', 'bdhai', 'activity_report', 'motivate', 
                                'studytip', 'examcountdown', 'prunedms', 'sync_members', 'reset_content']
             
-            # For commands that need user input
             conversational_commands = {
-                'quizmarathon': "Okay, starting marathon setup...",
-                'teambattle': "Okay, starting team battle setup...",
-                'notify': "Please provide the minutes (e.g., /notify 15):",
-                'add_resource': "Okay, starting the resource upload process...",
-                'add_rq': "Okay, starting the Random Quiz image upload process...",
-                'add_qm': "Okay, starting the Marathon Quiz image upload process...",
-                'promote': "Please provide the username (e.g., /promote @username):",
-                'revoke': "Please provide the username (e.g., /revoke @username):",
-                'demote': "Please provide the username (e.g., /demote @username):",
-                'viewperms': "Please provide the username (e.g., /viewperms @username):",
-                'dm': "Okay, starting the Direct Message process...",
-                'announce': "Okay, starting the announcement creator..."
+                'quizmarathon': "Okay, starting marathon setup...", 'teambattle': "Okay, starting team battle setup...",
+                'notify': "Please provide the minutes (e.g., /notify 15):", 'add_resource': "Okay, starting the resource upload process...",
+                'add_rq': "Okay, starting the Random Quiz image upload process...", 'add_qm': "Okay, starting the Marathon Quiz image upload process...",
+                'promote': "Please provide the username (e.g., /promote @username):", 'revoke': "Please provide the username (e.g., /revoke @username):",
+                'demote': "Please provide the username (e.g., /demote @username):", 'viewperms': "Please provide the username (e.g., /viewperms @username):",
+                'dm': "Okay, starting the Direct Message process...", 'announce': "Okay, starting the announcement creator..."
             }
 
-            if command_name in simple_commands:
-                bot.edit_message_text(f"✅ Executing `/{command_name}`...", call.message.chat.id, call.message.message_id)
-                # We create a fake message object so the handler works as expected
+            if command_name in simple_commands or command_name in conversational_commands:
+                bot.edit_message_text(f"✅ Executing `/{command_name}`... Please follow the instructions in the new message.", call.message.chat.id, call.message.message_id)
                 fake_message = call.message
                 fake_message.from_user = call.from_user
-                # Find the actual handler function and call it
-                handler = globals().get(f"handle_{command_name}")
-                if handler:
-                    handler(fake_message)
-            elif command_name in conversational_commands:
-                bot.edit_message_text(f"Okay, switching to the `/{command_name}` command. Please follow the instructions in the new message.", call.message.chat.id, call.message.message_id)
-                # Create a fake message and call the handler to start the conversation
-                fake_message = call.message
-                fake_message.from_user = call.from_user
-                handler = globals().get(f"handle_{command_name}_command") or globals().get(f"handle_{command_name}")
+                
+                handler_name = f"handle_{command_name}_command" if command_name not in ['teambattle', 'motivate', 'studytip', 'announce', 'dm', 'reset_content'] else f"handle_{command_name}"
+                handler = globals().get(handler_name)
+                
                 if handler:
                     handler(fake_message)
             else:
@@ -1408,16 +1392,16 @@ def handle_admin_callbacks(call: types.CallbackQuery):
                 
         # --- SETTINGS TOGGLE ---
         elif menu == 'toggle_pause':
-            global PAUSE_DAILY_CHECKS
             PAUSE_DAILY_CHECKS = not PAUSE_DAILY_CHECKS
             bot.answer_callback_query(call.id, f"Daily checks are now {'PAUSED' if PAUSE_DAILY_CHECKS else 'ACTIVE'}.")
-            # Refresh the settings menu to show the new state
-            handle_admin_callbacks(type('obj', (object,), {'data': 'admin_settings', 'message': call.message, 'id': call.id}))
-
+            
+            fake_call = types.CallbackQuery(id=call.id, from_user=call.from_user, data='admin_settings', chat_instance=call.chat_instance, message=call.message)
+            handle_admin_callbacks(fake_call)
 
     except Exception as e:
         report_error_to_admin(f"Error in admin dashboard: {traceback.format_exc()}")
         bot.answer_callback_query(call.id, "An error occurred in the dashboard.", show_alert=True)
+
 @bot.message_handler(commands=['webquiz'])
 @membership_required
 def handle_web_quiz_command(msg: types.Message):
