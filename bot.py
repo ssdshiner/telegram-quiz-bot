@@ -1189,7 +1189,7 @@ def process_resource_description_step_6(msg: types.Message):
 @membership_required
 def handle_web_quiz_command(msg: types.Message):
     """
-    Sends a simple button to open the static Web App quiz.
+    Sends a simple button to open the static Web App quiz using the robust send_message method.
     """
     try:
         user_id = msg.from_user.id
@@ -1197,21 +1197,28 @@ def handle_web_quiz_command(msg: types.Message):
 
         if not WEBAPP_URL:
             report_error_to_admin("CRITICAL: WEBAPP_URL is not set!")
-            bot.reply_to(msg, "❌ Error: Web App URL is not configured.")
+            safe_reply(msg, "❌ Error: Web App URL is not configured.")
             return
 
-        # Simple URL with user details, pointing to your /quiz/ folder
-        web_app_url = f"{WEBAPP_URL.rstrip('/')}/quiz/?user_id={user_id}&user_name={quote(user_name)}"
+        # Simple URL with user details for the web app
+        web_app_url = f"{WEBAPP_URL.rstrip('/')}/?user_id={user_id}&user_name={quote(user_name)}"
 
         markup = types.InlineKeyboardMarkup()
         markup.add(
             types.InlineKeyboardButton("🚀 Start Web Quiz Challenge", web_app=types.WebAppInfo(url=web_app_url))
         )
         
-        bot.reply_to(
-            msg,
+        # Using the more robust send_message with reply_parameters to prevent errors
+        reply_params = types.ReplyParameters(
+            message_id=msg.message_id,
+            allow_sending_without_reply=True
+        )
+        
+        bot.send_message(
+            msg.chat.id,
             "Ready to test your knowledge? Click the button below to start the interactive quiz!",
-            reply_markup=markup
+            reply_markup=markup,
+            reply_parameters=reply_params
         )
     except Exception as e:
         report_error_to_admin(f"Error in /webquiz command: {traceback.format_exc()}")
@@ -1257,56 +1264,6 @@ def handle_webquiz_set_selection(call: types.CallbackQuery):
         report_error_to_admin(f"Error in handle_webquiz_set_selection: {traceback.format_exc()}")
         bot.answer_callback_query(call.id, "An error occurred.", show_alert=True)
 
-def process_webapp_quiz_results(data):
-    """
-    Handles different payloads from the web app based on the user's final plan.
-    1. 'quiz_completed_notification': Saves data and notifies the admin.
-    """
-    try:
-        payload_type = data.get('type')
-        if payload_type != 'quiz_completed_notification':
-            return # This function only handles the automatic notification
-
-        user_id = data.get('userId')
-        user_name = escape(data.get('userName', 'A participant'))
-        score = data.get('score', 0)
-        correct = data.get('correct', 0)
-        total = data.get('total', 0)
-        quiz_set = escape(data.get('quizSet', 'Web Quiz'))
-        time_taken = data.get('timeTakenSeconds', 0)
-        strongest = escape(data.get('strongestTopic', 'N/A'))
-        weakest = escape(data.get('weakestTopic', 'N/A'))
-        
-        # Save the full result to Supabase and get the new record's ID
-        try:
-            response = supabase.table('web_quiz_results').insert({
-                'user_id': user_id, 'user_name': user_name, 'quiz_set': quiz_set,
-                'score_percentage': score, 'correct_answers': correct, 'total_questions': total,
-                'time_taken_seconds': time_taken, 'strongest_topic': strongest, 'weakest_topic': weakest
-            }).execute()
-            
-            new_result_id = response.data[0]['id']
-            print(f"Successfully saved web quiz result (ID: {new_result_id}) for {user_name}.")
-
-            # Send a detailed notification to the admin's DM with a "Post to Group" button
-            admin_summary = (
-                f"🔔 **New Web Quiz Submission!**\n\n"
-                f"👤 **User:** {user_name}\n"
-                f"📚 **Quiz:** {quiz_set}\n"
-                f"📊 **Score:** <b>{score}%</b> ({correct}/{total})\n"
-                f"⏱️ **Time:** {time_taken}s\n\n"
-                f"<i>Do you want to post this result in the group?</i>"
-            )
-            
-            markup = types.InlineKeyboardMarkup()
-            markup.add(types.InlineKeyboardButton("✅ Yes, Post to Group", callback_data=f"post_web_result_{new_result_id}"))
-            bot.send_message(ADMIN_USER_ID, admin_summary, parse_mode="HTML", reply_markup=markup)
-
-        except Exception as db_error:
-            report_error_to_admin(f"Error saving/notifying web quiz result: {traceback.format_exc()}")
-        
-    except Exception as e:
-        report_error_to_admin(f"Error processing webapp quiz result: {traceback.format_exc()}")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('post_web_result_'))
 def handle_post_web_result_callback(call: types.CallbackQuery):
