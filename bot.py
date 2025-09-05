@@ -6133,11 +6133,16 @@ def send_marathon_results(session_id):
 
         # --- 1. Reliably update used questions in the database ---
         try:
-            used_question_ids = [q['id'] for q in questions]
+            # --- THIS IS THE FIX ---
+            # We now convert each question ID to a string to prevent data type errors.
+            used_question_ids = [str(q['id']) for q in questions]
+
             if used_question_ids:
                 supabase.table('quiz_questions').update({'used': True}).in_('id', used_question_ids).execute()
                 print(f"Successfully marked {len(used_question_ids)} questions as used for marathon.")
         except Exception as e:
+            # Added more detailed error logging here
+            print(f"CRITICAL ERROR: Failed to mark marathon questions as used. Error: {e}")
             report_error_to_admin(f"CRITICAL: Failed to mark marathon questions as used.\n\nError: {traceback.format_exc()}")
         
         safe_quiz_title = escape(session.get('title', 'Quiz Marathon'))
@@ -6152,12 +6157,9 @@ def send_marathon_results(session_id):
         marathon_duration = datetime.datetime.now() - session['stats']['start_time']
         
         efficiency_champion = None
-        # User must answer at least 40% of questions to qualify for efficiency award
         qualified_for_efficiency = [p for p in sorted_participants if p.get('questions_answered', 0) >= (total_questions_asked * 0.4)]
         if len(qualified_for_efficiency) > 1:
-            # Sort by lowest average time per question
             qualified_for_efficiency.sort(key=lambda p: p.get('total_time', 9999) / p.get('questions_answered', 1))
-            # Find the fastest person who is NOT the main champion
             for p in qualified_for_efficiency:
                 if p['name'] != sorted_participants[0]['name']:
                     efficiency_champion = p
@@ -6202,7 +6204,6 @@ def send_marathon_results(session_id):
         type_stats, topic_stats = {}, {}
         question_stats = session.get('question_stats', {})
 
-        # Aggregate performance data from all participants
         for p_data in participants.values():
             for topic, types in p_data.get('performance_breakdown', {}).items():
                 topic_stats.setdefault(topic, {'correct': 0, 'total': 0, 'time': 0})
@@ -6250,14 +6251,12 @@ def send_marathon_results(session_id):
         print(f"Cleaning up session data for session_id: {session_id}")
         with session_lock:
             if session_id in QUIZ_SESSIONS:
-                # Final check to cancel any lingering timer
                 timer = QUIZ_SESSIONS[session_id].get('timer')
                 if timer:
                     timer.cancel()
                 del QUIZ_SESSIONS[session_id]
             if session_id in QUIZ_PARTICIPANTS:
                 del QUIZ_PARTICIPANTS[session_id]
-
 # =============================================================================
 # 8. TELEGRAM BOT HANDLERS - RANKING & ADMIN UTILITIES
 # =============================================================================
