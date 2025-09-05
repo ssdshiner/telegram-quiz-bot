@@ -1255,22 +1255,24 @@ def handle_admin_callbacks(call: types.CallbackQuery):
     Master handler for all admin dashboard navigation with a robust command router.
     """
     global PAUSE_DAILY_CHECKS
-# This is the new, reliable Command Router. It maps button names to their functions.
-ADMIN_COMMAND_ROUTER = {
-    'quizmarathon': start_marathon_setup, 'teambattle': handle_team_battle_command,
-    'randomquiz': handle_random_quiz, 'randomquizvisual': handle_randomquizvisual,
-    'roko': handle_stop_marathon_command, 'notify': handle_notify_command,
-    'add_resource': handle_add_resource, 'add_rq': handle_add_rq, 'add_qm': handle_add_qm,
-    'announce': handle_announce_command, 'examcountdown': handle_exam_countdown,
-    'motivate': handle_motivation_command, 'studytip': handle_study_tip_command,
-    'reset_content': handle_reset_content, 'promote': handle_promote_command,
-    'revoke': handle_revoke_command, 'demote': handle_demote_command,
-    'viewperms': handle_view_perms, 'dm': handle_dm_command,
-    'alltimerankers': handle_all_time_rankers, 'rankers': handle_weekly_rankers,
-    'leaderboard': handle_leaderboard, 'webresult': handle_web_result_command,
-    'activity_report': handle_activity_report, 'bdhai': handle_congratulate_command,
-    'prunedms': handle_prune_dms, 'sync_members': handle_sync_members
-}
+    
+    # The command router is now correctly defined INSIDE the function.
+    ADMIN_COMMAND_ROUTER = {
+        'quizmarathon': start_marathon_setup, 'teambattle': handle_team_battle_command,
+        'randomquiz': handle_random_quiz, 'randomquizvisual': handle_randomquizvisual,
+        'roko': handle_stop_marathon_command, 'notify': handle_notify_command,
+        'add_resource': handle_add_resource, 'add_rq': handle_add_rq, 'add_qm': handle_add_qm,
+        'announce': handle_announce_command, 'examcountdown': handle_exam_countdown,
+        'motivate': handle_motivation_command, 'studytip': handle_study_tip_command,
+        'reset_content': handle_reset_content, 'promote': handle_promote_command,
+        'revoke': handle_revoke_command, 'demote': handle_demote_command,
+        'viewperms': handle_view_perms, 'dm': handle_dm_command,
+        'alltimerankers': handle_all_time_rankers, 'rankers': handle_weekly_rankers,
+        'leaderboard': handle_leaderboard, 'webresult': handle_web_result_command,
+        'activity_report': handle_activity_report, 'bdhai': handle_congratulate_command,
+        'prunedms': handle_prune_dms, 'sync_members': handle_sync_members
+    }
+
     bot.answer_callback_query(call.id)
     parts = call.data.split('_', 1)
     menu = parts[1]
@@ -1280,7 +1282,6 @@ ADMIN_COMMAND_ROUTER = {
 
     try:
         if menu == 'main':
-            # FIX #1: This now correctly EDITS the message instead of sending a new one.
             text, markup = _build_admin_main_menu()
             bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
             return
@@ -1301,7 +1302,6 @@ ADMIN_COMMAND_ROUTER = {
             text = "🧠 **Quiz & Practice**\nTheek hai, chaliye quiz manage karte hain. Kya karna hai?"
             bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
 
-        # ... (other elif blocks for content, member, etc. are correct and remain the same) ...
         elif menu == 'content':
             markup = types.InlineKeyboardMarkup(row_width=1)
             markup.add(
@@ -1377,24 +1377,19 @@ ADMIN_COMMAND_ROUTER = {
             text = "💬 **Manage Quotes & Tips**\nChaliye group ko thoda motivate karte hain."
             bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
 
-        # FIX #2: This block is rewritten to correctly trigger the command functions.
         elif menu.startswith('cmd_'):
             command_name = menu.split('_', 1)[1]
             handler = ADMIN_COMMAND_ROUTER.get(command_name)
             
             if handler:
-                # Let the admin know the command is starting.
-                bot.edit_message_text(f"✅ Okay, starting the `/{command_name}` command flow...\n\nPlease follow the instructions in our private chat.", call.message.chat.id, call.message.message_id, parse_mode='HTML')
+                bot.edit_message_text(f"✅ Executing `/{command_name}`... Please follow the instructions in the new message.", call.message.chat.id, call.message.message_id, parse_mode='HTML')
                 
-                # We need to create a proper "fake" message object for the handler to work.
-                # This ensures the handler knows the chat ID and user who clicked.
-                FakeMessage = namedtuple('FakeMessage', ['chat', 'from_user', 'text'])
+                FakeMessage = namedtuple('FakeMessage', ['chat', 'from_user', 'text', 'message_id'])
                 FakeChat = namedtuple('FakeChat', ['id', 'type'])
                 
                 fake_chat = FakeChat(id=call.message.chat.id, type='private')
-                fake_message = FakeMessage(chat=fake_chat, from_user=call.from_user, text=f'/{command_name}')
+                fake_message = FakeMessage(chat=fake_chat, from_user=call.from_user, text=f'/{command_name}', message_id=call.message.message_id)
                 
-                # Execute the actual command handler function
                 handler(fake_message)
             else:
                 bot.answer_callback_query(call.id, "Error: Command handler not found.", show_alert=True)
