@@ -146,9 +146,6 @@ def safe_send_message_wrapper(chat_id, text, **kwargs):
 
 # Replace the library's function with our new, safer version
 bot.send_message = safe_send_message_wrapper
-# Also replace reply_to, as it sometimes uses a different internal path
-original_reply_to = bot.reply_to
-bot.reply_to = safe_send_message_wrapper
 
 print("✅ Applied universal safe reply patch.")
 # =============================================================================
@@ -485,63 +482,119 @@ def membership_required(func):
                 else:
                     return
     return wrapper
+
 # =============================================================================
-# 5. HELPER FUNCTIONS (Continued) - Core Logic
+# 5. HELPER FUNCTIONS (Continued) - NEW ADVANCED VAULT BROWSER
 # =============================================================================
-def create_file_list_page(page=1):
+
+def create_compact_file_list_page(group, subject, resource_type, page=1):
     """
-    Fetches all resources and generates the text and button markup for a specific page.
-    Returns: A tuple (message_text, reply_markup_object)
+    Creates the new, "not bulky" paginated file list for a specific category.
     """
     try:
-        # 'count' parameter total files ka number dega pagination ke liye
-        response = supabase.table('resources').select('id, file_id, file_name', count='exact').order('file_name').execute()
+        offset = (page - 1) * FILES_PER_PAGE
         
-        if not hasattr(response, 'data'):
-             return "❌ An error occurred while fetching data from the Vault.", None
-
-        all_files = response.data
-        total_files = response.count
+        # Fetch the total count for pagination
+        count_res = supabase.table('resources').select('id', count='exact').eq('group_name', group).eq('subject', subject).eq('resource_type', resource_type).execute()
+        total_files = count_res.count
         
         if total_files == 0:
-            return "📚 The CA Vault is currently empty. Resources will be added soon!", None
+            return "📂 This category is empty.", None
 
+        # Fetch the files for the current page
+        files_res = supabase.table('resources').select('*').eq('group_name', group).eq('subject', subject).eq('resource_type', resource_type).order('file_name').range(offset, offset + FILES_PER_PAGE - 1).execute()
+        files_on_page = files_res.data
+        
         total_pages = (total_files + FILES_PER_PAGE - 1) // FILES_PER_PAGE
-        page = max(1, min(page, total_pages)) # Ensure page number is valid
+        
+        # --- Build the "Not Bulky" Message ---
+        message_text = f"<b>{escape(subject)} - {escape(resource_type)}</b> (Page {page}/{total_pages})\n\n"
+        message_text += "Click a number to download the file:\n\n"
+        
+        buttons = []
+        for i, resource in enumerate(files_on_page, 1):
+            message_text += f"<code>{i}.</code> <b>{escape(resource['file_name'])}</b>\n"
+            buttons.append(types.InlineKeyboardButton(str(i), callback_data=f"getfile_{resource['id']}"))
+            
+        markup = types.InlineKeyboardMarkup(row_width=5)
+        markup.add(*buttons) # Add all the number buttons
 
-        # Calculate which files to show on the current page
-        start_index = (page - 1) * FILES_PER_PAGE
-        end_index = start_index + FILES_PER_PAGE
-        files_on_page = all_files[start_index:end_index]
-        
-        markup = types.InlineKeyboardMarkup(row_width=1)
-        
-        # Create a button for each file on the page
-        for resource in files_on_page:
-            button = types.InlineKeyboardButton(
-                text=f"📄 {escape(resource['file_name'])}",
-                # Yeh 'getfile_' callback hamare purane /need command wale handler ko trigger karega
-                callback_data=f"getfile_{resource['id']}"
-            )
-            markup.add(button)
-        
-        # Create Next/Previous navigation buttons
+        # --- Navigation Buttons ---
         nav_buttons = []
         if page > 1:
-            nav_buttons.append(types.InlineKeyboardButton("⬅️ Previous", callback_data=f"listpage_{page-1}"))
+            nav_buttons.append(types.InlineKeyboardButton("⬅️ Prev", callback_data=f"v_page_{page-1}_{group}_{subject}_{resource_type}"))
+        
+        # Back button goes to the resource type selection for that subject
+        nav_buttons.append(types.InlineKeyboardButton("↩️ Back", callback_data=f"v_subj_{group}_{subject}"))
+
         if page < total_pages:
-            nav_buttons.append(types.InlineKeyboardButton("Next ➡️", callback_data=f"listpage_{page+1}"))
+            nav_buttons.append(types.InlineKeyboardButton("Next ➡️", callback_data=f"v_page_{page+1}_{group}_{subject}_{resource_type}"))
         
-        if nav_buttons:
-            markup.row(*nav_buttons)
-        
-        text = f"📚 <b>The CA Vault - Page {page}/{total_pages}</b> 📚\n\nClick any file to download it directly:"
-        return text, markup
+        markup.row(*nav_buttons)
+        return message_text, markup
 
     except Exception as e:
-        print(f"Error creating file list page: {traceback.format_exc()}")
-        report_error_to_admin(f"Error in create_file_list_page: {e}")
-        return "❌ An error occurred while fetching the file list.", None
+        report_error_to_admin(f"Error in create_compact_file_list_page: {traceback.format_exc()}")
+        return "❌ An error occurred while fetching files.", None
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('v_'))
+def handle_vault_callbacks(call: types.CallbackQuery):
+    """
+    Master handler for all vault navigation callbacks.
+    """
+    bot.answer_callback_query(call.id)
+    parts = call.data.split('_')
+    action = parts[1]
+    
+    try:
+        # Action: Go back to the main menu (Group selection)
+        if action == 'main':
+            markup = types.InlineKeyboardMarkup(row_width=2)
+            markup.add(
+                types.InlineKeyboardButton("🔵 Group 1", callback_data="v_group_Group 1"),
+                types.InlineKeyboardButton("🟢 Group 2", callback_data="v_group_Group 2")
+            )
+            bot.edit_message_text("🗂️ Welcome to the CA Vault!\n\nPlease select a Group to begin.", call.message.chat.id, call.message.message_id, reply_markup=markup)
+
+        # Action: A Group was selected
+        elif action == 'group':
+            group_name = parts[2]
+            subjects = {
+                "Group 1": ["Accounts", "Law", "Income Tax", "GST", "Audio Notes"],
+                "Group 2": ["Costing", "Auditing", "FM", "SM", "Audio Notes"]
+            }
+            buttons = [types.InlineKeyboardButton(f"📚 {subj}", callback_data=f"v_subj_{group_name}_{subj}") for subj in subjects[group_name]]
+            markup = types.InlineKeyboardMarkup(row_width=2)
+            markup.add(*buttons)
+            markup.add(types.InlineKeyboardButton("↩️ Back to Main Menu", callback_data="v_main"))
+            bot.edit_message_text(f"🔵 **{group_name}**\n\nPlease select a subject:", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
+
+        # Action: A Subject was selected
+        elif action == 'subj':
+            group_name, subject = parts[2], parts[3]
+            resource_types = ["ICAI Module", "Faculty Notes", "QPs & Revision"]
+            buttons = [types.InlineKeyboardButton(f"📘 {rtype}", callback_data=f"v_type_{group_name}_{subject}_{rtype}") for rtype in resource_types]
+            markup = types.InlineKeyboardMarkup(row_width=1)
+            markup.add(*buttons)
+            markup.add(types.InlineKeyboardButton("↩️ Back to Subjects", callback_data=f"v_group_{group_name}"))
+            bot.edit_message_text(f"📚 **{subject}**\n\nWhat are you looking for?", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
+
+        # Action: A Resource Type was selected (show the file list for the first time)
+        elif action == 'type':
+            group, subject, rtype = parts[2], parts[3], parts[4]
+            text, markup = create_compact_file_list_page(group, subject, rtype, page=1)
+            bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
+
+        # Action: Pagination (Next/Previous) for the file list
+        elif action == 'page':
+            page, group, subject, rtype = int(parts[2]), parts[3], parts[4], parts[5]
+            text, markup = create_compact_file_list_page(group, subject, rtype, page=page)
+            bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
+
+    except Exception as e:
+        report_error_to_admin(f"Error in vault navigation: {traceback.format_exc()}")
+        bot.edit_message_text("❌ An error occurred. Please try again from /listfile.", call.message.chat.id, call.message.message_id)
 def create_main_menu_keyboard(message: types.Message):
     """
     Creates the main menu keyboard.
@@ -967,118 +1020,171 @@ def save_quiz_result():
 @permission_required('add_resource')
 def handle_add_resource(msg: types.Message):
     """
-    Starts the conversational flow for adding a new resource to the Vault.
-    Accessible only by admins and contributors in private chat.
+    Starts the new, categorized flow for adding a resource to the Vault.
     """
-    user_id = msg.from_user.id
     if not msg.chat.type == 'private':
-        bot.reply_to(msg, "🤫 Please use this command in a private chat with me.")
+        safe_reply(msg, "🤫 Please use this command in a private chat with me.")
         return
 
+    user_id = msg.from_user.id
     if user_id in user_states:
-        bot.reply_to(msg, "⚠️ You are already in the middle of another command. Please finish it or type /cancel before starting a new one.")
+        safe_reply(msg, "⚠️ You are already in the middle of another command. Please finish it or type /cancel before starting a new one.")
         return
 
-    # THIS IS THE CHANGE: Added a timestamp
-    user_states[user_id] = {'action': 'adding_resource', 'timestamp': time.time()}
+    user_states[user_id] = {'action': 'adding_resource', 'step': 'awaiting_file', 'timestamp': time.time()}
     
-    prompt_text = "Okay, let's add a new resource to the Vault.\n\n<b>Step 1 of 3:</b> Please upload the document/file now."
+    prompt_text = "Okay, let's add a new resource to the Vault.\n\n<b>Step 1:</b> Please upload the document, audio, photo, or video file now."
     prompt = bot.send_message(user_id, prompt_text, parse_mode="HTML")
-    bot.register_next_step_handler(prompt, process_resource_file)
+    bot.register_next_step_handler(prompt, process_resource_file_step_1)
 
-def process_resource_file(msg: types.Message):
-    """Step 2: Receives the file and asks for keywords."""
+def process_resource_file_step_1(msg: types.Message):
+    """Step 1: Receives the file and asks for the Group."""
     user_id = msg.from_user.id
-    file_id = None
-    file_name = "N/A"
-    file_type = "N/A"
+    
+    # Ensure user is in the correct state
+    if user_states.get(user_id, {}).get('step') != 'awaiting_file':
+        return
 
+    file_id, file_name, file_type = None, "N/A", "N/A"
     if msg.document:
-        file_id = msg.document.file_id
-        file_name = msg.document.file_name
-        file_type = msg.document.mime_type
+        file_id, file_name, file_type = msg.document.file_id, msg.document.file_name, msg.document.mime_type
     elif msg.photo:
-        file_id = msg.photo[-1].file_id
-        # Photos don't have a file_name, so we create a default one
-        file_name = f"photo_{msg.date}.jpg"
-        file_type = "image/jpeg"
+        file_id, file_name, file_type = msg.photo[-1].file_id, f"photo_{msg.date}.jpg", "image/jpeg"
     elif msg.video:
-        file_id = msg.video.file_id
-        file_name = msg.video.file_name
-        file_type = msg.video.mime_type
+        file_id, file_name, file_type = msg.video.file_id, msg.video.file_name, msg.video.mime_type
     elif msg.audio:
-        # --- THIS IS THE NEW PART ---
-        file_id = msg.audio.file_id
-        file_name = msg.audio.file_name or f"audio_{msg.date}.mp3" # Use a default name if one isn't provided
-        file_type = msg.audio.mime_type
+        file_id, file_name, file_type = msg.audio.file_id, msg.audio.file_name or f"audio_{msg.date}.mp3", msg.audio.mime_type
     else:
-        # --- ERROR MESSAGE IS UPDATED HERE ---
-        prompt = bot.reply_to(msg, "That doesn't seem to be a valid file. Please upload a document, photo, video, or audio file.\n\nOr type /cancel to stop.")
-        bot.register_next_step_handler(prompt, process_resource_file)
+        prompt = safe_reply(msg, "That's not a valid file. Please upload a document, photo, video, or audio file.\n\nOr type /cancel to stop.")
+        bot.register_next_step_handler(prompt, process_resource_file_step_1)
         return
 
-    user_states[user_id]['file_id'] = file_id
-    user_states[user_id]['file_name'] = file_name
-    user_states[user_id]['file_type'] = file_type
+    user_states[user_id].update({
+        'file_id': file_id,
+        'file_name': file_name,
+        'file_type': file_type,
+        'step': 'awaiting_group'
+    })
+
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("🔵 Group 1", callback_data="add_group_Group 1"),
+        types.InlineKeyboardButton("🟢 Group 2", callback_data="add_group_Group 2")
+    )
+    bot.send_message(user_id, f"✅ File received: <code>{escape(file_name)}</code>\n\n<b>Step 2:</b> Which Group does this file belong to?", reply_markup=markup, parse_mode="HTML")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('add_'))
+def handle_add_resource_callbacks(call: types.CallbackQuery):
+    """Handles the button-based steps of adding a resource."""
+    user_id = call.from_user.id
+    message_id = call.message.message_id
     
-    prompt_text = (f"✅ File received: <code>{escape(file_name)}</code>\n\n"
-                   f"<b>Step 2 of 3:</b> Now, please provide search keywords for this file, separated by commas.\n\n"
-                   f"<i>Example:</i> <code>accounts, as19, leases, notes</code>")
-    prompt = bot.send_message(user_id, prompt_text, parse_mode="HTML")
-    bot.register_next_step_handler(prompt, process_resource_keywords)
+    if user_id not in user_states or user_states[user_id].get('action') != 'adding_resource':
+        bot.edit_message_text("❌ This action has expired. Please start over with /add_resource.", call.message.chat.id, message_id)
+        return
+
+    parts = call.data.split('_', 2)
+    step_type = parts[1]
+    value = parts[2]
+
+    try:
+        if step_type == 'group':
+            user_states[user_id]['group_name'] = value
+            user_states[user_id]['step'] = 'awaiting_subject'
+            
+            subjects = {
+                "Group 1": ["Accounts", "Law", "Income Tax", "GST", "Audio Notes"],
+                "Group 2": ["Costing", "Auditing", "FM", "SM", "Audio Notes"]
+            }
+            buttons = [types.InlineKeyboardButton(f"📚 {subj}", callback_data=f"add_subject_{subj}") for subj in subjects[value]]
+            markup = types.InlineKeyboardMarkup(row_width=2).add(*buttons)
+            bot.edit_message_text(f"✅ Group set to **{value}**.\n\n<b>Step 3:</b> Now, please select a subject.", call.message.chat.id, message_id, reply_markup=markup, parse_mode="HTML")
+
+        elif step_type == 'subject':
+            user_states[user_id]['subject'] = value
+            user_states[user_id]['step'] = 'awaiting_type'
+
+            resource_types = ["ICAI Module", "Faculty Notes", "QPs & Revision"]
+            buttons = [types.InlineKeyboardButton(f"📘 {rtype}", callback_data=f"add_type_{rtype}") for rtype in resource_types]
+            markup = types.InlineKeyboardMarkup(row_width=1).add(*buttons)
+            bot.edit_message_text(f"✅ Subject set to **{value}**.\n\n<b>Step 4:</b> What type of resource is this?", call.message.chat.id, message_id, reply_markup=markup, parse_mode="HTML")
+
+        elif step_type == 'type':
+            user_states[user_id]['resource_type'] = value
+            user_states[user_id]['step'] = 'awaiting_keywords'
+
+            bot.edit_message_text(f"✅ Resource type set to **{value}**.\n\n<b>Step 5:</b> Please provide search keywords, separated by commas (e.g., <code>accounts, as19</code>).", call.message.chat.id, message_id, parse_mode="HTML")
+            # We now need the user to type, so we register the next step handler from here.
+            # We need to send a dummy message to get the chat object for the handler.
+            dummy_prompt = bot.send_message(user_id, "Enter keywords now:")
+            bot.delete_message(user_id, dummy_prompt.message_id) # Delete the dummy message
+            bot.register_next_step_handler(call.message, process_resource_keywords_step_5)
+    
+    except Exception as e:
+        report_error_to_admin(f"Error in add_resource callback: {traceback.format_exc()}")
+        bot.edit_message_text("❌ An error occurred. Please start over with /add_resource.", call.message.chat.id, message_id)
 
 
-def process_resource_keywords(msg: types.Message):
-    """Step 3: Receives keywords and asks for a description."""
+def process_resource_keywords_step_5(msg: types.Message):
+    """Step 5: Receives keywords and asks for a description."""
     user_id = msg.from_user.id
+    if user_states.get(user_id, {}).get('step') != 'awaiting_keywords': return
+
     if not msg.text or msg.text.startswith('/'):
-        prompt = bot.reply_to(msg, "Invalid input. Please provide at least one keyword.\n\nOr type /cancel to stop.")
-        bot.register_next_step_handler(prompt, process_resource_keywords)
+        prompt = safe_reply(msg, "Invalid input. Please provide at least one keyword.\n\nOr type /cancel to stop.")
+        bot.register_next_step_handler(prompt, process_resource_keywords_step_5)
         return
         
     keywords = [keyword.strip().lower() for keyword in msg.text.split(',')]
     user_states[user_id]['keywords'] = keywords
+    user_states[user_id]['step'] = 'awaiting_description'
     
-    # THE FIX: Converted to safe HTML and escaped the keywords
     prompt_text = (f"✅ Keywords saved: <code>{escape(', '.join(keywords))}</code>\n\n"
-                   f"<b>Step 3 of 3:</b> Now, please provide a short, one-line description for this file.")
+                   f"<b>Step 6 (Final):</b> Please provide a short, one-line description for this file.")
     prompt = bot.send_message(user_id, prompt_text, parse_mode="HTML")
-    bot.register_next_step_handler(prompt, process_resource_description)
-def process_resource_description(msg: types.Message):
-    """Step 4: Receives description and saves everything to the database."""
+    bot.register_next_step_handler(prompt, process_resource_description_step_6)
+
+def process_resource_description_step_6(msg: types.Message):
+    """Step 6: Receives description and saves everything to the database."""
     user_id = msg.from_user.id
+    if user_states.get(user_id, {}).get('step') != 'awaiting_description': return
+
     if not msg.text or msg.text.startswith('/'):
-        prompt = bot.reply_to(msg, "Invalid input. Please provide a description.\n\nOr type /cancel to stop.")
-        bot.register_next_step_handler(prompt, process_resource_description)
+        prompt = safe_reply(msg, "Invalid input. Please provide a description.\n\nOr type /cancel to stop.")
+        bot.register_next_step_handler(prompt, process_resource_description_step_6)
         return
         
-    user_data = user_states.get(user_id, {})
+    user_data = user_states[user_id]
     user_data['description'] = msg.text.strip()
     
     try:
+        # Save all the collected data to the database
         supabase.table('resources').insert({
             'file_id': user_data['file_id'],
             'file_name': user_data['file_name'],
             'file_type': user_data['file_type'],
             'keywords': user_data['keywords'],
             'description': user_data['description'],
+            'group_name': user_data['group_name'],
+            'subject': user_data['subject'],
+            'resource_type': user_data['resource_type'],
             'added_by_id': user_id,
             'added_by_name': msg.from_user.first_name
         }).execute()
         
-        # THE FIX: Converted confirmation message to safe HTML
         file_name_safe = escape(user_data['file_name'])
         success_message = (f"✅ <b>Resource Saved!</b>\n\n"
                            f"<code>{file_name_safe}</code> has been successfully added to the Vault and is now available for all members.")
         bot.send_message(user_id, success_message, parse_mode="HTML")
         
     except Exception as e:
-        print(f"Error saving resource to DB: {traceback.format_exc()}")
-        report_error_to_admin(f"Could not save resource to Vault:\n{e}")
+        report_error_to_admin(f"Could not save resource to Vault:\n{traceback.format_exc()}")
         bot.send_message(user_id, "❌ A critical error occurred while saving the resource to the database.")
     finally:
+        # Clean up the state to end the conversation
         if user_id in user_states:
             del user_states[user_id]
+
 @bot.message_handler(commands=['webquiz'])
 @membership_required
 def handle_web_quiz_command(msg: types.Message):
@@ -1978,21 +2084,7 @@ def handle_quiz_start_button(msg: types.Message):
     # When clicked, the Mini App opens automatically.
     # We send a simple confirmation message to make the experience smoother.
     bot.send_message(msg.chat.id, "🚀 Opening the weekly schedule...")
-@bot.callback_query_handler(func=lambda call: call.data.startswith('listpage_'))
-def handle_listpage_callback(call: types.CallbackQuery):
-    """Handles 'Next' and 'Previous' button clicks for the file list."""
-    page = int(call.data.split('_')[1])
-    bot.answer_callback_query(call.id) # Acknowledge the button press
-    
-    text, markup = create_file_list_page(page)
-    
-    # Edit the existing message to show the new page
-    if markup:
-        try:
-            bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
-        except Exception as e:
-            # This can happen if the message content is identical, which is fine.
-            print(f"Info: Could not edit message for pagination. {e}")
+
 # =============================================================================
 # 8. TELEGRAM BOT HANDLERS - CORE COMMANDS (Continued)
 # =============================================================================
@@ -3375,20 +3467,25 @@ def handle_interlink_callbacks(call: types.CallbackQuery):
 @bot.message_handler(commands=['listfile'])
 @membership_required
 def handle_listfile_command(msg: types.Message):
-    """Shows the first page of the new interactive file vault browser."""
-    # Add activity tracking
+    """
+    Shows the main menu for the new Advanced Vault Browser.
+    """
     try:
         supabase.rpc('update_chat_activity', {'p_user_id': msg.from_user.id, 'p_user_name': msg.from_user.username or msg.from_user.first_name}).execute()
     except Exception as e:
         print(f"Activity tracking failed for user {msg.from_user.id} in command: {e}")
     
     try:
-        text, markup = create_file_list_page(page=1)
-        bot.reply_to(msg, text, reply_markup=markup, parse_mode="HTML")
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            types.InlineKeyboardButton("🔵 Group 1", callback_data="v_group_Group 1"),
+            types.InlineKeyboardButton("🟢 Group 2", callback_data="v_group_Group 2")
+        )
+        bot.reply_to(msg, "🗂️ Welcome to the CA Vault!\n\nPlease select a Group to begin.", reply_markup=markup)
         
     except Exception as e:
-        print(f"Error in /listfile: {traceback.format_exc()}")
-        bot.reply_to(msg, "❌ An error occurred while fetching the file list.")
+        report_error_to_admin(f"Error in /listfile: {traceback.format_exc()}")
+        safe_reply(msg, "❌ An error occurred while opening the Vault.")
 # =============================================================================
 # 8. TELEGRAM BOT HANDLERS - VAULT & DM
 # =============================================================================
@@ -3397,10 +3494,9 @@ def handle_listfile_command(msg: types.Message):
 @membership_required
 def handle_need_command(msg: types.Message):
     """
-    Searches for a resource from the Vault using keywords and provides results
-    as a direct file or interactive buttons.
+    Searches for a resource using fuzzy matching and provides results with
+    full category context.
     """
-    # Add activity tracking
     try:
         supabase.rpc('update_chat_activity', {'p_user_id': msg.from_user.id, 'p_user_name': msg.from_user.username or msg.from_user.first_name}).execute()
     except Exception as e:
@@ -3409,42 +3505,51 @@ def handle_need_command(msg: types.Message):
     try:
         parts = msg.text.split(' ', 1)
         if len(parts) < 2:
-            bot.reply_to(msg, "Please provide a keyword to search for.\n<b>Example:</b> <code>/need AS 19</code> or <code>/need tax notes</code>", parse_mode="HTML")
+            safe_reply(msg, "Please provide a keyword to search for.\n<b>Example:</b> <code>/need AS 19</code> or <code>/need tax notes</code>", parse_mode="HTML")
             return
 
         search_term = parts[1].strip()
         
-        # Call the new search function in Supabase
+        # Call our new, smarter search function in Supabase
         response = supabase.rpc('search_resources', {'search_term': search_term}).execute()
 
         if not response.data:
-            bot.reply_to(msg, f"😥 Sorry, I couldn't find any files matching '<code>{escape(search_term)}</code>'.\n\nTry using the <code>/listfile</code> command to see all available resources.", parse_mode="HTML")
+            safe_reply(msg, f"😥 Sorry, I couldn't find any files matching '<code>{escape(search_term)}</code>'.\n\nTry using the <code>/listfile</code> command to browse categories.", parse_mode="HTML")
+            return
         
+        # If only one result, send it directly with its full path
         elif len(response.data) == 1:
-            # If only one result, send it directly
             resource = response.data[0]
             file_id = resource['file_id']
-            caption = f"✅ Here is the result for '<code>{escape(search_term)}</code>':\n\n<b>File:</b> {escape(resource['file_name'])}\n<b>Description:</b> {escape(resource['description'])}"
-            bot.send_document(msg.chat.id, file_id, caption=caption, reply_to_message_id=msg.message_id, parse_mode="HTML")
+            path = f"<b>Path:</b> <code>{escape(resource['group_name'])} > {escape(resource['subject'])} > {escape(resource['resource_type'])}</code>"
+            caption = f"✅ Here is the result for '<code>{escape(search_term)}</code>':\n\n<b>File:</b> {escape(resource['file_name'])}\n{path}"
+            
+            # Using a try-except block for robust error handling when sending the document
+            try:
+                bot.send_document(msg.chat.id, file_id, caption=caption, reply_to_message_id=msg.message_id, parse_mode="HTML")
+            except ApiTelegramException as e:
+                report_error_to_admin(f"Failed to send document from /need. File ID: {file_id}. Error: {e}")
+                safe_reply(msg, "❌ An error occurred while sending the file. The file might be invalid or deleted from Telegram's servers.")
 
+        # If multiple results, show buttons with more context
         else:
-            # If multiple results, show buttons
             markup = types.InlineKeyboardMarkup()
             results_text = f"🔎 I found <b>{len(response.data)}</b> files matching '<code>{escape(search_term)}</code>'. Please choose one:\n\n"
             
             for resource in response.data[:10]: # Show max 10 results
+                # Add subject to the button for better context
+                button_text = f"📄 {resource['file_name']}  ({escape(resource['subject'])})"
                 button = types.InlineKeyboardButton(
-                    text=f"📄 {resource['file_name']}",
+                    text=button_text,
                     callback_data=f"getfile_{resource['id']}"
                 )
                 markup.add(button)
             
-            bot.reply_to(msg, results_text, reply_markup=markup, parse_mode="HTML")
+            safe_reply(msg, results_text, reply_markup=markup, parse_mode="HTML")
 
     except Exception as e:
-        print(f"Error in /need command: {traceback.format_exc()}")
-        report_error_to_admin(f"Error in /need (search) command:\n{e}")
-        bot.reply_to(msg, "❌ An error occurred while searching for the file.")
+        report_error_to_admin(f"Error in /need (search) command:\n{traceback.format_exc()}")
+        safe_reply(msg, "❌ An error occurred while searching for the file.")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('getfile_'))
 def handle_getfile_callback(call: types.CallbackQuery):
