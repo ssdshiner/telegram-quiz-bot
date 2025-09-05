@@ -20,7 +20,7 @@ from datetime import timezone, timedelta
 IST = timezone(timedelta(hours=5, minutes=30))
 from supabase import create_client, Client
 from urllib.parse import quote
-from html import escape, unescape
+from collections import namedtuple
 from postgrest.exceptions import APIError
 
 # =============================================================================
@@ -1272,14 +1272,13 @@ def handle_admin_callbacks(call: types.CallbackQuery):
     bot.answer_callback_query(call.id)
     parts = call.data.split('_', 1)
     menu = parts[1]
-    
+
     def back_button(target_menu='main'):
         return types.InlineKeyboardButton("↩️ Back", callback_data=f"admin_{target_menu}")
 
     try:
-        # --- THIS IS THE FIX ---
-        # It now correctly edits the message to show the main menu.
         if menu == 'main':
+            # FIX #1: This now correctly EDITS the message instead of sending a new one.
             text, markup = _build_admin_main_menu()
             bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
             return
@@ -1300,6 +1299,7 @@ def handle_admin_callbacks(call: types.CallbackQuery):
             text = "🧠 **Quiz & Practice**\nTheek hai, chaliye quiz manage karte hain. Kya karna hai?"
             bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
 
+        # ... (other elif blocks for content, member, etc. are correct and remain the same) ...
         elif menu == 'content':
             markup = types.InlineKeyboardMarkup(row_width=1)
             markup.add(
@@ -1375,15 +1375,24 @@ def handle_admin_callbacks(call: types.CallbackQuery):
             text = "💬 **Manage Quotes & Tips**\nChaliye group ko thoda motivate karte hain."
             bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
 
+        # FIX #2: This block is rewritten to correctly trigger the command functions.
         elif menu.startswith('cmd_'):
             command_name = menu.split('_', 1)[1]
             handler = ADMIN_COMMAND_ROUTER.get(command_name)
             
             if handler:
-                bot.edit_message_text(f"✅ Executing `/{command_name}`... Please follow the instructions in the new message.", call.message.chat.id, call.message.message_id)
-                fake_message = call.message
-                fake_message.text = f'/{command_name}'
-                fake_message.from_user = call.from_user
+                # Let the admin know the command is starting.
+                bot.edit_message_text(f"✅ Okay, starting the `/{command_name}` command flow...\n\nPlease follow the instructions in our private chat.", call.message.chat.id, call.message.message_id, parse_mode='HTML')
+                
+                # We need to create a proper "fake" message object for the handler to work.
+                # This ensures the handler knows the chat ID and user who clicked.
+                FakeMessage = namedtuple('FakeMessage', ['chat', 'from_user', 'text'])
+                FakeChat = namedtuple('FakeChat', ['id', 'type'])
+                
+                fake_chat = FakeChat(id=call.message.chat.id, type='private')
+                fake_message = FakeMessage(chat=fake_chat, from_user=call.from_user, text=f'/{command_name}')
+                
+                # Execute the actual command handler function
                 handler(fake_message)
             else:
                 bot.answer_callback_query(call.id, "Error: Command handler not found.", show_alert=True)
@@ -1398,6 +1407,7 @@ def handle_admin_callbacks(call: types.CallbackQuery):
     except Exception as e:
         report_error_to_admin(f"Error in admin dashboard: {traceback.format_exc()}")
         bot.answer_callback_query(call.id, "An error occurred in the dashboard.", show_alert=True)
+
 @bot.message_handler(commands=['webquiz'])
 @membership_required
 def handle_web_quiz_command(msg: types.Message):
