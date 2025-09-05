@@ -541,11 +541,22 @@ def create_compact_file_list_page(group, subject, resource_type, page=1):
 @bot.callback_query_handler(func=lambda call: call.data.startswith('v_'))
 def handle_vault_callbacks(call: types.CallbackQuery):
     """
-    Master handler for all vault navigation callbacks.
+    Master handler for all vault navigation with proactive error prevention.
     """
     bot.answer_callback_query(call.id)
     parts = call.data.split('_')
     action = parts[1]
+    
+    # This is a small helper function to prevent the "message not modified" error.
+    def edit_if_changed(new_text, new_markup):
+        # Only call the API if the text or buttons are actually different.
+        if call.message.text != new_text or call.message.reply_markup != new_markup:
+            try:
+                bot.edit_message_text(new_text, call.message.chat.id, call.message.message_id, reply_markup=new_markup, parse_mode="HTML")
+            except ApiTelegramException as e:
+                # This is a fallback for other potential edit errors.
+                if "message is not modified" not in e.description:
+                    raise e # Re-raise if it's a different error
     
     try:
         # Action: Go back to the main menu (Group selection)
@@ -555,11 +566,12 @@ def handle_vault_callbacks(call: types.CallbackQuery):
                 types.InlineKeyboardButton("🔵 Group 1", callback_data="v_group_Group 1"),
                 types.InlineKeyboardButton("🟢 Group 2", callback_data="v_group_Group 2")
             )
-            bot.edit_message_text("🗂️ Welcome to the CA Vault!\n\nPlease select a Group to begin.", call.message.chat.id, call.message.message_id, reply_markup=markup)
+            text = "🗂️ Welcome to the CA Vault!\n\nPlease select a Group to begin."
+            edit_if_changed(text, markup)
 
         # Action: A Group was selected
         elif action == 'group':
-            group_name = '_'.join(parts[2:]) # Handles spaces in group name
+            group_name = '_'.join(parts[2:])
             subjects = {
                 "Group 1": ["Accounts", "Law", "Income Tax", "GST", "Audio Notes"],
                 "Group 2": ["Costing", "Auditing", "FM", "SM", "Audio Notes"]
@@ -568,48 +580,44 @@ def handle_vault_callbacks(call: types.CallbackQuery):
             markup = types.InlineKeyboardMarkup(row_width=2)
             markup.add(*buttons)
             markup.add(types.InlineKeyboardButton("↩️ Back to Main Menu", callback_data="v_main"))
-            bot.edit_message_text(f"🔵 **{group_name}**\n\nPlease select a subject:", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
+            text = f"🔵 **{group_name}**\n\nPlease select a subject:"
+            edit_if_changed(text, markup)
 
         # Action: A Subject was selected
         elif action == 'subj':
-            group_name, subject = parts[2], '_'.join(parts[3:]) # Handles spaces in subject name
+            group_name, subject = parts[2], '_'.join(parts[3:])
             
-            # --- THIS IS THE FIX ---
-            # If the subject is Audio Notes, skip the next step and show files directly.
             if subject == 'Audio Notes':
                 text, markup = create_compact_file_list_page(group_name, subject, 'Audio Revision', page=1)
-                bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
+                edit_if_changed(text, markup)
             else:
-                # For all other subjects, show the resource type menu as before.
                 resource_types = ["ICAI Module", "Faculty Notes", "QPs & Revision"]
                 buttons = [types.InlineKeyboardButton(f"📘 {rtype}", callback_data=f"v_type_{group_name}_{subject}_{rtype}") for rtype in resource_types]
                 markup = types.InlineKeyboardMarkup(row_width=1)
                 markup.add(*buttons)
                 markup.add(types.InlineKeyboardButton("↩️ Back to Subjects", callback_data=f"v_group_{group_name}"))
-                bot.edit_message_text(f"📚 **{subject}**\n\nWhat are you looking for?", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
+                text = f"📚 **{subject}**\n\nWhat are you looking for?"
+                edit_if_changed(text, markup)
 
         # Action: A Resource Type was selected
         elif action == 'type':
-            group, subject, rtype = parts[2], parts[3], '_'.join(parts[4:]) # Handles spaces
+            group, subject, rtype = parts[2], parts[3], '_'.join(parts[4:])
             text, markup = create_compact_file_list_page(group, subject, rtype, page=1)
-            bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
+            edit_if_changed(text, markup)
 
         # Action: Pagination for the file list
         elif action == 'page':
-            # This needs to handle potentially long, underscored names now
-            page = int(parts[2])
-            # Reconstruct the names, which might contain underscores
-            full_data_string = '_'.join(parts[3:])
-            # We know the last part is the resource_type, the second to last is subject, etc.
-            # A more robust way is needed if names have underscores, but for now we assume they don't or split differently.
-            # Let's assume names don't have underscores for simplicity in this part for now.
-            group, subject, rtype = parts[3], parts[4], parts[5]
+            page, group, subject, rtype = int(parts[2]), parts[3], parts[4], '_'.join(parts[5:])
             text, markup = create_compact_file_list_page(group, subject, rtype, page=page)
-            bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
+            edit_if_changed(text, markup)
 
     except Exception as e:
         report_error_to_admin(f"Error in vault navigation: {traceback.format_exc()}")
-        bot.edit_message_text("❌ An error occurred. Please try again from /listfile.", call.message.chat.id, call.message.message_id)
+        try:
+            error_text = "❌ An error occurred. Please try again from /listfile."
+            bot.edit_message_text(error_text, call.message.chat.id, call.message.message_id)
+        except Exception:
+            pass
 def create_main_menu_keyboard(message: types.Message):
     """
     Creates the main menu keyboard.
