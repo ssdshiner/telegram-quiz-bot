@@ -20,6 +20,7 @@ from datetime import timezone, timedelta
 IST = timezone(timedelta(hours=5, minutes=30))
 from supabase import create_client, Client
 from urllib.parse import quote
+from html import escape, unescape
 from collections import namedtuple
 from postgrest.exceptions import APIError
 
