@@ -1225,26 +1225,6 @@ def handle_admin_command(msg: types.Message):
 
     text, markup = _build_admin_main_menu()
     bot.send_message(msg.chat.id, text, reply_markup=markup, parse_mode="HTML")
-
-    # Dynamic Health Check
-    try:
-        bot.get_me()
-        supabase.table('quiz_presets').select('id', count='exact').limit(1).execute()
-        health_status = "✅ All Systems Operational"
-    except Exception:
-        health_status = "⚠️ Warning: A subsystem may be down"
-
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.add(
-        types.InlineKeyboardButton("🧠 Quiz & Practice", callback_data="admin_quiz"),
-        types.InlineKeyboardButton("🗂️ Content & Vault", callback_data="admin_content"),
-        types.InlineKeyboardButton("👥 Member Tools", callback_data="admin_member"),
-        types.InlineKeyboardButton("📈 Reports & Ranks", callback_data="admin_reports"),
-        types.InlineKeyboardButton("⚙️ Bot Settings", callback_data="admin_settings")
-    )
-    
-    text = f"👑 <b>Admin Control Panel</b> 👑\n<i>Bot Status: {health_status}</i>\n\nWelcome, Admin. Please choose a category to manage:"
-    bot.send_message(msg.chat.id, text, reply_markup=markup, parse_mode="HTML")
 def _build_admin_main_menu():
     """
     Builds the text and markup for the main admin dashboard.
@@ -1268,7 +1248,22 @@ def _build_admin_main_menu():
     
     text = f"👑 <b>Admin Control Panel</b> 👑\n<i>Bot Status: {health_status}</i>\n\nWelcome, Admin. Please choose a category to manage:"
     return text, markup
-
+# This is the new, reliable Command Router. It maps button names to their functions.
+ADMIN_COMMAND_ROUTER = {
+    'quizmarathon': start_marathon_setup, 'teambattle': handle_team_battle_command,
+    'randomquiz': handle_random_quiz, 'randomquizvisual': handle_randomquizvisual,
+    'roko': handle_stop_marathon_command, 'notify': handle_notify_command,
+    'add_resource': handle_add_resource, 'add_rq': handle_add_rq, 'add_qm': handle_add_qm,
+    'announce': handle_announce_command, 'examcountdown': handle_exam_countdown,
+    'motivate': handle_motivation_command, 'studytip': handle_study_tip_command,
+    'reset_content': handle_reset_content, 'promote': handle_promote_command,
+    'revoke': handle_revoke_command, 'demote': handle_demote_command,
+    'viewperms': handle_view_perms, 'dm': handle_dm_command,
+    'alltimerankers': handle_all_time_rankers, 'rankers': handle_weekly_rankers,
+    'leaderboard': handle_leaderboard, 'webresult': handle_web_result_command,
+    'activity_report': handle_activity_report, 'bdhai': handle_congratulate_command,
+    'prunedms': handle_prune_dms, 'sync_members': handle_sync_members
+}
 @bot.callback_query_handler(func=lambda call: call.data.startswith('admin_'))
 def handle_admin_callbacks(call: types.CallbackQuery):
     """
