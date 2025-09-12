@@ -491,70 +491,74 @@ def membership_required(func):
 """
 Creates a visually enhanced, paginated file list with file-type emojis.
 """
-try:
-offset = (page - 1) * FILES_PER_PAGE
+def create_compact_file_list_page(group, subject, resource_type, page=1):
+    """
+    Creates a visually enhanced, paginated file list with file-type emojis.
+    """
+    try:
+        offset = (page - 1) * FILES_PER_PAGE
 
-    count_res = supabase.table('resources').select('id', count='exact').eq('group_name', group).eq('subject', subject).eq('resource_type', resource_type).execute()
-    total_files = count_res.count
-    
-    if total_files == 0:
-        return "📂 This category is currently empty. Check back later!", None
+        count_res = supabase.table('resources').select('id', count='exact').eq('group_name', group).eq('subject', subject).eq('resource_type', resource_type).execute()
+        total_files = count_res.count
 
-    files_res = supabase.table('resources').select('*').eq('group_name', group).eq('subject', subject).eq('resource_type', resource_type).order('file_name').range(offset, offset + FILES_PER_PAGE - 1).execute()
-    files_on_page = files_res.data
-    
-    total_pages = (total_files + FILES_PER_PAGE - 1) // FILES_PER_PAGE
-    
-    # --- Build the Enhanced Message ---
-    header_emoji = "🎵" if subject == "Audio Notes" else "📚"
-    message_text = f"{header_emoji} <b>{escape(subject)} - {escape(resource_type)}</b>\n"
-    message_text += f"📄 Page {page}/{total_pages} ({total_files} total files)\n\n"
+        if total_files == 0:
+            return "📂 This category is currently empty. Check back later!", None
 
-    buttons = []
-    for i, resource in enumerate(files_on_page, 1):
-        file_type = resource.get('file_type', '').lower()
-        file_name = resource.get('file_name', '').lower()
-        
-        # Assign an emoji based on file type or extension
-        if 'pdf' in file_type or '.pdf' in file_name:
-            emoji = "📄"
-        elif 'audio' in file_type or any(ext in file_name for ext in ['.mp3', '.ogg', '.wav']):
-            emoji = "🎧"
-        elif 'image' in file_type or any(ext in file_name for ext in ['.jpg', '.jpeg', '.png']):
-            emoji = "🖼️"
-        elif 'video' in file_type or any(ext in file_name for ext in ['.mp4', '.mov', '.avi']):
-            emoji = "📹"
+        files_res = supabase.table('resources').select('*').eq('group_name', group).eq('subject', subject).eq('resource_type', resource_type).order('file_name').range(offset, offset + FILES_PER_PAGE - 1).execute()
+        files_on_page = files_res.data
+
+        total_pages = (total_files + FILES_PER_PAGE - 1) // FILES_PER_PAGE
+
+        # --- Build the Enhanced Message ---
+        header_emoji = "🎵" if subject == "Audio Notes" else "📚"
+        message_text = f"{header_emoji} <b>{escape(subject)} - {escape(resource_type)}</b>\n"
+        message_text += f"📄 Page {page}/{total_pages} ({total_files} total files)\n\n"
+
+        buttons = []
+        for i, resource in enumerate(files_on_page, 1):
+            file_type = resource.get('file_type', '').lower()
+            file_name = resource.get('file_name', '').lower()
+
+            # Assign an emoji based on file type or extension
+            if 'pdf' in file_type or '.pdf' in file_name:
+                emoji = "📄"
+            elif 'audio' in file_type or any(ext in file_name for ext in ['.mp3', '.ogg', '.wav']):
+                emoji = "🎧"
+            elif 'image' in file_type or any(ext in file_name for ext in ['.jpg', '.jpeg', '.png']):
+                emoji = "🖼️"
+            elif 'video' in file_type or any(ext in file_name for ext in ['.mp4', '.mov', '.avi']):
+                emoji = "📹"
+            else:
+                emoji = "📎" # Generic attachment
+
+            message_text += f"<code>{i}.</code> {emoji} {escape(resource['file_name'])}\n"
+            buttons.append(types.InlineKeyboardButton(f"{emoji} {i}", callback_data=f"getfile_{resource['id']}"))
+
+        markup = types.InlineKeyboardMarkup(row_width=5)
+        markup.add(*buttons)
+
+        # --- Navigation Buttons ---
+        nav_buttons = []
+        if page > 1:
+            nav_buttons.append(types.InlineKeyboardButton("⬅️ Prev", callback_data=f"v_page_{page-1}_{group}_{subject}_{resource_type}"))
+
+        # Determine the correct "Back" destination
+        if subject == "Audio Notes":
+            # If it's Audio Notes, back should go to the subject list of its group
+            nav_buttons.append(types.InlineKeyboardButton("↩️ Back", callback_data=f"v_group_{group}"))
         else:
-            emoji = "📎" # Generic attachment
-            
-        message_text += f"<code>{i}.</code> {emoji} {escape(resource['file_name'])}\n"
-        buttons.append(types.InlineKeyboardButton(f"{emoji} {i}", callback_data=f"getfile_{resource['id']}"))
-        
-    markup = types.InlineKeyboardMarkup(row_width=5)
-    markup.add(*buttons)
+             # Otherwise, back goes to the resource type list for that subject
+            nav_buttons.append(types.InlineKeyboardButton("↩️ Back", callback_data=f"v_subj_{group}_{subject}"))
 
-    # --- Navigation Buttons ---
-    nav_buttons = []
-    if page > 1:
-        nav_buttons.append(types.InlineKeyboardButton("⬅️ Prev", callback_data=f"v_page_{page-1}_{group}_{subject}_{resource_type}"))
-    
-    # Determine the correct "Back" destination
-    if subject == "Audio Notes":
-        # If it's Audio Notes, back should go to the subject list of its group
-        nav_buttons.append(types.InlineKeyboardButton("↩️ Back", callback_data=f"v_group_{group}"))
-    else:
-         # Otherwise, back goes to the resource type list for that subject
-        nav_buttons.append(types.InlineKeyboardButton("↩️ Back", callback_data=f"v_subj_{group}_{subject}"))
+        if page < total_pages:
+            nav_buttons.append(types.InlineKeyboardButton("Next ➡️", callback_data=f"v_page_{page+1}_{group}_{subject}_{resource_type}"))
 
-    if page < total_pages:
-        nav_buttons.append(types.InlineKeyboardButton("Next ➡️", callback_data=f"v_page_{page+1}_{group}_{subject}_{resource_type}"))
-    
-    markup.row(*nav_buttons)
-    return message_text, markup
+        markup.row(*nav_buttons)
+        return message_text, markup
 
-except Exception as e:
-    report_error_to_admin(f"Error in create_compact_file_list_page: {traceback.format_exc()}")
-    return "❌ An error occurred while fetching files.", None
+    except Exception as e:
+        report_error_to_admin(f"Error in create_compact_file_list_page: {traceback.format_exc()}")
+        return "❌ An error occurred while fetching files.", None
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('v_'))
