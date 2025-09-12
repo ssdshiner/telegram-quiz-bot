@@ -488,55 +488,73 @@ def membership_required(func):
 # 5. HELPER FUNCTIONS (Continued) - NEW ADVANCED VAULT BROWSER
 # =============================================================================
 
-def create_compact_file_list_page(group, subject, resource_type, page=1):
-    """
-    Creates the new, "not bulky" paginated file list for a specific category.
-    """
-    try:
-        offset = (page - 1) * FILES_PER_PAGE
-        
-        # Fetch the total count for pagination
-        count_res = supabase.table('resources').select('id', count='exact').eq('group_name', group).eq('subject', subject).eq('resource_type', resource_type).execute()
-        total_files = count_res.count
-        
-        if total_files == 0:
-            return "📂 This category is empty.", None
+"""
+Creates a visually enhanced, paginated file list with file-type emojis.
+"""
+try:
+offset = (page - 1) * FILES_PER_PAGE
 
-        # Fetch the files for the current page
-        files_res = supabase.table('resources').select('*').eq('group_name', group).eq('subject', subject).eq('resource_type', resource_type).order('file_name').range(offset, offset + FILES_PER_PAGE - 1).execute()
-        files_on_page = files_res.data
+    count_res = supabase.table('resources').select('id', count='exact').eq('group_name', group).eq('subject', subject).eq('resource_type', resource_type).execute()
+    total_files = count_res.count
+    
+    if total_files == 0:
+        return "📂 This category is currently empty. Check back later!", None
+
+    files_res = supabase.table('resources').select('*').eq('group_name', group).eq('subject', subject).eq('resource_type', resource_type).order('file_name').range(offset, offset + FILES_PER_PAGE - 1).execute()
+    files_on_page = files_res.data
+    
+    total_pages = (total_files + FILES_PER_PAGE - 1) // FILES_PER_PAGE
+    
+    # --- Build the Enhanced Message ---
+    header_emoji = "🎵" if subject == "Audio Notes" else "📚"
+    message_text = f"{header_emoji} <b>{escape(subject)} - {escape(resource_type)}</b>\n"
+    message_text += f"📄 Page {page}/{total_pages} ({total_files} total files)\n\n"
+
+    buttons = []
+    for i, resource in enumerate(files_on_page, 1):
+        file_type = resource.get('file_type', '').lower()
+        file_name = resource.get('file_name', '').lower()
         
-        total_pages = (total_files + FILES_PER_PAGE - 1) // FILES_PER_PAGE
-        
-        # --- Build the "Not Bulky" Message ---
-        message_text = f"<b>{escape(subject)} - {escape(resource_type)}</b> (Page {page}/{total_pages})\n\n"
-        message_text += "Click a number to download the file:\n\n"
-        
-        buttons = []
-        for i, resource in enumerate(files_on_page, 1):
-            message_text += f"<code>{i}.</code> <b>{escape(resource['file_name'])}</b>\n"
-            buttons.append(types.InlineKeyboardButton(str(i), callback_data=f"getfile_{resource['id']}"))
+        # Assign an emoji based on file type or extension
+        if 'pdf' in file_type or '.pdf' in file_name:
+            emoji = "📄"
+        elif 'audio' in file_type or any(ext in file_name for ext in ['.mp3', '.ogg', '.wav']):
+            emoji = "🎧"
+        elif 'image' in file_type or any(ext in file_name for ext in ['.jpg', '.jpeg', '.png']):
+            emoji = "🖼️"
+        elif 'video' in file_type or any(ext in file_name for ext in ['.mp4', '.mov', '.avi']):
+            emoji = "📹"
+        else:
+            emoji = "📎" # Generic attachment
             
-        markup = types.InlineKeyboardMarkup(row_width=5)
-        markup.add(*buttons) # Add all the number buttons
-
-        # --- Navigation Buttons ---
-        nav_buttons = []
-        if page > 1:
-            nav_buttons.append(types.InlineKeyboardButton("⬅️ Prev", callback_data=f"v_page_{page-1}_{group}_{subject}_{resource_type}"))
+        message_text += f"<code>{i}.</code> {emoji} {escape(resource['file_name'])}\n"
+        buttons.append(types.InlineKeyboardButton(f"{emoji} {i}", callback_data=f"getfile_{resource['id']}"))
         
-        # Back button goes to the resource type selection for that subject
+    markup = types.InlineKeyboardMarkup(row_width=5)
+    markup.add(*buttons)
+
+    # --- Navigation Buttons ---
+    nav_buttons = []
+    if page > 1:
+        nav_buttons.append(types.InlineKeyboardButton("⬅️ Prev", callback_data=f"v_page_{page-1}_{group}_{subject}_{resource_type}"))
+    
+    # Determine the correct "Back" destination
+    if subject == "Audio Notes":
+        # If it's Audio Notes, back should go to the subject list of its group
+        nav_buttons.append(types.InlineKeyboardButton("↩️ Back", callback_data=f"v_group_{group}"))
+    else:
+         # Otherwise, back goes to the resource type list for that subject
         nav_buttons.append(types.InlineKeyboardButton("↩️ Back", callback_data=f"v_subj_{group}_{subject}"))
 
-        if page < total_pages:
-            nav_buttons.append(types.InlineKeyboardButton("Next ➡️", callback_data=f"v_page_{page+1}_{group}_{subject}_{resource_type}"))
-        
-        markup.row(*nav_buttons)
-        return message_text, markup
+    if page < total_pages:
+        nav_buttons.append(types.InlineKeyboardButton("Next ➡️", callback_data=f"v_page_{page+1}_{group}_{subject}_{resource_type}"))
+    
+    markup.row(*nav_buttons)
+    return message_text, markup
 
-    except Exception as e:
-        report_error_to_admin(f"Error in create_compact_file_list_page: {traceback.format_exc()}")
-        return "❌ An error occurred while fetching files.", None
+except Exception as e:
+    report_error_to_admin(f"Error in create_compact_file_list_page: {traceback.format_exc()}")
+    return "❌ An error occurred while fetching files.", None
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('v_'))
@@ -1065,29 +1083,46 @@ def handle_add_resource(msg: types.Message):
     content_types=['document', 'photo', 'video', 'audio']
 )
 def process_resource_file_step_1(msg: types.Message):
-    """Step 1: Receives the file (using a state-based handler) and asks for the Group."""
+    """
+    Step 1: Receives the initial file upload from the admin.
+    This function extracts the file's metadata and prepares for the next step.
+    """
     user_id = msg.from_user.id
     
-    # Redundant state check, but good for safety
+    # Safety check to ensure the user is in the correct state.
     if user_states.get(user_id, {}).get('step') != 'awaiting_file':
         return
 
     file_id, file_name, file_type = None, "N/A", "N/A"
+
+    # Extract file details based on the type of media sent.
     if msg.document:
-        file_id, file_name, file_type = msg.document.file_id, msg.document.file_name, msg.document.mime_type
+        file_id = msg.document.file_id
+        file_name = msg.document.file_name
+        file_type = msg.document.mime_type
     elif msg.photo:
-        file_id, file_name, file_type = msg.photo[-1].file_id, f"photo_{msg.date}.jpg", "image/jpeg"
+        # For photos, we take the highest resolution available.
+        file_id = msg.photo[-1].file_id
+        file_name = f"photo_{msg.date}.jpg"  # Create a descriptive name.
+        file_type = "image/jpeg"
     elif msg.video:
-        file_id, file_name, file_type = msg.video.file_id, msg.video.file_name, msg.video.mime_type
+        file_id = msg.video.file_id
+        file_name = msg.video.file_name
+        file_type = msg.video.mime_type
     elif msg.audio:
-        file_id, file_name, file_type = msg.audio.file_id, msg.audio.file_name or f"audio_{msg.date}.mp3", msg.audio.mime_type
+        file_id = msg.audio.file_id
+        # Use the file name from metadata if available, otherwise create one.
+        file_name = msg.audio.file_name or f"audio_{msg.date}.mp3"
+        file_type = msg.audio.mime_type
     
-    # This 'else' should ideally not be reached because of the content_types filter, but it's a good fallback.
+    # This fallback should rarely be hit due to the `content_types` filter,
+    # but it's a good practice for robustness.
     else:
-        safe_reply(msg, "That's not a valid file type. The process has been cancelled. Please start again with /add_resource.")
+        bot.reply_to(msg, "❌ <b>Invalid File.</b> That file type is not supported. The process has been cancelled. Please start again with /add_resource.", parse_mode="HTML")
         if user_id in user_states: del user_states[user_id]
         return
 
+    # Update the user's state with the file info and move to the next step.
     user_states[user_id].update({
         'file_id': file_id,
         'file_name': file_name,
@@ -1095,28 +1130,37 @@ def process_resource_file_step_1(msg: types.Message):
         'step': 'awaiting_group'
     })
 
+    # Create buttons for Group selection.
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         types.InlineKeyboardButton("🔵 Group 1", callback_data="add_group_Group 1"),
         types.InlineKeyboardButton("🟢 Group 2", callback_data="add_group_Group 2")
     )
-    bot.send_message(user_id, f"✅ File received: <code>{escape(file_name)}</code>\n\n<b>Step 2:</b> Which Group does this file belong to?", reply_markup=markup, parse_mode="HTML")
+    # Ask the admin for the next piece of information.
+    bot.send_message(user_id, f"✅ File received: <code>{escape(file_name)}</code>\n\n<b>Step 2 of 7:</b> Which Group does this file belong to?", reply_markup=markup, parse_mode="HTML")
+
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('add_'))
 def handle_add_resource_callbacks(call: types.CallbackQuery):
-    """Handles the button-based steps of adding a resource."""
+    """
+    Handles all button-based steps for the resource addition flow,
+    including the intelligent skip for 'Audio Notes' and robust error handling.
+    """
     user_id = call.from_user.id
     message_id = call.message.message_id
     
+    # Security and session check.
     if user_id not in user_states or user_states[user_id].get('action') != 'adding_resource':
-        bot.edit_message_text("❌ This action has expired. Please start over with /add_resource.", call.message.chat.id, message_id)
+        bot.edit_message_text("❌ <b>Action Expired.</b>\n\nThis interactive session has timed out. Please start over with the /add_resource command.", call.message.chat.id, message_id, parse_mode="HTML")
         return
 
+    # Parse the callback data to determine the action and value.
     parts = call.data.split('_', 2)
     step_type = parts[1]
     value = parts[2]
 
     try:
+        # --- Step 2 -> 3: Group to Subject ---
         if step_type == 'group':
             user_states[user_id]['group_name'] = value
             user_states[user_id]['step'] = 'awaiting_subject'
@@ -1127,90 +1171,48 @@ def handle_add_resource_callbacks(call: types.CallbackQuery):
             }
             buttons = [types.InlineKeyboardButton(f"📚 {subj}", callback_data=f"add_subject_{subj}") for subj in subjects[value]]
             markup = types.InlineKeyboardMarkup(row_width=2).add(*buttons)
-            bot.edit_message_text(f"✅ Group set to **{value}**.\n\n<b>Step 3:</b> Now, please select a subject.", call.message.chat.id, message_id, reply_markup=markup, parse_mode="HTML")
+            bot.edit_message_text(f"✅ Group set to <b>{value}</b>.\n\n<b>Step 3 of 7:</b> Now, please select a subject.", call.message.chat.id, message_id, reply_markup=markup, parse_mode="HTML")
 
+        # --- Step 3 -> 4: Subject to Type (or Keywords for Audio) ---
         elif step_type == 'subject':
             user_states[user_id]['subject'] = value
-            user_states[user_id]['step'] = 'awaiting_type'
+            
+            # *** AUDIO BUG FIX & LOGIC IMPROVEMENT ***
+            if value == "Audio Notes":
+                user_states[user_id]['resource_type'] = "Audio Revision"
+                user_states[user_id]['step'] = 'awaiting_keywords'
+                
+                prompt_message = bot.edit_message_text(f"✅ Subject set to <b>{value}</b>.\n\n<i>Resource type automatically set to 'Audio Revision'.</i>\n\n<b>Step 5 of 7:</b> Please provide search keywords, separated by commas (e.g., <code>law, section 141, audit report</code>).", call.message.chat.id, message_id, parse_mode="HTML")
+                bot.register_next_step_handler(prompt_message, process_resource_keywords_step_5)
+            else:
+                user_states[user_id]['step'] = 'awaiting_type'
+                resource_types = ["ICAI Module", "Faculty Notes", "QPs & Revision"]
+                buttons = [types.InlineKeyboardButton(f"📘 {rtype}", callback_data=f"add_type_{rtype}") for rtype in resource_types]
+                markup = types.InlineKeyboardMarkup(row_width=1).add(*buttons)
+                bot.edit_message_text(f"✅ Subject set to <b>{value}</b>.\n\n<b>Step 4 of 7:</b> What type of resource is this?", call.message.chat.id, message_id, reply_markup=markup, parse_mode="HTML")
 
-            resource_types = ["ICAI Module", "Faculty Notes", "QPs & Revision"]
-            buttons = [types.InlineKeyboardButton(f"📘 {rtype}", callback_data=f"add_type_{rtype}") for rtype in resource_types]
-            markup = types.InlineKeyboardMarkup(row_width=1).add(*buttons)
-            bot.edit_message_text(f"✅ Subject set to **{value}**.\n\n<b>Step 4:</b> What type of resource is this?", call.message.chat.id, message_id, reply_markup=markup, parse_mode="HTML")
-
+        # --- Step 4 -> 5: Type to Keywords ---
         elif step_type == 'type':
             user_states[user_id]['resource_type'] = value
             user_states[user_id]['step'] = 'awaiting_keywords'
-
-            bot.edit_message_text(f"✅ Resource type set to **{value}**.\n\n<b>Step 5:</b> Please provide search keywords, separated by commas (e.g., <code>accounts, as19</code>).", call.message.chat.id, message_id, parse_mode="HTML")
-            # We now need the user to type, so we register the next step handler from here.
-            # We need to send a dummy message to get the chat object for the handler.
-            dummy_prompt = bot.send_message(user_id, "Enter keywords now:")
-            bot.delete_message(user_id, dummy_prompt.message_id) # Delete the dummy message
-            bot.register_next_step_handler(call.message, process_resource_keywords_step_5)
+            
+            prompt_message = bot.edit_message_text(f"✅ Resource type set to <b>{value}</b>.\n\n<b>Step 5 of 7:</b> Please provide search keywords, separated by commas (e.g., <code>accounts, as19</code>).", call.message.chat.id, message_id, parse_mode="HTML")
+            bot.register_next_step_handler(prompt_message, process_resource_keywords_step_5)
     
+    except ApiTelegramException as e:
+        if "message to edit not found" in str(e):
+            print(f"Info: Could not edit message in add_resource_callbacks because it was not found.")
+        else:
+            report_error_to_admin(f"Telegram API Error in add_resource callback: {traceback.format_exc()}")
+        if user_id in user_states:
+            del user_states[user_id]
+
     except Exception as e:
-        report_error_to_admin(f"Error in add_resource callback: {traceback.format_exc()}")
-        bot.edit_message_text("❌ An error occurred. Please start over with /add_resource.", call.message.chat.id, message_id)
-
-
-def process_resource_keywords_step_5(msg: types.Message):
-    """Step 5: Receives keywords and asks for a description."""
-    user_id = msg.from_user.id
-    if user_states.get(user_id, {}).get('step') != 'awaiting_keywords': return
-
-    if not msg.text or msg.text.startswith('/'):
-        prompt = safe_reply(msg, "Invalid input. Please provide at least one keyword.\n\nOr type /cancel to stop.")
-        bot.register_next_step_handler(prompt, process_resource_keywords_step_5)
-        return
-        
-    keywords = [keyword.strip().lower() for keyword in msg.text.split(',')]
-    user_states[user_id]['keywords'] = keywords
-    user_states[user_id]['step'] = 'awaiting_description'
-    
-    prompt_text = (f"✅ Keywords saved: <code>{escape(', '.join(keywords))}</code>\n\n"
-                   f"<b>Step 6 (Final):</b> Please provide a short, one-line description for this file.")
-    prompt = bot.send_message(user_id, prompt_text, parse_mode="HTML")
-    bot.register_next_step_handler(prompt, process_resource_description_step_6)
-
-def process_resource_description_step_6(msg: types.Message):
-    """Step 6: Receives description and saves everything to the database."""
-    user_id = msg.from_user.id
-    if user_states.get(user_id, {}).get('step') != 'awaiting_description': return
-
-    if not msg.text or msg.text.startswith('/'):
-        prompt = safe_reply(msg, "Invalid input. Please provide a description.\n\nOr type /cancel to stop.")
-        bot.register_next_step_handler(prompt, process_resource_description_step_6)
-        return
-        
-    user_data = user_states[user_id]
-    user_data['description'] = msg.text.strip()
-    
-    try:
-        # Save all the collected data to the database
-        supabase.table('resources').insert({
-            'file_id': user_data['file_id'],
-            'file_name': user_data['file_name'],
-            'file_type': user_data['file_type'],
-            'keywords': user_data['keywords'],
-            'description': user_data['description'],
-            'group_name': user_data['group_name'],
-            'subject': user_data['subject'],
-            'resource_type': user_data['resource_type'],
-            'added_by_id': user_id,
-            'added_by_name': msg.from_user.first_name
-        }).execute()
-        
-        file_name_safe = escape(user_data['file_name'])
-        success_message = (f"✅ <b>Resource Saved!</b>\n\n"
-                           f"<code>{file_name_safe}</code> has been successfully added to the Vault and is now available for all members.")
-        bot.send_message(user_id, success_message, parse_mode="HTML")
-        
-    except Exception as e:
-        report_error_to_admin(f"Could not save resource to Vault:\n{traceback.format_exc()}")
-        bot.send_message(user_id, "❌ A critical error occurred while saving the resource to the database.")
-    finally:
-        # Clean up the state to end the conversation
+        report_error_to_admin(f"Generic Error in add_resource callback: {traceback.format_exc()}")
+        try:
+            bot.edit_message_text("❌ An unexpected error occurred. The process has been cancelled. Please start over with /add_resource.", call.message.chat.id, message_id, parse_mode="HTML")
+        except Exception:
+            bot.send_message(user_id, "❌ An unexpected error occurred. The process has been cancelled. Please start over with /add_resource.")
         if user_id in user_states:
             del user_states[user_id]
 @bot.message_handler(commands=['admin'])
@@ -3684,121 +3686,127 @@ def handle_listfile_command(msg: types.Message):
 @membership_required
 def handle_need_command(msg: types.Message):
     """
-    Searches for a resource using fuzzy matching and provides results with
-    full category context.
+    Searches for resources using the advanced, multi-keyword full-text search
+    and provides results with full category context.
     """
     try:
         supabase.rpc('update_chat_activity', {'p_user_id': msg.from_user.id, 'p_user_name': msg.from_user.username or msg.from_user.first_name}).execute()
     except Exception as e:
-        print(f"Activity tracking failed for user {msg.from_user.id} in command: {e}")
+        print(f"Activity tracking failed for user {msg.from_user.id} in /need command: {e}")
 
     try:
         parts = msg.text.split(' ', 1)
-        if len(parts) < 2:
-            safe_reply(msg, "Please provide a keyword to search for.\n<b>Example:</b> <code>/need AS 19</code> or <code>/need tax notes</code>", parse_mode="HTML")
+        if len(parts) < 2 or not parts[1].strip():
+            bot.reply_to(msg, "Please provide keywords to search for.\n<b>Example:</b> <code>/need law amendment</code>", parse_mode="HTML")
             return
 
         search_term = parts[1].strip()
-        
+        print(f"User {msg.from_user.id} searching for: '{search_term}'")
+
         # Call our new, smarter search function in Supabase
-        response = supabase.rpc('search_resources', {'search_term': search_term}).execute()
+        response = supabase.rpc('advanced_resource_search', {'search_terms': search_term}).execute()
 
         if not response.data:
-            safe_reply(msg, f"😥 Sorry, I couldn't find any files matching '<code>{escape(search_term)}</code>'.\n\nTry using the <code>/listfile</code> command to browse categories.", parse_mode="HTML")
+            bot.reply_to(msg, f"😥 Sorry, I couldn't find any files matching '<code>{escape(search_term)}</code>'.\n\nTry using broader terms or browse with <code>/listfile</code>.", parse_mode="HTML")
             return
-        
+
         # If only one result, send it directly with its full path
-        elif len(response.data) == 1:
+        if len(response.data) == 1:
             resource = response.data[0]
             file_id = resource['file_id']
             path = f"<b>Path:</b> <code>{escape(resource['group_name'])} > {escape(resource['subject'])} > {escape(resource['resource_type'])}</code>"
-            caption = f"✅ Here is the result for '<code>{escape(search_term)}</code>':\n\n<b>File:</b> {escape(resource['file_name'])}\n{path}"
-            
-            # Using a try-except block for robust error handling when sending the document
+            caption = (f"✅ Found the best match for '<code>{escape(search_term)}</code>':\n\n"
+                       f"<b>File:</b> {escape(resource['file_name'])}\n{path}")
+
             try:
                 bot.send_document(msg.chat.id, file_id, caption=caption, reply_to_message_id=msg.message_id, parse_mode="HTML")
             except ApiTelegramException as e:
                 report_error_to_admin(f"Failed to send document from /need. File ID: {file_id}. Error: {e}")
-                safe_reply(msg, "❌ An error occurred while sending the file. The file might be invalid or deleted from Telegram's servers.")
+                bot.reply_to(msg, "❌ An error occurred while sending the file. The file might be invalid or deleted from Telegram's servers.")
 
         # If multiple results, show buttons with more context
         else:
-            markup = types.InlineKeyboardMarkup()
-            results_text = f"🔎 I found <b>{len(response.data)}</b> files matching '<code>{escape(search_term)}</code>'. Please choose one:\n\n"
-            
-            for resource in response.data[:10]: # Show max 10 results
-                # Add subject to the button for better context
+            markup = types.InlineKeyboardMarkup(row_width=1)
+            results_text = f"🔎 I found <b>{len(response.data)}</b> relevant files for '<code>{escape(search_term)}</code>'.\n\nHere are the top results:\n"
+
+            for resource in response.data:
                 button_text = f"📄 {resource['file_name']}  ({escape(resource['subject'])})"
                 button = types.InlineKeyboardButton(
                     text=button_text,
                     callback_data=f"getfile_{resource['id']}"
                 )
                 markup.add(button)
-            
-            safe_reply(msg, results_text, reply_markup=markup, parse_mode="HTML")
+
+            bot.reply_to(msg, results_text, reply_markup=markup, parse_mode="HTML")
 
     except Exception as e:
         report_error_to_admin(f"Error in /need (search) command:\n{traceback.format_exc()}")
-        safe_reply(msg, "❌ An error occurred while searching for the file.")
+        bot.reply_to(msg, "❌ A critical error occurred while searching. The admin has been notified.")
+
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('getfile_'))
 def handle_getfile_callback(call: types.CallbackQuery):
     """
-    Handles the button click. It now receives the short primary key 'id',
-    fetches the full file_id from Supabase, and then sends the document.
-    It also edits the original message to give confirmation.
+    Handles a file request from a button click with enhanced error handling.
+    Fetches the file_id from Supabase and sends the document.
     """
     try:
-        # This part gets the unique ID of the resource from the button press
         resource_id_str = call.data.split('_', 1)[1]
         
-        # Check if the ID is a valid number. This makes the code safer.
         if not resource_id_str.isdigit():
             bot.answer_callback_query(call.id, text="❌ Error: Invalid file reference.", show_alert=True)
+            print(f"Error: Invalid resource_id in callback data: {call.data}")
             return
             
         resource_id = int(resource_id_str)
-        
-        # Acknowledge the button press with a small pop-up
         bot.answer_callback_query(call.id, text="✅ Fetching your file from the Vault...")
         
-        # Use the short 'id' to get the full file_id from the database
-        response = supabase.table('resources').select('file_id, file_name').eq('id', resource_id).single().execute()
+        # --- Database Fetch with Specific Error Handling ---
+        try:
+            response = supabase.table('resources').select('file_id, file_name').eq('id', resource_id).single().execute()
+        except APIError as db_error:
+            report_error_to_admin(f"Supabase APIError in getfile callback for resource_id {resource_id}:\n{db_error}")
+            bot.edit_message_text("❌ A database error occurred. Please try again later.", call.message.chat.id, call.message.message_id)
+            return
+
+        if not response.data:
+            bot.answer_callback_query(call.id, text="❌ File not found in database.", show_alert=True)
+            bot.edit_message_text("❌ Sorry, this file seems to have been deleted by an admin. Please try another file.", call.message.chat.id, call.message.message_id, reply_markup=None)
+            return
+
+        file_id_to_send = response.data['file_id']
+        file_name_to_send = response.data['file_name']
         
-        if response.data:
-            file_id_to_send = response.data['file_id']
-            file_name_to_send = response.data['file_name']
-            
-            # 1. Send the file to the user
+        # --- Send Document with Specific Telegram Error Handling ---
+        try:
             bot.send_document(
                 chat_id=call.message.chat.id, 
                 document=file_id_to_send,
                 reply_to_message_id=call.message.message_id
             )
             
-            # 2. **THE FIX**: Edit the original message to show a success confirmation.
-            # This automatically removes the old buttons and prevents the error.
-            confirmation_text = f"✅ Success! You have downloaded:\n<b>{escape(file_name_to_send)}</b>\n\nYou can continue browsing."
+            # On success, edit the original message to give confirmation.
+            confirmation_text = f"✅ Success! You have downloaded:\n<b>{escape(file_name_to_send)}</b>"
             bot.edit_message_text(
                 confirmation_text, 
                 call.message.chat.id, 
                 call.message.message_id, 
-                reply_markup=None, # Explicitly remove any buttons
+                reply_markup=None, # Remove buttons
                 parse_mode="HTML"
             )
-        else:
-            # If the file is not found, also edit the message to inform the user.
-            bot.answer_callback_query(call.id, text="❌ Error: Could not find this file.", show_alert=True)
-            bot.edit_message_text(
-                "❌ Sorry, this file seems to have been removed or is no longer available.", 
-                call.message.chat.id, 
-                call.message.message_id,
-                reply_markup=None
-            )
+        except ApiTelegramException as telegram_error:
+            # This is a common error if the file_id is old or invalid.
+            print(f"Telegram API Error for file_id {file_id_to_send}: {telegram_error}")
+            report_error_to_admin(f"Failed to send document (ID: {resource_id}, FileID: {file_id_to_send}). It may be expired on Telegram's servers.\nError: {telegram_error}")
+            
+            # Inform the user clearly.
+            error_message = f"❌ Failed to send '<code>{escape(file_name_to_send)}</code>'.\n\nThe file may have been corrupted or deleted from Telegram's servers. The admin has been notified."
+            bot.edit_message_text(error_message, call.message.chat.id, call.message.message_id, parse_mode="HTML")
 
     except Exception as e:
-        print(f"Error in handle_getfile_callback: {traceback.format_exc()}")
-        report_error_to_admin(f"Error sending file from callback:\n{e}")
+        # A final catch-all for any other unexpected errors.
+        print(f"Critical Error in handle_getfile_callback: {traceback.format_exc()}")
+        report_error_to_admin(f"Critical error sending file from callback:\n{traceback.format_exc()}")
         bot.answer_callback_query(call.id, text="❌ A critical error occurred.", show_alert=True)
 # --- Admin Command: Direct Messaging System (/dm) ---
 
