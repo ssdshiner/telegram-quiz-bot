@@ -1161,9 +1161,18 @@ def handle_add_resource_callbacks(call: types.CallbackQuery):
     # Parse the callback data to determine the action and value.
     parts = call.data.split('_', 2)
     step_type = parts[1]
-    value = parts[2]
-
+    
     try:
+        if step_type == 'confirm':
+            if parts[2] == 'yes':
+                save_resource_to_db(user_id)
+                bot.edit_message_text("✅ Resource saved successfully!", call.message.chat.id, message_id)
+            else:
+                bot.edit_message_text("❌ Operation cancelled.", call.message.chat.id, message_id)
+            del user_states[user_id]
+            return
+            
+        value = parts[2]
         # --- Step 2 -> 3: Group to Subject ---
         if step_type == 'group':
             user_states[user_id]['group_name'] = value
@@ -1219,6 +1228,68 @@ def handle_add_resource_callbacks(call: types.CallbackQuery):
             bot.send_message(user_id, "❌ An unexpected error occurred. The process has been cancelled. Please start over with /add_resource.")
         if user_id in user_states:
             del user_states[user_id]
+def process_resource_keywords_step_5(msg: types.Message):
+    """
+    Step 5: Receives the keywords from the admin.
+    """
+    user_id = msg.from_user.id
+    if user_states.get(user_id, {}).get('step') != 'awaiting_keywords':
+        return
+
+    keywords = msg.text.strip()
+    user_states[user_id]['keywords'] = keywords
+    user_states[user_id]['step'] = 'awaiting_description'
+
+    prompt_message = bot.send_message(user_id, f"✅ Keywords set to: <code>{escape(keywords)}</code>\n\n<b>Step 6 of 7:</b> Please provide a short description for this resource.", parse_mode="HTML")
+    bot.register_next_step_handler(prompt_message, process_resource_description_step_6)
+def process_resource_description_step_6(msg: types.Message):
+    """
+    Step 6: Receives the description from the admin and shows a final confirmation.
+    """
+    user_id = msg.from_user.id
+    if user_states.get(user_id, {}).get('step') != 'awaiting_description':
+        return
+
+    description = msg.text.strip()
+    user_states[user_id]['description'] = description
+    user_states[user_id]['step'] = 'awaiting_confirmation'
+
+    # Prepare confirmation message
+    state = user_states[user_id]
+    confirmation_text = "<b>Please confirm the details:</b>\n\n"
+    confirmation_text += f"<b>File Name:</b> <code>{escape(state['file_name'])}</code>\n"
+    confirmation_text += f"<b>Group:</b> {escape(state['group_name'])}\n"
+    confirmation_text += f"<b>Subject:</b> {escape(state['subject'])}\n"
+    confirmation_text += f"<b>Resource Type:</b> {escape(state['resource_type'])}\n"
+    confirmation_text += f"<b>Keywords:</b> <code>{escape(state['keywords'])}</code>\n"
+    confirmation_text += f"<b>Description:</b> {escape(description)}\n"
+
+    markup = types.InlineKeyboardMarkup()
+    markup.add(
+        types.InlineKeyboardButton("✅ Confirm and Save", callback_data="add_confirm_yes"),
+        types.InlineKeyboardButton("❌ Cancel", callback_data="add_confirm_no")
+    )
+    bot.send_message(user_id, confirmation_text, reply_markup=markup, parse_mode="HTML")
+def save_resource_to_db(user_id):
+    """
+    Saves the resource details to the Supabase database.
+    """
+    try:
+        state = user_states[user_id]
+        supabase.table('resources').insert({
+            'file_id': state['file_id'],
+            'file_name': state['file_name'],
+            'file_type': state['file_type'],
+            'group_name': state['group_name'],
+            'subject': state['subject'],
+            'resource_type': state['resource_type'],
+            'keywords': state['keywords'],
+            'description': state['description'],
+            'uploaded_by': user_id
+        }).execute()
+    except Exception as e:
+        report_error_to_admin(f"Error saving resource to DB: {traceback.format_exc()}")
+        bot.send_message(user_id, "❌ An error occurred while saving the resource to the database.")
 @bot.message_handler(commands=['admin'])
 @admin_required
 def handle_admin_command(msg: types.Message):
@@ -3038,7 +3109,7 @@ def handle_grant_permission_callback(call: types.CallbackQuery):
     Handles the permission granting button click and announces it in the group.
     """
     try:
-        _, admin_id_str, target_user_id_str, command_name = call.data.split('_')
+        _, admin_id_str, target_user_id_str, command_name = call.data.split('_', 3)
         admin_id = int(admin_id_str)
         target_user_id = int(target_user_id_str)
 
@@ -3150,7 +3221,7 @@ def handle_revoke_command(msg: types.Message):
 def handle_revoke_permission_callback(call: types.CallbackQuery):
     """Handles the permission revoking button click."""
     try:
-        _, admin_id, target_user_id, command_name = call.data.split('_')
+        _, admin_id, target_user_id, command_name = call.data.split('_', 3)
 
         if call.from_user.id != int(admin_id):
             bot.answer_callback_query(call.id, "You are not authorized to perform this action.", show_alert=True)
