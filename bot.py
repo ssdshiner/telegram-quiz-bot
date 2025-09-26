@@ -563,84 +563,84 @@ def create_compact_file_list_page(group, subject, resource_type, page=1):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('v_'))
 def handle_vault_callbacks(call: types.CallbackQuery):
-    """
-    Master handler for all vault navigation with proactive error prevention.
-    """
-    bot.answer_callback_query(call.id)
-    parts = call.data.split('_')
-    action = parts[1]
-    
-    # This is a small helper function to prevent the "message not modified" error.
-    def edit_if_changed(new_text, new_markup):
-        # Only call the API if the text or buttons are actually different.
-        if call.message.text != new_text or call.message.reply_markup != new_markup:
-            try:
-                bot.edit_message_text(new_text, call.message.chat.id, call.message.message_id, reply_markup=new_markup, parse_mode="HTML")
-            except ApiTelegramException as e:
-                # This is a fallback for other potential edit errors.
-                if "message is not modified" not in e.description:
-                    raise e # Re-raise if it's a different error
-    
-    try:
-        # Action: Go back to the main menu (Group selection)
-        if action == 'main':
-            markup = types.InlineKeyboardMarkup(row_width=2)
-            markup.add(
-                types.InlineKeyboardButton("🔵 Group 1", callback_data="v_group_Group 1"),
-                types.InlineKeyboardButton("🟢 Group 2", callback_data="v_group_Group 2")
-            )
-            text = "🗂️ Welcome to the CA Vault!\n\nPlease select a Group to begin."
-            edit_if_changed(text, markup)
+"""
+Master handler for all vault navigation with proactive error prevention.
+"""
+bot.answer_callback_query(call.id)
+parts = call.data.split('_')
+action = parts[1]
 
-        # Action: A Group was selected
-        elif action == 'group':
-            group_name = '_'.join(parts[2:])
-            subjects = {
-                "Group 1": ["Accounts", "Law", "Income Tax", "GST", "Audio Notes"],
-                "Group 2": ["Costing", "Auditing", "FM", "SM", "Audio Notes"]
-            }
-            buttons = [types.InlineKeyboardButton(f"📚 {subj}", callback_data=f"v_subj_{group_name}_{subj}") for subj in subjects[group_name]]
-            markup = types.InlineKeyboardMarkup(row_width=2)
-            markup.add(*buttons)
-            markup.add(types.InlineKeyboardButton("↩️ Back to Main Menu", callback_data="v_main"))
-            text = f"🔵 **{group_name}**\n\nPlease select a subject:"
-            edit_if_changed(text, markup)
-
-        # Action: A Subject was selected
-        elif action == 'subj':
-            group_name, subject = parts[2], '_'.join(parts[3:])
-            
-            if subject == 'Audio Notes':
-                text, markup = create_compact_file_list_page(group_name, subject, 'Audio Revision', page=1)
-                edit_if_changed(text, markup)
-            else:
-                resource_types = ["ICAI Module", "Faculty Notes", "QPs & Revision"]
-                buttons = [types.InlineKeyboardButton(f"📘 {rtype}", callback_data=f"v_type_{group_name}_{subject}_{rtype}") for rtype in resource_types]
-                markup = types.InlineKeyboardMarkup(row_width=1)
-                markup.add(*buttons)
-                markup.add(types.InlineKeyboardButton("↩️ Back to Subjects", callback_data=f"v_group_{group_name}"))
-                text = f"📚 **{subject}**\n\nWhat are you looking for?"
-                edit_if_changed(text, markup)
-
-        # Action: A Resource Type was selected
-        elif action == 'type':
-            group, subject, rtype = parts[2], parts[3], '_'.join(parts[4:])
-            text, markup = create_compact_file_list_page(group, subject, rtype, page=1)
-            edit_if_changed(text, markup)
-
-        # Action: Pagination for the file list
-        elif action == 'page':
-            page, group, subject, rtype = int(parts[2]), parts[3], parts[4], '_'.join(parts[5:])
-            text, markup = create_compact_file_list_page(group, subject, rtype, page=page)
-            edit_if_changed(text, markup)
-
-    except Exception as e:
-        report_error_to_admin(f"Error in vault navigation: {traceback.format_exc()}")
+# This is a small helper function to prevent the "message not modified" error.
+def edit_if_changed(new_text, new_markup):
+    # Only call the API if the text or buttons are actually different.
+    if call.message.text != new_text or call.message.reply_markup != new_markup:
         try:
-            error_text = "❌ An error occurred. Please try again from /listfile."
-            bot.edit_message_text(error_text, call.message.chat.id, call.message.message_id)
-        except Exception:
-            pass
+            bot.edit_message_text(new_text, call.message.chat.id, call.message.message_id, reply_markup=new_markup, parse_mode="HTML")
+        except ApiTelegramException as e:
+            # This is a fallback for other potential edit errors.
+            if "message is not modified" not in e.description:
+                raise e # Re-raise if it's a different error
+
+try:
+    # Action: Go back to the main menu (Group selection)
+    if action == 'main':
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            types.InlineKeyboardButton("🔵 Group 1", callback_data="v_group_Group 1"),
+            types.InlineKeyboardButton("🟢 Group 2", callback_data="v_group_Group 2")
+        )
+        text = "🗂️ Welcome to the CA Vault!\n\nPlease select a Group to begin."
+        edit_if_changed(text, markup)
+
+    # Action: A Group was selected
+    elif action == 'group':
+        group_name = '_'.join(parts[2:])
+        subjects = {
+            "Group 1": ["Accounts", "Law", "Income Tax", "GST", "Audio Notes"],
+            "Group 2": ["Costing", "Auditing", "FM", "SM", "Audio Notes"]
+        }
+        buttons = [types.InlineKeyboardButton(f"📚 {subj}", callback_data=f"v_subj_{group_name}_{subj}") for subj in subjects[group_name]]
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(*buttons)
+        markup.add(types.InlineKeyboardButton("↩️ Back to Main Menu", callback_data="v_main"))
+        text = f"🔵 **{group_name}**\n\nPlease select a subject:"
+        edit_if_changed(text, markup)
+
+    # Action: A Subject was selected
+    elif action == 'subj':
+        group_name, subject = parts[2], '_'.join(parts[3:])
+        
+        if subject == 'Audio Notes':
+            text, markup = create_compact_file_list_page(group_name, subject, 'Audio Revision', page=1)
+            edit_if_changed(text, markup)
+        else:
+            resource_types = ["ICAI Module", "Faculty Notes", "QPs & Revision"]
+            buttons = [types.InlineKeyboardButton(f"📘 {rtype}", callback_data=f"v_type_{group_name}_{subject}_{rtype}") for rtype in resource_types]
+            markup = types.InlineKeyboardMarkup(row_width=1)
+            markup.add(*buttons)
+            markup.add(types.InlineKeyboardButton("↩️ Back to Subjects", callback_data=f"v_group_{group_name}"))
+            text = f"📚 **{subject}**\n\nWhat are you looking for?"
+            edit_if_changed(text, markup)
+
+    # Action: A Resource Type was selected
+    elif action == 'type':
+        group, subject, rtype = parts[2], parts[3], '_'.join(parts[4:])
+        text, markup = create_compact_file_list_page(group, subject, rtype, page=1)
+        edit_if_changed(text, markup)
+
+    # Action: Pagination for the file list
+    elif action == 'page':
+        page, group, subject, rtype = int(parts[2]), parts[3], parts[4], '_'.join(parts[5:])
+        text, markup = create_compact_file_list_page(group, subject, rtype, page=page)
+        edit_if_changed(text, markup)
+
+except Exception as e:
+    report_error_to_admin(f"Error in vault navigation: {traceback.format_exc()}")
+    try:
+        error_text = "❌ An error occurred. Please try again from /listfile."
+        bot.edit_message_text(error_text, call.message.chat.id, call.message.message_id)
+    except Exception:
+        pass
 def create_main_menu_keyboard(message: types.Message):
     """
     Creates the main menu keyboard.
