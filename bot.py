@@ -3721,38 +3721,38 @@ def handle_interlink_callbacks(call: types.CallbackQuery):
 @bot.message_handler(commands=['listfile'])
 @membership_required
 def handle_listfile_command(msg: types.Message):
-"""
-Shows the main menu for the new Advanced Vault Browser using the robust send_message method.
-"""
-try:
-supabase.rpc('update_chat_activity', {'p_user_id': msg.from_user.id, 'p_user_name': msg.from_user.username or msg.from_user.first_name}).execute()
-except Exception as e:
-print(f"Activity tracking failed for user {msg.from_user.id} in command: {e}")
-
-try:
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.add(
-        types.InlineKeyboardButton("🔵 Group 1", callback_data="v_group_Group 1"),
-        types.InlineKeyboardButton("🟢 Group 2", callback_data="v_group_Group 2")
-    )
+    """
+    Shows the main menu for the new Advanced Vault Browser using the robust send_message method.
+    """
+    try:
+        supabase.rpc('update_chat_activity', {'p_user_id': msg.from_user.id, 'p_user_name': msg.from_user.username or msg.from_user.first_name}).execute()
+    except Exception as e:
+        print(f"Activity tracking failed for user {msg.from_user.id} in command: {e}")
     
-    # Using the more robust send_message with reply_parameters
-    reply_params = types.ReplyParameters(
-        message_id=msg.message_id,
-        allow_sending_without_reply=True
-    )
-    
-    bot.send_message(
-        msg.chat.id, 
-        "🗂️ Welcome to the CA Vault!\n\nPlease select a Group to begin.", 
-        reply_markup=markup,
-        reply_parameters=reply_params
-    )
-    
-except Exception as e:
-    report_error_to_admin(f"Error in /listfile: {traceback.format_exc()}")
-    # The universal safe reply patch will handle this automatically
-    bot.send_message(msg.chat.id, "❌ An error occurred while opening the Vault.")
+    try:
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            types.InlineKeyboardButton("🔵 Group 1", callback_data="v_group_Group 1"),
+            types.InlineKeyboardButton("🟢 Group 2", callback_data="v_group_Group 2")
+        )
+        
+        # Using the more robust send_message with reply_parameters
+        reply_params = types.ReplyParameters(
+            message_id=msg.message_id,
+            allow_sending_without_reply=True
+        )
+        
+        bot.send_message(
+            msg.chat.id, 
+            "🗂️ Welcome to the CA Vault!\n\nPlease select a Group to begin.", 
+            reply_markup=markup,
+            reply_parameters=reply_params
+        )
+        
+    except Exception as e:
+        report_error_to_admin(f"Error in /listfile: {traceback.format_exc()}")
+        # The universal safe reply patch will handle this automatically
+        bot.send_message(msg.chat.id, "❌ An error occurred while opening the Vault.")
 # =============================================================================
 # 8. TELEGRAM BOT HANDLERS - VAULT & DM
 # =============================================================================
