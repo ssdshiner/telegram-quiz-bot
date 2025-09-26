@@ -4190,12 +4190,8 @@ def handle_admin_reply_to_forward(msg: types.Message):
             message_id=msg.message_id
         )
         
-        # Give a subtle confirmation to the admin by reacting to their message.
-        bot.set_message_reaction(
-            chat_id=admin_id,
-            message_id=msg.message_id,
-            reaction=[types.ReactionTypeEmoji(emoji="✅")]
-        )
+        # The confirmation reaction has been removed to prevent the crash.
+        # The admin can see that the message was sent successfully in their chat.
 
     except Exception as e:
         print(f"Error handling admin reply: {traceback.format_exc()}")
