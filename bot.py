@@ -22,8 +22,7 @@ from supabase import create_client, Client
 from urllib.parse import quote
 from html import escape, unescape
 from collections import namedtuple
-from postgrest.exceptions 
-import APIError
+from postgrest.exceptions import APIError
 import httpx
 
 # =============================================================================
