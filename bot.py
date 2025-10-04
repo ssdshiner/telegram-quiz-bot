@@ -22,7 +22,9 @@ from supabase import create_client, Client
 from urllib.parse import quote
 from html import escape, unescape
 from collections import namedtuple
-from postgrest.exceptions import APIError
+from postgrest.exceptions 
+import APIError
+import httpx
 
 # =============================================================================
 # 2. CONFIGURATION & INITIALIZATION
@@ -3777,7 +3779,7 @@ def handle_need_command(msg: types.Message):
         search_term = parts[1].strip()
         print(f"User {msg.from_user.id} searching for: '{search_term}'")
 
-        # THIS IS THE FIX: We are now calling the new function 'resource_search_v2'.
+        # THIS IS THE FIX: We are now calling the new function name.
         response = supabase.rpc('resource_search_v2', {'search_terms': search_term}).execute()
 
         if not response.data:
