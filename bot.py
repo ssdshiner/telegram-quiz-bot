@@ -3777,8 +3777,8 @@ def handle_need_command(msg: types.Message):
         search_term = parts[1].strip()
         print(f"User {msg.from_user.id} searching for: '{search_term}'")
 
-        # Call our new, smarter search function in Supabase
-        response = supabase.rpc('advanced_resource_search', {'search_terms': search_term}).execute()
+        # THIS IS THE FIX: We are now calling the new function 'resource_search_v2'.
+        response = supabase.rpc('resource_search_v2', {'search_terms': search_term}).execute()
 
         if not response.data:
             bot.reply_to(msg, f"😥 Sorry, I couldn't find any files matching '<code>{escape(search_term)}</code>'.\n\nTry using broader terms or browse with <code>/listfile</code>.", parse_mode="HTML")
