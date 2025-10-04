@@ -3761,8 +3761,7 @@ def handle_listfile_command(msg: types.Message):
 @membership_required
 def handle_need_command(msg: types.Message):
     """
-    Searches for resources using the advanced, multi-keyword full-text search
-    and provides results with full category context.
+    Searches for resources using the new simple search function for debugging.
     """
     try:
         supabase.rpc('update_chat_activity', {'p_user_id': msg.from_user.id, 'p_user_name': msg.from_user.username or msg.from_user.first_name}).execute()
@@ -3778,40 +3777,28 @@ def handle_need_command(msg: types.Message):
         search_term = parts[1].strip()
         print(f"User {msg.from_user.id} searching for: '{search_term}'")
 
-        # THIS IS THE FIX: We are now calling the new function name.
-        response = supabase.rpc('resource_search_v2', {'search_terms': search_term}).execute()
+        # --- THIS IS THE CRITICAL CHANGE ---
+        # We are calling the new function with its new parameter name.
+        response = supabase.rpc('simple_file_search', {'search_query': search_term}).execute()
 
         if not response.data:
             bot.reply_to(msg, f"😥 Sorry, I couldn't find any files matching '<code>{escape(search_term)}</code>'.\n\nTry using broader terms or browse with <code>/listfile</code>.", parse_mode="HTML")
             return
 
-        # If only one result, send it directly with its full path
         if len(response.data) == 1:
             resource = response.data[0]
             file_id = resource['file_id']
             path = f"<b>Path:</b> <code>{escape(resource['group_name'])} > {escape(resource['subject'])} > {escape(resource['resource_type'])}</code>"
             caption = (f"✅ Found the best match for '<code>{escape(search_term)}</code>':\n\n"
                        f"<b>File:</b> {escape(resource['file_name'])}\n{path}")
-
-            try:
-                bot.send_document(msg.chat.id, file_id, caption=caption, reply_to_message_id=msg.message_id, parse_mode="HTML")
-            except ApiTelegramException as e:
-                report_error_to_admin(f"Failed to send document from /need. File ID: {file_id}. Error: {e}")
-                bot.reply_to(msg, "❌ An error occurred while sending the file. The file might be invalid or deleted from Telegram's servers.")
-
-        # If multiple results, show buttons with more context
+            bot.send_document(msg.chat.id, file_id, caption=caption, reply_to_message_id=msg.message_id, parse_mode="HTML")
         else:
             markup = types.InlineKeyboardMarkup(row_width=1)
             results_text = f"🔎 I found <b>{len(response.data)}</b> relevant files for '<code>{escape(search_term)}</code>'.\n\nHere are the top results:\n"
-
             for resource in response.data:
                 button_text = f"📄 {resource['file_name']}  ({escape(resource['subject'])})"
-                button = types.InlineKeyboardButton(
-                    text=button_text,
-                    callback_data=f"getfile_{resource['id']}"
-                )
+                button = types.InlineKeyboardButton(text=button_text, callback_data=f"getfile_{resource['id']}")
                 markup.add(button)
-
             bot.reply_to(msg, results_text, reply_markup=markup, parse_mode="HTML")
 
     except Exception as e:
