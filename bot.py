@@ -3761,8 +3761,8 @@ def handle_listfile_command(msg: types.Message):
 @membership_required
 def handle_need_command(msg: types.Message):
     """
-    (FINAL DESIGN) Searches for resources using an RPC function that
-    correctly handles searching in both text and array columns.
+    (POWER SEARCH) Searches for resources using a full-text search function
+    that understands individual words and their order.
     """
     try:
         supabase.rpc('update_chat_activity', {'p_user_id': msg.from_user.id, 'p_user_name': msg.from_user.username or msg.from_user.first_name}).execute()
@@ -3776,16 +3776,17 @@ def handle_need_command(msg: types.Message):
             return
 
         search_term = parts[1].strip()
-        print(f"User {msg.from_user.id} searching for: '{search_term}'")
+        print(f"User {msg.from_user.id} power searching for: '{search_term}'")
 
-        # --- THIS IS THE FINAL FIX ---
-        # We are calling the new function that understands arrays.
-        response = supabase.rpc('final_resource_search', {'p_search_term': search_term}).execute()
+        # --- THIS IS THE UPGRADE ---
+        # We are now calling the new 'power_search' function.
+        response = supabase.rpc('power_search', {'p_search_terms': search_term}).execute()
 
         if not response.data:
             bot.reply_to(msg, f"😥 Sorry, I couldn't find any files matching '<code>{escape(search_term)}</code>'.\n\nTry using broader terms or browse with <code>/listfile</code>.", parse_mode="HTML")
             return
 
+        # The result display logic remains the same.
         if len(response.data) == 1:
             resource = response.data[0]
             file_id = resource['file_id']
