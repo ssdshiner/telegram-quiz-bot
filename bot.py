@@ -3761,7 +3761,8 @@ def handle_listfile_command(msg: types.Message):
 @membership_required
 def handle_need_command(msg: types.Message):
     """
-    Searches for resources using the new simple search function for debugging.
+    (NEW DESIGN) Searches for resources by building a query directly in Python,
+    avoiding the use of RPC functions.
     """
     try:
         supabase.rpc('update_chat_activity', {'p_user_id': msg.from_user.id, 'p_user_name': msg.from_user.username or msg.from_user.first_name}).execute()
@@ -3777,21 +3778,32 @@ def handle_need_command(msg: types.Message):
         search_term = parts[1].strip()
         print(f"User {msg.from_user.id} searching for: '{search_term}'")
 
-        # --- THIS IS THE CRITICAL CHANGE ---
-        # We are calling the new function with its new parameter name.
-        response = supabase.rpc('simple_file_search', {'search_query': search_term}).execute()
+        # --- THIS IS THE NEW, RELIABLE SEARCH LOGIC ---
+        # We build a filter to search in 'file_name' OR 'keywords'
+        # 'ilike' means a case-insensitive search.
+        or_filter = f"file_name.ilike.%{search_term}%,keywords.ilike.%{search_term}%"
+        
+        response = supabase.table('resources').select('*').or_(or_filter).limit(10).execute()
+        # --- END OF NEW LOGIC ---
 
         if not response.data:
             bot.reply_to(msg, f"😥 Sorry, I couldn't find any files matching '<code>{escape(search_term)}</code>'.\n\nTry using broader terms or browse with <code>/listfile</code>.", parse_mode="HTML")
             return
 
+        # The rest of the logic for displaying results remains the same as it was already perfect.
         if len(response.data) == 1:
             resource = response.data[0]
             file_id = resource['file_id']
             path = f"<b>Path:</b> <code>{escape(resource['group_name'])} > {escape(resource['subject'])} > {escape(resource['resource_type'])}</code>"
             caption = (f"✅ Found the best match for '<code>{escape(search_term)}</code>':\n\n"
                        f"<b>File:</b> {escape(resource['file_name'])}\n{path}")
-            bot.send_document(msg.chat.id, file_id, caption=caption, reply_to_message_id=msg.message_id, parse_mode="HTML")
+
+            try:
+                bot.send_document(msg.chat.id, file_id, caption=caption, reply_to_message_id=msg.message_id, parse_mode="HTML")
+            except ApiTelegramException as e:
+                report_error_to_admin(f"Failed to send document from /need. File ID: {file_id}. Error: {e}")
+                bot.reply_to(msg, "❌ An error occurred while sending the file. The file might be invalid or deleted from Telegram's servers.")
+
         else:
             markup = types.InlineKeyboardMarkup(row_width=1)
             results_text = f"🔎 I found <b>{len(response.data)}</b> relevant files for '<code>{escape(search_term)}</code>'.\n\nHere are the top results:\n"
