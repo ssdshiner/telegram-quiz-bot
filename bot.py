@@ -5684,8 +5684,8 @@ def handle_study_tip_command(msg: types.Message):
 @membership_required
 def handle_define_command(msg: types.Message):
     """
-    (SMART HYBRID) Looks up a term, first checking the local DB (cache),
-    then falling back to the AI if not found.
+    (NEW ARCHITECTURE) Looks up a term, first checking the Google Sheet,
+    then safely falling back to the AI on any error or if not found.
     """
     try:
         parts = msg.text.split(' ', 1)
@@ -5696,54 +5696,65 @@ def handle_define_command(msg: types.Message):
         search_term = parts[1].strip()
         user_name = escape(msg.from_user.first_name)
         
-        # --- THE FIX IS HERE ---
-        # Changed from an exact match to a 'contains' search (ilike('%term%'))
-        # This will find the term even if there are hidden spaces in the database.
-        response = supabase.table('glossary').select('term, definition, category').ilike('term', f'%{search_term}%').limit(1).execute()
-
-        if response.data:
-            term_data = response.data[0]
-            if term_data.get('category') == 'AI-Generated (Hinglish)':
-                bot.reply_to(msg, term_data['definition'], parse_mode="HTML")
-            else:
-                term = escape(term_data['term'])
-                definition = escape(term_data['definition'])
-                category = escape(term_data.get('category', 'General'))
+        # --- Step 1: Try to find the definition in our Google Sheet first ---
+        definition_found = False
+        try:
+            sheet = get_gsheet().worksheet('Glossary') # Get the 'Glossary' tab
+            cell = sheet.find(search_term, in_column=1, case_sensitive=False)
+            
+            if cell:
+                row_values = sheet.row_values(cell.row)
+                term_data = {
+                    'term': row_values[0],
+                    'definition': row_values[1],
+                    'category': row_values[2] if len(row_values) > 2 else 'General'
+                }
                 
-                message_text = f"📖 <b>Definition: {term}</b> (from Database)\n"
-                message_text += f"━━━━━━━━━━━━━━━━━━\n"
-                message_text += f"<b>Category:</b> <i>{category}</i>\n\n"
-                message_text += f"{definition}"
-                bot.reply_to(msg, message_text, parse_mode="HTML")
-            return
+                # If the definition is from the AI, send it directly
+                if term_data.get('category') == 'AI-Generated (Hinglish)':
+                    bot.reply_to(msg, term_data['definition'], parse_mode="HTML")
+                else: # Otherwise, format it nicely
+                    message_text = f"📖 <b>Definition: {escape(term_data['term'])}</b> (from Sheet)\n"
+                    message_text += f"━━━━━━━━━━━━━━━━━━\n"
+                    message_text += f"<b>Category:</b> <i>{escape(term_data['category'])}</i>\n\n"
+                    message_text += f"{escape(term_data['definition'])}"
+                    bot.reply_to(msg, message_text, parse_mode="HTML")
+                
+                definition_found = True
 
-        # If not found in DB, ask the AI
-        wait_msg = bot.reply_to(msg, f"🤔 I don't have '<code>{escape(search_term)}</code>' in my database. AI se aapke liye ek personal definition banwa raha hu... please wait.", parse_mode="HTML")
+        except Exception as gsheet_error:
+            print(f"⚠️ Could not search Google Sheet. Falling back to AI. Error: {gsheet_error}")
+            # Do nothing here. The code will automatically proceed to the AI fallback.
+
+        if definition_found:
+            return # Stop the function if we successfully found it in the sheet.
+
+        # --- Step 2: If not found in Sheet OR if any error occurred, fall back to AI ---
+        wait_msg = bot.reply_to(msg, f"🤔 Term not found in our records. Asking the AI... please wait.", parse_mode="HTML")
         
+        ai_definition = None
         try:
             ai_definition = get_ai_definition(search_term, user_name)
             bot.delete_message(wait_msg.chat.id, wait_msg.message_id)
         except Exception:
-            # In case deleting the message fails, just continue
-            pass
+            pass # Ignore if deleting the message fails
 
         if ai_definition:
             bot.reply_to(msg, ai_definition, parse_mode="HTML")
             
+            # --- Step 3: Save the new definition back to the Google Sheet ---
             try:
-                supabase.table('glossary').insert({
-                    'term': search_term,
-                    'definition': ai_definition,
-                    'category': 'AI-Generated (Hinglish)'
-                }).execute()
-            except Exception as db_error:
-                print(f"Failed to save AI definition to DB: {db_error}")
+                sheet = get_gsheet().worksheet('Glossary')
+                sheet.append_row([search_term, ai_definition, 'AI-Generated (Hinglish)'])
+            except Exception as gsheet_save_error:
+                print(f"⚠️ Failed to save new AI definition to Google Sheet: {gsheet_save_error}")
+                report_error_to_admin(f"Failed to save AI definition for '{search_term}' to GSheet: {gsheet_save_error}")
         else:
-            bot.reply_to(msg, f"😥 Sorry, the AI could not find a definition for '<code>{escape(search_term)}</code>'.", parse_mode="HTML")
+            bot.reply_to(msg, f"😥 Sorry, I couldn't find a definition for '<code>{escape(search_term)}</code>'.", parse_mode="HTML")
 
     except Exception as e:
-        report_error_to_admin(f"Error in /define command: {traceback.format_exc()}")
-        bot.reply_to(msg, "❌ An error occurred while searching for the definition.")
+        report_error_to_admin(f"CRITICAL Error in /define command: {traceback.format_exc()}")
+        bot.reply_to(msg, "❌ A critical error occurred. The admin has been notified.")
 
 # --- Law Library Feature (/section) ---
 
