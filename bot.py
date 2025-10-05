@@ -5696,24 +5696,26 @@ def handle_define_command(msg: types.Message):
         search_term = parts[1].strip()
         user_name = escape(msg.from_user.first_name)
         
-        # --- Step 1: Try to find the definition in our Google Sheet first ---
         definition_found = False
         try:
-            sheet = get_gsheet().worksheet('Glossary') # Get the 'Glossary' tab
-            cell = sheet.find(search_term, in_column=1, case_sensitive=False)
+            sheet = get_gsheet().worksheet('Glossary')
+            
+            # --- FIX #1: Search in the 2nd column (Column B) instead of the 1st ---
+            cell = sheet.find(search_term, in_column=2, case_sensitive=False)
             
             if cell:
                 row_values = sheet.row_values(cell.row)
+                
+                # --- FIX #2: Read data from the correct column indices ---
                 term_data = {
-                    'term': row_values[0],
-                    'definition': row_values[1],
-                    'category': row_values[2] if len(row_values) > 2 else 'General'
+                    'term': row_values[1],        # Column B
+                    'definition': row_values[2],  # Column C
+                    'category': row_values[3] if len(row_values) > 3 else 'General' # Column D
                 }
                 
-                # If the definition is from the AI, send it directly
                 if term_data.get('category') == 'AI-Generated (Hinglish)':
                     bot.reply_to(msg, term_data['definition'], parse_mode="HTML")
-                else: # Otherwise, format it nicely
+                else:
                     message_text = f"📖 <b>Definition: {escape(term_data['term'])}</b> (from Sheet)\n"
                     message_text += f"━━━━━━━━━━━━━━━━━━\n"
                     message_text += f"<b>Category:</b> <i>{escape(term_data['category'])}</i>\n\n"
@@ -5724,12 +5726,10 @@ def handle_define_command(msg: types.Message):
 
         except Exception as gsheet_error:
             print(f"⚠️ Could not search Google Sheet. Falling back to AI. Error: {gsheet_error}")
-            # Do nothing here. The code will automatically proceed to the AI fallback.
 
         if definition_found:
-            return # Stop the function if we successfully found it in the sheet.
+            return
 
-        # --- Step 2: If not found in Sheet OR if any error occurred, fall back to AI ---
         wait_msg = bot.reply_to(msg, f"🤔 Term not found in our records. Asking the AI... please wait.", parse_mode="HTML")
         
         ai_definition = None
@@ -5737,15 +5737,15 @@ def handle_define_command(msg: types.Message):
             ai_definition = get_ai_definition(search_term, user_name)
             bot.delete_message(wait_msg.chat.id, wait_msg.message_id)
         except Exception:
-            pass # Ignore if deleting the message fails
+            pass
 
         if ai_definition:
             bot.reply_to(msg, ai_definition, parse_mode="HTML")
             
-            # --- Step 3: Save the new definition back to the Google Sheet ---
             try:
                 sheet = get_gsheet().worksheet('Glossary')
-                sheet.append_row([search_term, ai_definition, 'AI-Generated (Hinglish)'])
+                # --- FIX #3: Add an empty placeholder for the 'id' column when saving ---
+                sheet.append_row(['', search_term, ai_definition, 'AI-Generated (Hinglish)'])
             except Exception as gsheet_save_error:
                 print(f"⚠️ Failed to save new AI definition to Google Sheet: {gsheet_save_error}")
                 report_error_to_admin(f"Failed to save AI definition for '{search_term}' to GSheet: {gsheet_save_error}")
