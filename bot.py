@@ -5680,12 +5680,13 @@ def handle_define_command(msg: types.Message):
 
         search_term = parts[1].strip()
         
-        # Step 1: Check our own database first (it's fast)
-        response = supabase.table('glossary').select('term, definition, category').ilike('term', search_term).single().execute()
+        # --- THE FIX IS HERE ---
+        # Replaced .single() with .limit(1) to gracefully handle zero results.
+        response = supabase.table('glossary').select('term, definition, category').ilike('term', search_term).limit(1).execute()
 
         if response.data:
-            # If found in DB, show it instantly
-            term_data = response.data
+            # If found, response.data is a list, so we take the first item.
+            term_data = response.data[0]
             term = escape(term_data['term'])
             definition = escape(term_data['definition'])
             category = escape(term_data.get('category', 'General'))
@@ -5697,12 +5698,12 @@ def handle_define_command(msg: types.Message):
             bot.reply_to(msg, message_text, parse_mode="HTML")
             return
 
-        # Step 2: If not found in DB, ask the AI
+        # If not found in DB, ask the AI
         bot.reply_to(msg, f"🤔 I don't have '<code>{escape(search_term)}</code>' in my database. Asking the AI for a definition... please wait.", parse_mode="HTML")
         ai_definition = get_ai_definition(search_term)
 
         if ai_definition:
-            # Step 3: Show the AI definition and save it to our DB
+            # Show the AI definition and save it to our DB
             message_text = f"🤖 <b>Definition: {escape(search_term)}</b> (from AI)\n"
             message_text += f"━━━━━━━━━━━━━━━━━━\n\n"
             message_text += f"{escape(ai_definition)}"
