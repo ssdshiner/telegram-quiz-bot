@@ -295,17 +295,32 @@ if GEMINI_API_KEY:
     except Exception as e:
         print(f"❌ Gemini AI configuration failed: {e}")
 
-def get_ai_definition(term: str):
+def get_ai_definition(term: str, user_name: str):
     """
-    Calls the Gemini AI to get a definition for a term.
+    Calls the Gemini AI to get a personalized, Hinglish definition for a term.
     """
     if not GEMINI_API_KEY:
         print("WARNING: GEMINI_API_KEY not set. AI definitions are disabled.")
         return None
     try:
-        model = genai.GenerativeModel('gemini-pro')
-        prompt = f"You are an expert tutor for Chartered Accountancy (CA) students in India. Define the term '{term}'. Keep the definition clear, concise (under 80 words), and provide one simple, relevant example."
-        response = model.generate_content(prompt, safety_settings={'HARASSMENT':'BLOCK_NONE'})
+        # --- THIS IS THE FIX ---
+        # Updated the model name from 'gemini-pro' to 'gemini-1.0-pro'
+        model = genai.GenerativeModel('gemini-1.0-pro')
+        
+        prompt = f"""Aap CA (Chartered Accountancy) ke ek expert tutor hain. '{term}' is term ko aasan Hinglish me samjhaiye.
+
+        Definition clear aur 100 words se kam honi chahiye.
+
+        Ek practical example bhi dijiye jisme aap '{user_name}' ka naam use karein. Apne jawab me important words ko bold karne ke liye <b> tags ka use karein."""
+        
+        safety_config = {
+            'HARM_CATEGORY_HARASSMENT': 'BLOCK_NONE',
+            'HARM_CATEGORY_HATE_SPEECH': 'BLOCK_NONE',
+            'HARM_CATEGORY_SEXUALLY_EXPLICIT': 'BLOCK_NONE',
+            'HARM_CATEGORY_DANGEROUS_CONTENT': 'BLOCK_NONE',
+        }
+        
+        response = model.generate_content(prompt, safety_settings=safety_config)
         return response.text.strip()
     except Exception as e:
         print(f"Error calling Gemini API: {e}")
@@ -5670,7 +5685,7 @@ def handle_study_tip_command(msg: types.Message):
 def handle_define_command(msg: types.Message):
     """
     (SMART HYBRID) Looks up a term, first checking the local DB (cache),
-    then falling back to the AI if not found.
+    then falling back to the AI for a personalized Hinglish definition if not found.
     """
     try:
         parts = msg.text.split(' ', 1)
@@ -5679,42 +5694,44 @@ def handle_define_command(msg: types.Message):
             return
 
         search_term = parts[1].strip()
+        user_name = escape(msg.from_user.first_name) # Get the user's name
         
-        # --- THE FIX IS HERE ---
-        # Replaced .single() with .limit(1) to gracefully handle zero results.
+        # Step 1: Check our own database first
         response = supabase.table('glossary').select('term, definition, category').ilike('term', search_term).limit(1).execute()
 
         if response.data:
-            # If found, response.data is a list, so we take the first item.
             term_data = response.data[0]
-            term = escape(term_data['term'])
-            definition = escape(term_data['definition'])
-            category = escape(term_data.get('category', 'General'))
-            
-            message_text = f"📖 <b>Definition: {term}</b> (from Database)\n"
-            message_text += f"━━━━━━━━━━━━━━━━━━\n"
-            message_text += f"<b>Category:</b> <i>{category}</i>\n\n"
-            message_text += f"{definition}"
-            bot.reply_to(msg, message_text, parse_mode="HTML")
+            # If the definition is in Hinglish from AI, just send it directly.
+            if term_data.get('category') == 'AI-Generated (Hinglish)':
+                bot.reply_to(msg, term_data['definition'], parse_mode="HTML")
+            else: # Otherwise, format it nicely (for old, manually added definitions)
+                term = escape(term_data['term'])
+                definition = escape(term_data['definition'])
+                category = escape(term_data.get('category', 'General'))
+                
+                message_text = f"📖 <b>Definition: {term}</b> (from Database)\n"
+                message_text += f"━━━━━━━━━━━━━━━━━━\n"
+                message_text += f"<b>Category:</b> <i>{category}</i>\n\n"
+                message_text += f"{definition}"
+                bot.reply_to(msg, message_text, parse_mode="HTML")
             return
 
-        # If not found in DB, ask the AI
-        bot.reply_to(msg, f"🤔 I don't have '<code>{escape(search_term)}</code>' in my database. Asking the AI for a definition... please wait.", parse_mode="HTML")
-        ai_definition = get_ai_definition(search_term)
+        # Step 2: If not found in DB, ask the AI
+        wait_msg = bot.reply_to(msg, f"🤔 I don't have '<code>{escape(search_term)}</code>' in my database. AI se aapke liye ek personal definition banwa raha hu... please wait.", parse_mode="HTML")
+        ai_definition = get_ai_definition(search_term, user_name)
+
+        bot.delete_message(wait_msg.chat.id, wait_msg.message_id) # Delete the "please wait" message
 
         if ai_definition:
-            # Show the AI definition and save it to our DB
-            message_text = f"🤖 <b>Definition: {escape(search_term)}</b> (from AI)\n"
-            message_text += f"━━━━━━━━━━━━━━━━━━\n\n"
-            message_text += f"{escape(ai_definition)}"
-            bot.reply_to(msg, message_text, parse_mode="HTML")
+            # Step 3: Show the AI definition directly and save it to our DB
+            bot.reply_to(msg, ai_definition, parse_mode="HTML")
             
             # Save for next time
             try:
                 supabase.table('glossary').insert({
                     'term': search_term,
                     'definition': ai_definition,
-                    'category': 'AI-Generated'
+                    'category': 'AI-Generated (Hinglish)'
                 }).execute()
             except Exception as db_error:
                 print(f"Failed to save AI definition to DB: {db_error}")
@@ -5724,7 +5741,6 @@ def handle_define_command(msg: types.Message):
     except Exception as e:
         report_error_to_admin(f"Error in /define command: {traceback.format_exc()}")
         bot.reply_to(msg, "❌ An error occurred while searching for the definition.")
-
 
 # --- Law Library Feature (/section) ---
 
