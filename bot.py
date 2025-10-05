@@ -24,7 +24,7 @@ from html import escape, unescape
 from collections import namedtuple
 from postgrest.exceptions import APIError
 import httpx
-
+import google.generativeai as genai
 # =============================================================================
 # 2. CONFIGURATION & INITIALIZATION
 # =============================================================================
@@ -286,6 +286,30 @@ def has_any_permission(user_id):
     except Exception as e:
         print(f"Error checking for any permission for user {user_id}: {e}")
         return False
+# --- AI Configuration & Helper ---
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
+if GEMINI_API_KEY:
+    try:
+        genai.configure(api_key=GEMINI_API_KEY)
+        print("✅ Successfully configured Gemini AI client.")
+    except Exception as e:
+        print(f"❌ Gemini AI configuration failed: {e}")
+
+def get_ai_definition(term: str):
+    """
+    Calls the Gemini AI to get a definition for a term.
+    """
+    if not GEMINI_API_KEY:
+        print("WARNING: GEMINI_API_KEY not set. AI definitions are disabled.")
+        return None
+    try:
+        model = genai.GenerativeModel('gemini-pro')
+        prompt = f"You are an expert tutor for Chartered Accountancy (CA) students in India. Define the term '{term}'. Keep the definition clear, concise (under 80 words), and provide one simple, relevant example."
+        response = model.generate_content(prompt, safety_settings={'HARASSMENT':'BLOCK_NONE'})
+        return response.text.strip()
+    except Exception as e:
+        print(f"Error calling Gemini API: {e}")
+        return None
 # NEW: Live Countdown Helper (More Efficient Version, now using SAFE HTML)
 def live_countdown(chat_id, message_id, duration_seconds):
     """
@@ -5641,6 +5665,64 @@ def handle_study_tip_command(msg: types.Message):
         print(f"Error in /studytip command: {traceback.format_exc()}")
         report_error_to_admin(f"Could not fetch/send study tip:\n{e}")
         bot.send_message(msg.chat.id, "❌ An error occurred while fetching the tip from the database.")
+@bot.message_handler(commands=['define'])
+@membership_required
+def handle_define_command(msg: types.Message):
+    """
+    (SMART HYBRID) Looks up a term, first checking the local DB (cache),
+    then falling back to the AI if not found.
+    """
+    try:
+        parts = msg.text.split(' ', 1)
+        if len(parts) < 2 or not parts[1].strip():
+            bot.reply_to(msg, "Please provide a term to define.\n<b>Example:</b> <code>/define Amortization</code>", parse_mode="HTML")
+            return
+
+        search_term = parts[1].strip()
+        
+        # Step 1: Check our own database first (it's fast)
+        response = supabase.table('glossary').select('term, definition, category').ilike('term', search_term).single().execute()
+
+        if response.data:
+            # If found in DB, show it instantly
+            term_data = response.data
+            term = escape(term_data['term'])
+            definition = escape(term_data['definition'])
+            category = escape(term_data.get('category', 'General'))
+            
+            message_text = f"📖 <b>Definition: {term}</b> (from Database)\n"
+            message_text += f"━━━━━━━━━━━━━━━━━━\n"
+            message_text += f"<b>Category:</b> <i>{category}</i>\n\n"
+            message_text += f"{definition}"
+            bot.reply_to(msg, message_text, parse_mode="HTML")
+            return
+
+        # Step 2: If not found in DB, ask the AI
+        bot.reply_to(msg, f"🤔 I don't have '<code>{escape(search_term)}</code>' in my database. Asking the AI for a definition... please wait.", parse_mode="HTML")
+        ai_definition = get_ai_definition(search_term)
+
+        if ai_definition:
+            # Step 3: Show the AI definition and save it to our DB
+            message_text = f"🤖 <b>Definition: {escape(search_term)}</b> (from AI)\n"
+            message_text += f"━━━━━━━━━━━━━━━━━━\n\n"
+            message_text += f"{escape(ai_definition)}"
+            bot.reply_to(msg, message_text, parse_mode="HTML")
+            
+            # Save for next time
+            try:
+                supabase.table('glossary').insert({
+                    'term': search_term,
+                    'definition': ai_definition,
+                    'category': 'AI-Generated'
+                }).execute()
+            except Exception as db_error:
+                print(f"Failed to save AI definition to DB: {db_error}")
+        else:
+            bot.reply_to(msg, f"😥 Sorry, the AI could not find a definition for '<code>{escape(search_term)}</code>'.", parse_mode="HTML")
+
+    except Exception as e:
+        report_error_to_admin(f"Error in /define command: {traceback.format_exc()}")
+        bot.reply_to(msg, "❌ An error occurred while searching for the definition.")
 
 
 # --- Law Library Feature (/section) ---
