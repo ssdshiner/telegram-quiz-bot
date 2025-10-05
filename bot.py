@@ -6096,7 +6096,7 @@ def handle_preflight_action_callback(call: types.CallbackQuery):
 def _launch_marathon_session(user_id, chat_id, message_id, questions_to_run):
     """
     (Updated) Helper function that receives a pre-validated list of questions
-    and launches the marathon.
+    and launches the marathon, now storing the selected_set name.
     """
     try:
         state_data = user_states.get(user_id, {})
@@ -6109,10 +6109,15 @@ def _launch_marathon_session(user_id, chat_id, message_id, questions_to_run):
         
         session_id = str(GROUP_ID)
         QUIZ_SESSIONS[session_id] = {
-            'title': preset_details['quiz_title'], 'description': preset_details['quiz_description'],
-            'questions': questions_to_run, 'current_question_index': 0, 'is_active': True,
+            'title': preset_details['quiz_title'], 
+            'description': preset_details['quiz_description'],
+            'selected_set': selected_set, # <-- THIS LINE IS NEW
+            'questions': questions_to_run, 
+            'current_question_index': 0, 
+            'is_active': True,
             'stats': {'start_time': datetime.datetime.now(), 'total_questions': actual_count},
-            'leaderboard_updates': [], 'performance_tracker': {}
+            'leaderboard_updates': [], 
+            'performance_tracker': {}
         }
         QUIZ_PARTICIPANTS[session_id] = {}
 
@@ -6458,16 +6463,51 @@ def calculate_legend_tier(user_score, total_questions, all_scores):
         return {'tier': 'BRONZE', 'emoji': '🥉', 'title': 'Bronze Legend'}
     else:
         return None
+def _send_admin_marathon_summary(session, participants, update_response):
+    """
+    Sends a detailed summary of the completed marathon to the admin via DM.
+    """
+    try:
+        title = session.get('title', 'N/A')
+        selected_set = session.get('selected_set', 'N/A')
+        questions_used = session.get('questions', [])
+        num_participants = len(participants)
 
+        # Build the summary message
+        summary = f"📊 <b>Admin Summary for Quiz Marathon</b> 📊\n\n"
+        summary += f"<b>Quiz:</b> {escape(title)}\n"
+        summary += f"<b>Participants:</b> {num_participants}\n"
+        summary += f"<b>Questions Asked:</b> {len(questions_used)}\n\n"
+
+        # Part 1: Verify that the 'used' status was updated in Supabase
+        summary += "<b>Verification Check:</b>\n"
+        if update_response and len(update_response.data) == len(questions_used):
+            summary += f"  ✅ Successfully marked all {len(questions_used)} questions as 'used'.\n"
+        else:
+            summary += f"  ❌ FAILED to mark questions as 'used'. Please check the logs and database manually.\n"
+
+        # Part 2: Check for remaining questions in the quiz set
+        if selected_set != 'N/A':
+            remaining_res = supabase.table('quiz_questions').select('id', count='exact').eq('quiz_set', selected_set).eq('used', False).execute()
+            remaining_count = remaining_res.count
+            summary += f"\n<b>Content Status for '{escape(selected_set)}':</b>\n"
+            summary += f"  🧠 There are <b>{remaining_count}</b> questions left in this set."
+        
+        # Send the final report to the admin
+        bot.send_message(ADMIN_USER_ID, summary, parse_mode="HTML")
+
+    except Exception as e:
+        report_error_to_admin(f"Failed to send admin marathon summary: {traceback.format_exc()}")
 def send_marathon_results(session_id):
     """
-    Generates and sends the new two-card final report and guarantees session cleanup.
+    Generates and sends the public report, triggers the private admin summary,
+    and guarantees session cleanup.
     """
     session = QUIZ_SESSIONS.get(session_id)
     if not session: return
 
     try:
-        session['is_active'] = False # Immediately mark as inactive
+        session['is_active'] = False 
         participants = QUIZ_PARTICIPANTS.get(session_id, {})
         questions = session.get('questions', [])
         total_questions_asked = len(questions)
@@ -6476,17 +6516,17 @@ def send_marathon_results(session_id):
             print(f"Marathon {session_id} ended with 0 questions.")
             return
 
-        # --- 1. Reliably update used questions in the database ---
+        # --- 1. Reliably update used questions and CAPTURE the response ---
+        update_response = None
         try:
-            # --- THIS IS THE FIX ---
-            # We now convert each question ID to a string to prevent data type errors.
-            used_question_ids = [str(q['id']) for q in questions]
+            # Correctly use numeric IDs for the query
+            used_question_ids = [q['id'] for q in questions]
 
             if used_question_ids:
-                supabase.table('quiz_questions').update({'used': True}).in_('id', used_question_ids).execute()
-                print(f"Successfully marked {len(used_question_ids)} questions as used for marathon.")
+                # Capture the result of the database operation for verification
+                update_response = supabase.table('quiz_questions').update({'used': True}).in_('id', used_question_ids).execute()
+                print(f"Attempted to mark {len(used_question_ids)} questions as used.")
         except Exception as e:
-            # Added more detailed error logging here
             print(f"CRITICAL ERROR: Failed to mark marathon questions as used. Error: {e}")
             report_error_to_admin(f"CRITICAL: Failed to mark marathon questions as used.\n\nError: {traceback.format_exc()}")
         
@@ -6495,6 +6535,8 @@ def send_marathon_results(session_id):
         if not participants:
             no_participants_message = f"🏁 <b>MARATHON COMPLETED</b>\n\n🎯 <b>Quiz:</b> '{safe_quiz_title}'\n📊 <b>Questions:</b> {total_questions_asked} asked\n\n😅 No warriors joined this battle! Better luck next time."
             bot.send_message(GROUP_ID, no_participants_message, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
+            # Send admin summary even if no one played
+            _send_admin_marathon_summary(session, participants, update_response)
             return
         
         # --- 2. Process and Rank Participants ---
@@ -6591,8 +6633,11 @@ def send_marathon_results(session_id):
         
         bot.send_message(GROUP_ID, card2_text, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
 
+        # After all public messages are sent, trigger the admin DM.
+        _send_admin_marathon_summary(session, participants, update_response)
+
     finally:
-        # --- 5. Guaranteed Session Cleanup ---
+        # Guaranteed Session Cleanup
         print(f"Cleaning up session data for session_id: {session_id}")
         with session_lock:
             if session_id in QUIZ_SESSIONS:
