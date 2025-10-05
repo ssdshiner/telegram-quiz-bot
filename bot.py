@@ -190,7 +190,7 @@ APPRECIATION_STREAK = 3 # Days of consecutive quizzes for a shout-out
 # 4. GOOGLE SHEETS INTEGRATION
 # =============================================================================
 def get_gsheet():
-    """Connects to Google Sheets using credentials from a file path."""
+    """Connects to Google Sheets and returns the entire workbook object."""
     try:
         scope = [
             "https://spreadsheets.google.com/feeds",
@@ -198,22 +198,19 @@ def get_gsheet():
         ]
         credentials_path = os.getenv('GOOGLE_SHEETS_CREDENTIALS_PATH')
         if not credentials_path:
-            print(
-                "ERROR: GOOGLE_SHEETS_CREDENTIALS_PATH environment variable not set."
-            )
+            print("ERROR: GOOGLE_SHEETS_CREDENTIALS_PATH not set.")
             return None
         creds = ServiceAccountCredentials.from_json_keyfile_name(
             credentials_path, scope)
         client = gspread.authorize(creds)
         sheet_key = os.getenv('GOOGLE_SHEET_KEY')
         if not sheet_key:
-            print("ERROR: GOOGLE_SHEET_KEY environment variable not set.")
+            print("ERROR: GOOGLE_SHEET_KEY not set.")
             return None
-        return client.open_by_key(sheet_key).sheet1
+        # Return the whole workbook, not just the first sheet
+        return client.open_by_key(sheet_key)
     except FileNotFoundError:
-        print(
-            f"ERROR: Credentials file not found at path: {credentials_path}. Make sure the Secret File is configured correctly on Render."
-        )
+        print(f"ERROR: Credentials file not found at path: {credentials_path}.")
         return None
     except Exception as e:
         print(f"❌ Google Sheets connection failed: {e}")
@@ -5698,32 +5695,28 @@ def handle_define_command(msg: types.Message):
         
         definition_found = False
         try:
-            sheet = get_gsheet().worksheet('Glossary')
-            
-            # --- FIX #1: Search in the 2nd column (Column B) instead of the 1st ---
-            cell = sheet.find(search_term, in_column=2, case_sensitive=False)
-            
-            if cell:
-                row_values = sheet.row_values(cell.row)
+            workbook = get_gsheet()
+            if workbook:
+                sheet = workbook.worksheet('Glossary') # Correctly open the 'Glossary' tab by name
+                cell = sheet.find(search_term, in_column=2, case_sensitive=False)
                 
-                # --- FIX #2: Read data from the correct column indices ---
-                term_data = {
-                    'term': row_values[1],        # Column B
-                    'definition': row_values[2],  # Column C
-                    'category': row_values[3] if len(row_values) > 3 else 'General' # Column D
-                }
-                
-                if term_data.get('category') == 'AI-Generated (Hinglish)':
-                    bot.reply_to(msg, term_data['definition'], parse_mode="HTML")
-                else:
-                    message_text = f"📖 <b>Definition: {escape(term_data['term'])}</b> (from Sheet)\n"
-                    message_text += f"━━━━━━━━━━━━━━━━━━\n"
-                    message_text += f"<b>Category:</b> <i>{escape(term_data['category'])}</i>\n\n"
-                    message_text += f"{escape(term_data['definition'])}"
-                    bot.reply_to(msg, message_text, parse_mode="HTML")
-                
-                definition_found = True
-
+                if cell:
+                    row_values = sheet.row_values(cell.row)
+                    term_data = {
+                        'term': row_values[1], 'definition': row_values[2],
+                        'category': row_values[3] if len(row_values) > 3 else 'General'
+                    }
+                    
+                    if term_data.get('category') == 'AI-Generated (Hinglish)':
+                        bot.reply_to(msg, term_data['definition'], parse_mode="HTML")
+                    else:
+                        message_text = f"📖 <b>Definition: {escape(term_data['term'])}</b> (from Sheet)\n"
+                        message_text += f"━━━━━━━━━━━━━━━━━━\n"
+                        message_text += f"<b>Category:</b> <i>{escape(term_data['category'])}</i>\n\n"
+                        message_text += f"{escape(term_data['definition'])}"
+                        bot.reply_to(msg, message_text, parse_mode="HTML")
+                    
+                    definition_found = True
         except Exception as gsheet_error:
             print(f"⚠️ Could not search Google Sheet. Falling back to AI. Error: {gsheet_error}")
 
@@ -5743,14 +5736,15 @@ def handle_define_command(msg: types.Message):
             bot.reply_to(msg, ai_definition, parse_mode="HTML")
             
             try:
-                sheet = get_gsheet().worksheet('Glossary')
-                # --- FIX #3: Add an empty placeholder for the 'id' column when saving ---
-                sheet.append_row(['', search_term, ai_definition, 'AI-Generated (Hinglish)'])
+                workbook = get_gsheet()
+                if workbook:
+                    sheet = workbook.worksheet('Glossary')
+                    sheet.append_row(['', search_term, ai_definition, 'AI-Generated (Hinglish)'])
             except Exception as gsheet_save_error:
                 print(f"⚠️ Failed to save new AI definition to Google Sheet: {gsheet_save_error}")
                 report_error_to_admin(f"Failed to save AI definition for '{search_term}' to GSheet: {gsheet_save_error}")
         else:
-            bot.reply_to(msg, f"😥 Sorry, I couldn't find a definition for '<code>{escape(search_term)}</code>'.", parse_mode="HTML")
+            bot.reply_to(msg, f"😥 Sorry, the AI could not find a definition for '<code>{escape(search_term)}</code>'.", parse_mode="HTML")
 
     except Exception as e:
         report_error_to_admin(f"CRITICAL Error in /define command: {traceback.format_exc()}")
