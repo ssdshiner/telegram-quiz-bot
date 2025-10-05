@@ -5685,7 +5685,7 @@ def handle_study_tip_command(msg: types.Message):
 def handle_define_command(msg: types.Message):
     """
     (SMART HYBRID) Looks up a term, first checking the local DB (cache),
-    then falling back to the AI for a personalized Hinglish definition if not found.
+    then falling back to the AI if not found.
     """
     try:
         parts = msg.text.split(' ', 1)
@@ -5694,17 +5694,18 @@ def handle_define_command(msg: types.Message):
             return
 
         search_term = parts[1].strip()
-        user_name = escape(msg.from_user.first_name) # Get the user's name
+        user_name = escape(msg.from_user.first_name)
         
-        # Step 1: Check our own database first
-        response = supabase.table('glossary').select('term, definition, category').ilike('term', search_term).limit(1).execute()
+        # --- THE FIX IS HERE ---
+        # Changed from an exact match to a 'contains' search (ilike('%term%'))
+        # This will find the term even if there are hidden spaces in the database.
+        response = supabase.table('glossary').select('term, definition, category').ilike('term', f'%{search_term}%').limit(1).execute()
 
         if response.data:
             term_data = response.data[0]
-            # If the definition is in Hinglish from AI, just send it directly.
             if term_data.get('category') == 'AI-Generated (Hinglish)':
                 bot.reply_to(msg, term_data['definition'], parse_mode="HTML")
-            else: # Otherwise, format it nicely (for old, manually added definitions)
+            else:
                 term = escape(term_data['term'])
                 definition = escape(term_data['definition'])
                 category = escape(term_data.get('category', 'General'))
@@ -5716,17 +5717,19 @@ def handle_define_command(msg: types.Message):
                 bot.reply_to(msg, message_text, parse_mode="HTML")
             return
 
-        # Step 2: If not found in DB, ask the AI
+        # If not found in DB, ask the AI
         wait_msg = bot.reply_to(msg, f"🤔 I don't have '<code>{escape(search_term)}</code>' in my database. AI se aapke liye ek personal definition banwa raha hu... please wait.", parse_mode="HTML")
-        ai_definition = get_ai_definition(search_term, user_name)
-
-        bot.delete_message(wait_msg.chat.id, wait_msg.message_id) # Delete the "please wait" message
+        
+        try:
+            ai_definition = get_ai_definition(search_term, user_name)
+            bot.delete_message(wait_msg.chat.id, wait_msg.message_id)
+        except Exception:
+            # In case deleting the message fails, just continue
+            pass
 
         if ai_definition:
-            # Step 3: Show the AI definition directly and save it to our DB
             bot.reply_to(msg, ai_definition, parse_mode="HTML")
             
-            # Save for next time
             try:
                 supabase.table('glossary').insert({
                     'term': search_term,
