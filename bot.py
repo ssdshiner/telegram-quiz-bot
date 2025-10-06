@@ -14,6 +14,9 @@ import threading
 import time
 import random
 import requests
+from PIL import Image, ImageDraw, ImageFont
+import io
+import textwrap
 from flask import Flask, request, json
 from telebot import TeleBot, types
 from telebot.apihelper import ApiTelegramException
@@ -5690,12 +5693,59 @@ def handle_study_tip_command(msg: types.Message):
         print(f"Error in /studytip command: {traceback.format_exc()}")
         report_error_to_admin(f"Could not fetch/send study tip:\n{e}")
         bot.send_message(msg.chat.id, "❌ An error occurred while fetching the tip from the database.")
+def create_definition_image(term, definition, category):
+    """Creates a visually appealing image card for a definition."""
+    # --- Card and Font Setup ---
+    try:
+        # Use a common, clean font. If not found, it will default.
+        title_font = ImageFont.truetype("arialbd.ttf", 48)
+        body_font = ImageFont.truetype("arial.ttf", 28)
+        footer_font = ImageFont.truetype("ariali.ttf", 24)
+    except IOError:
+        title_font = ImageFont.load_default()
+        body_font = ImageFont.load_default()
+        footer_font = ImageFont.load_default()
+
+    card_width = 800
+    padding = 40
+
+    # --- Dynamic Height Calculation ---
+    wrapped_definition = textwrap.wrap(definition, width=50)
+    text_height = sum([body_font.getbbox(line)[3] for line in wrapped_definition])
+    card_height = 250 + text_height 
+
+    # --- Create Image ---
+    img = Image.new('RGB', (card_width, card_height), color='#161b22')
+    draw = ImageDraw.Draw(img)
+
+    # --- Draw Elements ---
+    # 1. Title (Term)
+    draw.text((padding, padding), term, font=title_font, fill='#58a6ff')
+
+    # 2. Separator Line
+    draw.line([(padding, 110), (card_width - padding, 110)], fill='#30363d', width=2)
+
+    # 3. Definition Text (with wrapping)
+    y_text = 140
+    for line in wrapped_definition:
+        draw.text((padding, y_text), line, font=body_font, fill='#c9d1d9')
+        y_text += body_font.getbbox(line)[3] + 5 # Add spacing between lines
+
+    # 4. Footer (Category)
+    footer_text = f"Category: {category}"
+    draw.text((padding, card_height - 60), footer_text, font=footer_font, fill='#8b949e')
+
+    # --- Save to Memory ---
+    img_byte_arr = io.BytesIO()
+    img.save(img_byte_arr, format='PNG')
+    img_byte_arr.seek(0) # Rewind the buffer to the beginning
+    return img_byte_arr
 @bot.message_handler(commands=['define'])
 @membership_required
 def handle_define_command(msg: types.Message):
     """
-    (NEW ARCHITECTURE) Looks up a term, first checking the Google Sheet,
-    then safely falling back to the AI on any error or if not found.
+    Looks up a term, generating a visual card from the Google Sheet
+    or falling back to the AI for a text-based definition.
     """
     try:
         parts = msg.text.split(' ', 1)
@@ -5705,30 +5755,30 @@ def handle_define_command(msg: types.Message):
 
         search_term = parts[1].strip()
         user_name = escape(msg.from_user.first_name)
-        
+
         definition_found = False
         try:
             workbook = get_gsheet()
             if workbook:
-                sheet = workbook.worksheet('Glossary') # Correctly open the 'Glossary' tab by name
+                sheet = workbook.worksheet('Glossary')
                 cell = sheet.find(search_term, in_column=2, case_sensitive=False)
-                
+
                 if cell:
                     row_values = sheet.row_values(cell.row)
                     term_data = {
                         'term': row_values[1], 'definition': row_values[2],
                         'category': row_values[3] if len(row_values) > 3 else 'General'
                     }
-                    
+
+                    # --- THIS IS THE NEW LOGIC ---
                     if term_data.get('category') == 'AI-Generated (Hinglish)':
+                        # Fallback to text for AI definitions
                         bot.reply_to(msg, term_data['definition'], parse_mode="HTML")
                     else:
-                        message_text = f"📖 <b>Definition: {escape(term_data['term'])}</b> (from Sheet)\n"
-                        message_text += f"━━━━━━━━━━━━━━━━━━\n"
-                        message_text += f"<b>Category:</b> <i>{escape(term_data['category'])}</i>\n\n"
-                        message_text += f"{escape(term_data['definition'])}"
-                        bot.reply_to(msg, message_text, parse_mode="HTML")
-                    
+                        # Generate and send the image card
+                        image_file = create_definition_image(term_data['term'], term_data['definition'], term_data['category'])
+                        bot.send_photo(msg.chat.id, image_file, reply_to_message_id=msg.message_id)
+
                     definition_found = True
         except Exception as gsheet_error:
             print(f"⚠️ Could not search Google Sheet. Falling back to AI. Error: {gsheet_error}")
@@ -5736,8 +5786,9 @@ def handle_define_command(msg: types.Message):
         if definition_found:
             return
 
+        # --- AI Fallback (remains the same) ---
         wait_msg = bot.reply_to(msg, f"🤔 Term not found in our records. Asking the AI... please wait.", parse_mode="HTML")
-        
+
         ai_definition = None
         try:
             ai_definition = get_ai_definition(search_term, user_name)
@@ -5747,7 +5798,6 @@ def handle_define_command(msg: types.Message):
 
         if ai_definition:
             bot.reply_to(msg, ai_definition, parse_mode="HTML")
-            
             try:
                 workbook = get_gsheet()
                 if workbook:
