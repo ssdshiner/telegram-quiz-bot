@@ -14,8 +14,10 @@ import threading
 import time
 import random
 import requests
+import uuid
 from flask import Flask, request, json
 from telebot import TeleBot, types
+from collections import defaultdict
 from telebot.apihelper import ApiTelegramException
 from google.oauth2 import service_account
 from datetime import timezone, timedelta
@@ -178,6 +180,7 @@ team_battle_session = {}
 QUIZ_SESSIONS = {}
 QUIZ_PARTICIPANTS = {}
 user_states = {}
+pending_definitions = defaultdict(dict)
 session_lock = threading.Lock()
 # Legend Tier Thresholds (percentiles)
 LEGEND_TIERS = {
@@ -5871,15 +5874,28 @@ def process_newdef_category(msg: types.Message):
             f"Please review this submission."
         )
 
-        # We need to pass all data in the callback
-        callback_data_approve = f"def_approve_{user_id}_{term}|{definition}|{category}"
-        callback_data_decline = f"def_decline_{user_id}_{term}"
+# Generate a short unique ID for this definition
+short_id = str(uuid.uuid4())[:8]
 
-        markup = types.InlineKeyboardMarkup()
-        markup.add(
-            types.InlineKeyboardButton("👍 Approve", callback_data=callback_data_approve),
-            types.InlineKeyboardButton("👎 Decline", callback_data=callback_data_decline)
-        )
+# Store full data server-side
+pending_definitions[short_id] = {
+    "user_id": user_id,
+    "term": term,
+    "definition": definition,
+    "category": category
+}
+
+# Create short and safe callback_data
+callback_data_approve = f"def_approve_{short_id}"
+callback_data_reject = f"def_reject_{short_id}"
+
+# Make inline buttons safely
+markup = types.InlineKeyboardMarkup()
+markup.row(
+    types.InlineKeyboardButton("✅ Approve", callback_data=callback_data_approve),
+    types.InlineKeyboardButton("❌ Reject", callback_data=callback_data_reject)
+)
+
         bot.send_message(ADMIN_USER_ID, admin_message, reply_markup=markup, parse_mode="HTML")
 
         # --- Final Confirmation to User ---
@@ -7976,6 +7992,34 @@ def handle_run_checks_confirmation(call: types.CallbackQuery):
     """Handles the admin's confirmation to send the messages."""
     admin_id = call.from_user.id
     bot.edit_message_text("Processing your choice...", admin_id, call.message.message_id, reply_markup=None)
+# --- Handle definition approval/rejection ---
+elif call.data.startswith("def_approve_") or call.data.startswith("def_reject_"):
+    short_id = call.data.split("_")[-1]
+
+    if short_id not in pending_definitions:
+        bot.answer_callback_query(call.id, "❗ This definition data was not found or expired.")
+        return
+
+    data = pending_definitions.pop(short_id)
+    user_id = data["user_id"]
+    term = data["term"]
+    definition = data["definition"]
+    category = data["category"]
+
+    if call.data.startswith("def_approve_"):
+        bot.send_message(
+            user_id,
+            f"✅ Your definition for <b>{term}</b> has been approved and added to the {category} category!",
+            parse_mode="HTML"
+        )
+        bot.answer_callback_query(call.id, "Approved successfully ✅")
+    else:
+        bot.send_message(
+            user_id,
+            f"❌ Your definition for <b>{term}</b> was rejected by the admin.",
+            parse_mode="HTML"
+        )
+        bot.answer_callback_query(call.id, "Rejected ❌")
 
     if call.data == 'send_actions_no':
         bot.send_message(admin_id, "❌ Operation cancelled. No messages were sent to the group.")
