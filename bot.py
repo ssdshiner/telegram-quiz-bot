@@ -8134,7 +8134,56 @@ def handle_run_checks_command(msg: types.Message):
     except Exception as e:
         print(f"Error in /run_checks: {traceback.format_exc()}")
         bot.send_message(admin_id, "❌ An error occurred during the check.")
+@bot.callback_query_handler(func=lambda call: call.data.startswith('send_actions_'))
+def handle_run_checks_confirmation(call: types.CallbackQuery):
+    """Handles the admin's confirmation to send the messages."""
+    admin_id = call.from_user.id
+    bot.edit_message_text("Processing your choice...", admin_id, call.message.message_id, reply_markup=None)
 
+    if call.data == 'send_actions_no':
+        bot.send_message(admin_id, "❌ Operation cancelled. No messages were sent to the group.")
+        if admin_id in user_states and 'pending_actions' in user_states[admin_id]:
+            del user_states[admin_id]['pending_actions']
+        return
+
+    # This part handles 'send_actions_yes'
+    try:
+        actions = user_states.get(admin_id, {}).get('pending_actions')
+        if not actions:
+            bot.send_message(admin_id, "❌ Action expired or data not found. Please run /run_checks again.")
+            return
+
+        if actions['first_warnings']:
+            user_list = [f"{escape(user['user_name'])}" for user in actions['first_warnings']]
+            message = (f"⚠️ <b>Quiz Activity Warning!</b> ⚠️\n"
+                       f"The following members have not participated in any quiz for the last 3 days: {', '.join(user_list)}.\n"
+                       f"This is your final 24-hour notice.")
+            bot.send_message(GROUP_ID, message, parse_mode="HTML", message_thread_id=UPDATES_TOPIC_ID)
+            user_ids_to_update = [user['user_id'] for user in actions['first_warnings']]
+            supabase.table('quiz_activity').update({'warning_level': 1}).in_('user_id', user_ids_to_update).execute()
+        
+        if actions['final_warnings']:
+            user_list_str = format_user_mention_list(actions['final_warnings'])
+            message = f"Admins, please take action. The following members did not participate even after a final warning:\n" + user_list_str
+            bot.send_message(GROUP_ID, message, parse_mode="HTML", message_thread_id=UPDATES_TOPIC_ID)
+            user_ids_to_update = [user['user_id'] for user in actions['final_warnings']]
+            supabase.table('quiz_activity').update({'warning_level': 2}).in_('user_id', user_ids_to_update).execute()
+
+        if actions['appreciations']:
+            for user in actions['appreciations']:
+                safe_user_name = escape(user['user_name'])
+                message = (f"🏆 <b>Star Performer Alert!</b> 🏆\n\n"
+                           f"Hats off to <b>@{safe_user_name}</b> for showing incredible consistency! Your dedication is what makes this community awesome. Keep it up! 👏")
+                bot.send_message(GROUP_ID, message, parse_mode="HTML", message_thread_id=UPDATES_TOPIC_ID)
+
+        bot.send_message(admin_id, "✅ All approved messages have been sent to the group.")
+    
+    except Exception as e:
+        print(f"Error in handle_run_checks_confirmation: {traceback.format_exc()}")
+        bot.send_message(admin_id, "❌ An error occurred while sending messages.")
+    finally:
+        if admin_id in user_states and 'pending_actions' in user_states[admin_id]:
+            del user_states[admin_id]['pending_actions']
 
 
 @bot.message_handler(content_types=['new_chat_members'])
