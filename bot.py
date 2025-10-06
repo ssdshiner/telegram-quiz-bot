@@ -15,6 +15,7 @@ import requests
 from flask import Flask, request, json
 from telebot import TeleBot, types
 from telebot.apihelper import ApiTelegramException
+from google.oauth2 import service_account
 from datetime import timezone, timedelta
 IST = timezone(timedelta(hours=5, minutes=30))
 from supabase import create_client, Client
@@ -201,11 +202,8 @@ def get_gsheet():
             print("ERROR: GOOGLE_SHEETS_CREDENTIALS_PATH not set.")
             return None
             
-        # --- THIS IS THE NEW AUTHENTICATION METHOD ---
-        from google.oauth2 import service_account
         creds = service_account.Credentials.from_service_account_file(credentials_path, scopes=scope)
         client = gspread.authorize(creds)
-        # --- END OF NEW METHOD ---
         
         sheet_key = os.getenv('GOOGLE_SHEET_KEY')
         if not sheet_key:
