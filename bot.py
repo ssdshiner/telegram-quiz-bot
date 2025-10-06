@@ -292,52 +292,7 @@ def has_any_permission(user_id):
         return False
 
 
-def get_ai_definition(term: str, user_name: str):
-    """
-    Calls the Gemini AI using a direct REST API call to bypass library issues.
-    """
-    if not GEMINI_API_KEY:
-        print("WARNING: GEMINI_API_KEY not set. AI definitions are disabled.")
-        return None
 
-    # This is the stable v1 API endpoint that we are forcing the code to use.
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.0-pro:generateContent?key={GEMINI_API_KEY}"
-
-    prompt = f"""Aap CA (Chartered Accountancy) ke ek expert tutor hain. '{term}' is term ko aasan Hinglish me samjhaiye.
-
-    Definition clear aur 100 words se kam honi chahiye.
-
-    Ek practical example bhi dijiye jisme aap '{user_name}' ka naam use karein. Apne jawab me important words ko bold karne ke liye <b> tags ka use karein."""
-
-    headers = {'Content-Type': 'application/json'}
-
-    data = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "safetySettings": [
-            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
-        ]
-    }
-
-    try:
-        response = requests.post(url, headers=headers, json=data, timeout=20)
-        response.raise_for_status()  # This will raise an error for bad status codes (4xx or 5xx)
-
-        result = response.json()
-        return result['candidates'][0]['content']['parts'][0]['text'].strip()
-
-    except requests.exceptions.RequestException as e:
-        print(f"Error calling Gemini REST API: {e}")
-        if e.response is not None:
-            print(f"Response Body: {e.response.text}")
-        return None
-    except (KeyError, IndexError) as e:
-        print(f"Error parsing Gemini REST API response: {e}")
-        result = locals().get('result', 'No response object')
-        print(f"Full Response: {result}")
-        return None
 # NEW: Live Countdown Helper (More Efficient Version, now using SAFE HTML)
 def live_countdown(chat_id, message_id, duration_seconds):
     """
@@ -5694,17 +5649,17 @@ def handle_study_tip_command(msg: types.Message):
         report_error_to_admin(f"Could not fetch/send study tip:\n{e}")
         bot.send_message(msg.chat.id, "❌ An error occurred while fetching the tip from the database.")
 def create_definition_image(user_name, term, definition, category):
-    """Creates a professional, high-contrast, and highly readable image card."""
-    # --- Card and Font Setup (Larger and Bolder) ---
+    """Creates a final, high-impact card with maximum font size and readability."""
+    # --- Card and Font Setup (MAXIMUM SIZE) ---
     try:
-        # Using bold fonts for better weight and readability
-        header_font = ImageFont.truetype("arialbd.ttf", 40)
-        intro_font = ImageFont.truetype("arial.ttf", 30)
-        term_font = ImageFont.truetype("arialbd.ttf", 72)
-        body_font = ImageFont.truetype("arial.ttf", 40)
-        footer_font = ImageFont.truetype("arial.ttf", 24)
+        # Using bold fonts for maximum weight
+        header_font = ImageFont.truetype("arialbd.ttf", 28)
+        intro_font = ImageFont.truetype("arial.ttf", 24)
+        term_font = ImageFont.truetype("arialbd.ttf", 100) # MASSIVE font for the term
+        body_font = ImageFont.truetype("arial.ttf", 55)    # MASSIVE font for the body
+        footer_font = ImageFont.truetype("arial.ttf", 20)
     except IOError:
-        # Fallback to default font if specific fonts are not found
+        # Fallback to default fonts if arial is not available
         header_font = ImageFont.load_default()
         intro_font = ImageFont.load_default()
         term_font = ImageFont.load_default()
@@ -5712,15 +5667,15 @@ def create_definition_image(user_name, term, definition, category):
         footer_font = ImageFont.load_default()
 
     # --- High-Contrast Color Palette ---
-    BG_COLOR = "#FFFFFF"  # Pure White background
-    BRAND_COLOR = "#0D47A1" # Deep, strong blue
-    DARK_TEXT = "#000000"  # Pure Black for the term
-    BODY_TEXT = "#212121"  # Very dark grey for the definition
-    SECONDARY_TEXT = "#424242" # Medium-dark grey for secondary info
+    BG_COLOR = "#FFFFFF"
+    BRAND_COLOR = "#0D47A1"
+    DARK_TEXT = "#000000"
+    BODY_TEXT = "#212121"
+    SECONDARY_TEXT = "#424242"
 
     # --- Card Layout ---
     card_width = 800
-    padding = 60 # Increased padding
+    padding = 40
 
     # --- Dynamic Intro Line ---
     intro_lines = [
@@ -5730,41 +5685,43 @@ def create_definition_image(user_name, term, definition, category):
     ]
     intro_text = random.choice(intro_lines)
 
-    # --- Dynamic Height Calculation (with shorter line width for wrapping) ---
-    wrapped_definition = textwrap.wrap(definition, width=38) # Shorter width = bigger text
-    text_height = sum([body_font.getbbox(line)[3] + 15 for line in wrapped_definition])
-    card_height = 350 + text_height
+    # --- Dynamic Height Calculation (Extremely Tight Wrapping) ---
+    # Wrap text very tightly to fit the huge font.
+    wrapped_definition = textwrap.wrap(definition, width=25)
+    # Calculate height based on the new massive font size.
+    text_height = sum([body_font.getbbox(line)[3] + 10 for line in wrapped_definition])
+    card_height = 250 + text_height # Reduced base height for a more compact card
 
     # --- Create Image ---
     img = Image.new('RGB', (card_width, card_height), color=BG_COLOR)
     draw = ImageDraw.Draw(img)
 
-    # --- Draw Elements ---
+    # --- Draw Elements (with Minimal Vertical Spacing) ---
     # 1. C.A.V.Y.A. Branding Header
-    draw.text((padding, 40), "C.A.V.Y.A.", font=header_font, fill=BRAND_COLOR)
-    draw.line([(padding, 95), (card_width - padding, 95)], fill="#DEE2E6", width=2)
+    draw.text((padding, 25), "C.A.V.Y.A.", font=header_font, fill=BRAND_COLOR)
+    draw.line([(padding, 70), (card_width - padding, 70)], fill="#E1E4E8", width=2)
 
     # 2. Personalized Intro
-    draw.text((padding, 115), intro_text, font=intro_font, fill=SECONDARY_TEXT)
+    draw.text((padding, 85), intro_text, font=intro_font, fill=SECONDARY_TEXT)
 
-    # 3. Main Term (Much Bigger)
-    draw.text((padding, 160), term, font=term_font, fill=DARK_TEXT)
+    # 3. Main Term (Placed very close to intro)
+    draw.text((padding, 115), term, font=term_font, fill=DARK_TEXT)
 
-    # 4. Definition Text (Bigger and Bolder)
-    y_text = 260
+    # 4. Definition Text (Placed very close to term)
+    y_text = 220
     for line in wrapped_definition:
         draw.text((padding, y_text), line, font=body_font, fill=BODY_TEXT)
-        y_text += body_font.getbbox(line)[3] + 15  # Increased line spacing
+        y_text += body_font.getbbox(line)[3] + 10  # Minimal line spacing
 
     # 5. Footer Separator Line
-    draw.line([(padding, card_height - 80), (card_width - padding, card_height - 80)], fill="#DEE2E6", width=2)
+    draw.line([(padding, card_height - 60), (card_width - padding, card_height - 60)], fill="#E1E4E8", width=2)
 
     # 6. Footer Content
     category_text = f"Category: {category}"
     group_name = "Ca Inter Quiz hub 🎓"
-    draw.text((padding, card_height - 55), category_text, font=footer_font, fill=SECONDARY_TEXT)
+    draw.text((padding, card_height - 45), category_text, font=footer_font, fill=SECONDARY_TEXT)
     group_name_width = footer_font.getbbox(group_name)[2]
-    draw.text((card_width - padding - group_name_width, card_height - 55), group_name, font=footer_font, fill=SECONDARY_TEXT)
+    draw.text((card_width - padding - group_name_width, card_height - 45), group_name, font=footer_font, fill=SECONDARY_TEXT)
 
     # --- Save to Memory ---
     img_byte_arr = io.BytesIO()
@@ -5775,8 +5732,7 @@ def create_definition_image(user_name, term, definition, category):
 @membership_required
 def handle_define_command(msg: types.Message):
     """
-    Looks up a term, generating a visual card from the Google Sheet
-    or falling back to the AI for a text-based definition.
+    Looks up a term in the Google Sheet and generates a visual card.
     """
     try:
         parts = msg.text.split(' ', 1)
@@ -5785,10 +5741,8 @@ def handle_define_command(msg: types.Message):
             return
 
         search_term = parts[1].strip()
-        # We get the user's name here
         user_name = msg.from_user.first_name
 
-        definition_found = False
         try:
             workbook = get_gsheet()
             if workbook:
@@ -5802,44 +5756,19 @@ def handle_define_command(msg: types.Message):
                         'category': row_values[3] if len(row_values) > 3 else 'General'
                     }
 
-                    if term_data.get('category') == 'AI-Generated (Hinglish)':
-                        bot.reply_to(msg, term_data['definition'], parse_mode="HTML")
-                    else:
-                        # --- THIS IS THE UPDATED CALL ---
-                        # We now pass the user_name to the image generator
-                        image_file = create_definition_image(user_name, term_data['term'], term_data['definition'], term_data['category'])
-                        bot.send_photo(msg.chat.id, image_file, reply_to_message_id=msg.message_id)
+                    # Generate and send the final, high-impact image card
+                    image_file = create_definition_image(user_name, term_data['term'], term_data['definition'], term_data['category'])
+                    bot.send_photo(msg.chat.id, image_file, reply_to_message_id=msg.message_id)
+                    return # Stop the function here on success
 
-                    definition_found = True
         except Exception as gsheet_error:
-            print(f"⚠️ Could not search Google Sheet. Falling back to AI. Error: {gsheet_error}")
-
-        if definition_found:
+            print(f"⚠️ An error occurred while searching the Google Sheet: {gsheet_error}")
+            report_error_to_admin(f"Error during Google Sheet search in /define:\n{gsheet_error}")
+            bot.reply_to(msg, "❌ A database error occurred. The admin has been notified.")
             return
 
-        # --- AI Fallback (remains the same) ---
-        wait_msg = bot.reply_to(msg, f"🤔 Term not found in our records. Asking the AI... please wait.", parse_mode="HTML")
-
-        ai_definition = None
-        try:
-            # We also pass the user_name to the AI function
-            ai_definition = get_ai_definition(search_term, user_name)
-            bot.delete_message(wait_msg.chat.id, wait_msg.message_id)
-        except Exception:
-            pass
-
-        if ai_definition:
-            bot.reply_to(msg, ai_definition, parse_mode="HTML")
-            try:
-                workbook = get_gsheet()
-                if workbook:
-                    sheet = workbook.worksheet('Glossary')
-                    sheet.append_row(['', search_term, ai_definition, 'AI-Generated (Hinglish)'])
-            except Exception as gsheet_save_error:
-                print(f"⚠️ Failed to save new AI definition to Google Sheet: {gsheet_save_error}")
-                report_error_to_admin(f"Failed to save AI definition for '{search_term}' to GSheet: {gsheet_save_error}")
-        else:
-            bot.reply_to(msg, f"😥 Sorry, the AI could not find a definition for '<code>{escape(search_term)}</code>'.", parse_mode="HTML")
+        # If the code reaches here, it means the term was not found in the sheet.
+        bot.reply_to(msg, f"😥 Sorry, I could not find a definition for '<code>{escape(search_term)}</code>' in our glossary.", parse_mode="HTML")
 
     except Exception as e:
         report_error_to_admin(f"CRITICAL Error in /define command: {traceback.format_exc()}")
