@@ -1962,11 +1962,12 @@ def send_next_battle_question(chat_id, session_id):
         correct_option_index = ['A', 'B', 'C', 'D'].index(correct_answer_letter)
         
         poll_question_text = f"Q{idx + 1}/{len(session['questions'])}: {unescape(question.get('Question', ''))}"
-        
+        # Make the poll data safe for the API
+        safe_options = [escape(opt) for opt in options]
         poll_message = bot.send_poll(
             chat_id=chat_id, message_thread_id=QUIZ_TOPIC_ID,
             question=poll_question_text.replace("'", "&#39;"), # Apostrophe fix
-            options=options, type='quiz', correct_option_id=correct_option_index,
+            options=safe_options, type='quiz', correct_option_id=correct_option_index,
             is_anonymous=False, open_period=int(question.get('time_allotted', 30)),
             explanation=escape(unescape(str(question.get('Explanation', '')))),
             explanation_parse_mode="HTML"
@@ -4689,13 +4690,15 @@ def handle_random_quiz(msg: types.Message):
         
         safe_explanation = escape(unescape(explanation_text)) if explanation_text else None
         open_period_seconds = 600
-        
+        # Make the poll data safe for the API
+        safe_question = formatted_question.replace("'", "&#39;")
+        safe_options = [escape(opt) for opt in formatted_options]
         # Send the quiz poll
         sent_poll = bot.send_poll(
             chat_id=GROUP_ID,
             message_thread_id=QUIZ_TOPIC_ID,
-            question=formatted_question,
-            options=formatted_options,
+            question=safe_question,
+            options=safe_options,
             type='quiz',
             correct_option_id=correct_index,
             is_anonymous=False,
@@ -4843,13 +4846,15 @@ def handle_randomquizvisual(msg: types.Message):
         
         safe_explanation = escape(unescape(explanation_text)) if explanation_text else None
         open_period_seconds = 600
-        
+        # Make the poll data safe for the API
+        safe_question = formatted_question.replace("'", "&#39;")
+        safe_options = [escape(opt) for opt in formatted_options]
         # Send the quiz poll
         sent_poll = bot.send_poll(
             chat_id=GROUP_ID,
             message_thread_id=QUIZ_TOPIC_ID,
-            question=formatted_question,
-            options=formatted_options,
+            question=safe_question,
+            options=safe_options,
             type='quiz',
             correct_option_id=correct_index,
             is_anonymous=False,
@@ -5103,116 +5108,61 @@ def handle_announcement_steps(msg: types.Message):
 
 <b>C.A.V.Y.A Management Team</b> 💝"""
 
-        # Show preview to admin
-        preview_message = f"""🎯 <b>ANNOUNCEMENT PREVIEW</b>
-
-{border}
-
-{final_announcement}
-
-{border}
-
-✅ <b>Ready to post?</b>
-
-<b>Reply with:</b>
-• <code>YES</code> - Post and pin in group
-• <code>NO</code> - Cancel and start over
-
-<i>This will be posted in the Updates topic...</i>"""
+# Show preview to admin with interactive buttons
+preview_message = f"""🎯 <b>ANNOUNCEMENT PREVIEW</b>\n\n{final_announcement}\n\n✅ <b>Ready to post?</b>\n\nThis will be posted and pinned in the Updates topic."""
 
         user_state['data']['final_announcement'] = final_announcement
-        user_state['data']['priority_choice'] = priority_input # Storing the choice
-        user_state['step'] = 'awaiting_confirmation'
+        user_state['data']['priority_choice'] = priority_input
+        user_state['step'] = 'awaiting_confirmation' # This step is now handled by a callback
+
+        markup = types.InlineKeyboardMarkup()
+        markup.add(
+            types.InlineKeyboardButton("✅ Yes, Post & Pin", callback_data="announce_confirm_yes"),
+            types.InlineKeyboardButton("❌ No, Cancel", callback_data="announce_confirm_no")
+        )
+        bot.send_message(msg.chat.id, preview_message, reply_markup=markup, parse_mode="HTML")
         
-        bot.send_message(msg.chat.id, preview_message, parse_mode="HTML")
-        
-    elif current_step == 'awaiting_confirmation':
-        # Handle final confirmation
-        response = msg.text.strip().upper()
-        
-        if response == 'YES':
-            try:
-                final_announcement = user_state['data']['final_announcement']
-                
-                # Send to group and pin
-                sent_message = bot.send_message(
-                    GROUP_ID, 
-                    final_announcement, 
-                    parse_mode="HTML", 
-                    message_thread_id=UPDATES_TOPIC_ID
-                )
-                
-                bot.pin_chat_message(
-                    chat_id=GROUP_ID, 
-                    message_id=sent_message.message_id, 
-                    disable_notification=False
-                )
-                
-                # Success message to admin
-                success_message = f"""✅ <b>ANNOUNCEMENT POSTED!</b>
+@bot.callback_query_handler(func=lambda call: call.data.startswith('announce_confirm_'))
+def handle_announcement_confirmation(call: types.CallbackQuery):
+    """Handles the final Yes/No confirmation for an announcement via buttons."""
+    user_id = call.from_user.id
+    user_state = user_states.get(user_id, {})
 
-🎯 <b>Status:</b> Successfully sent and pinned
-📍 <b>Location:</b> Updates Topic
-🕐 <b>Time:</b> {datetime.datetime.now().strftime("%I:%M %p")}
+    # Security check: ensure user is in the correct state
+    if not user_state or user_state.get('action') != 'create_announcement':
+        bot.edit_message_text("❌ This action has expired.", call.message.chat.id, call.message.message_id)
+        return
 
-📊 <b>Details:</b>
-• Title: "{escape(user_state['data']['title'])}"
-• Characters: {len(user_state['data']['content'])}
-• Priority: {['Regular', 'Important', 'Urgent', 'Celebration'][int(user_state['data']['priority_choice']) - 1]}
-
-🎉 <b>Your announcement is now live!</b>"""
-
-                bot.send_message(msg.chat.id, success_message, parse_mode="HTML")
-                
-                # Clear user state
-                del user_states[user_id]
-                
-            except Exception as e:
-                print(f"Error in announcement posting: {traceback.format_exc()}")
-                report_error_to_admin(f"Failed to post announcement: {e}")
-                
-                error_message = """❌ <b>POSTING FAILED</b>
-
-🔧 <b>Error:</b> Could not post/pin message
-
-💡 <b>Possible causes:</b>
-• Bot lacks admin permissions
-• Missing 'Pin Messages' permission
-• Group/topic access issues
-
-🔄 <b>Solutions:</b>
-• Check bot admin status
-• Verify pin permissions
-• Try again in a moment
-
-📝 <i>Error reported to technical team</i>"""
-
-                bot.send_message(msg.chat.id, error_message, parse_mode="HTML")
-                del user_states[user_id]
-                
-        elif response == 'NO':
-            # Cancel and restart
-            del user_states[user_id]
+    if call.data == 'announce_confirm_yes':
+        try:
+            final_announcement = user_state['data']['final_announcement']
             
-            cancel_message = """❌ <b>ANNOUNCEMENT CANCELLED</b>
-
-🔄 <b>What's next?</b>
-• Use <code>/announce</code> to start over
-• Create a new announcement anytime
-• All previous input was cleared
-
-💡 <i>Ready when you are!</i>"""
-
-            bot.send_message(msg.chat.id, cancel_message, parse_mode="HTML")
+            # Send to group and pin
+            sent_message = bot.send_message(
+                GROUP_ID, 
+                final_announcement, 
+                parse_mode="HTML", 
+                message_thread_id=UPDATES_TOPIC_ID
+            )
+            bot.pin_chat_message(
+                chat_id=GROUP_ID, 
+                message_id=sent_message.message_id, 
+                disable_notification=False
+            )
             
-        else:
-            # Invalid response
-            bot.send_message(msg.chat.id, """❓ <b>Please Confirm</b>
+            # Success message to admin
+            bot.edit_message_text("✅ Announcement has been successfully posted and pinned in the group!", call.message.chat.id, call.message.message_id)
+            
+        except Exception as e:
+            report_error_to_admin(f"Failed to post announcement: {e}")
+            bot.edit_message_text("❌ Failed to post the announcement. Please check my permissions in the group.", call.message.chat.id, call.message.message_id)
+    
+    elif call.data == 'announce_confirm_no':
+        bot.edit_message_text("❌ Announcement cancelled.", call.message.chat.id, call.message.message_id)
 
-✅ Type <code>YES</code> to post the announcement
-❌ Type <code>NO</code> to cancel and start over
-
-<i>Choose YES or NO...</i>""", parse_mode="HTML")
+    # Clean up user state
+    if user_id in user_states:
+        del user_states[user_id]
 
 
 @bot.message_handler(commands=['cancel'])
@@ -5649,116 +5599,34 @@ def handle_study_tip_command(msg: types.Message):
         print(f"Error in /studytip command: {traceback.format_exc()}")
         report_error_to_admin(f"Could not fetch/send study tip:\n{e}")
         bot.send_message(msg.chat.id, "❌ An error occurred while fetching the tip from the database.")
-def create_definition_image(user_name, term, definition, category):
-    """Creates a final, high-impact card with maximum font size and readability."""
-    # --- Card and Font Setup (MAXIMUM SIZE) ---
-    try:
-        # Using bold fonts for maximum weight
-        header_font = ImageFont.truetype("arialbd.ttf", 28)
-        intro_font = ImageFont.truetype("arial.ttf", 24)
-        term_font = ImageFont.truetype("arialbd.ttf", 100) # MASSIVE font for the term
-        body_font = ImageFont.truetype("arial.ttf", 55)    # MASSIVE font for the body
-        footer_font = ImageFont.truetype("arial.ttf", 20)
-    except IOError:
-        # Fallback to default fonts if arial is not available
-        header_font = ImageFont.load_default()
-        intro_font = ImageFont.load_default()
-        term_font = ImageFont.load_default()
-        body_font = ImageFont.load_default()
-        footer_font = ImageFont.load_default()
-
-    # --- High-Contrast Color Palette ---
-    BG_COLOR = "#FFFFFF"
-    BRAND_COLOR = "#0D47A1"
-    DARK_TEXT = "#000000"
-    BODY_TEXT = "#212121"
-    SECONDARY_TEXT = "#424242"
-
-    # --- Card Layout ---
-    card_width = 800
-    padding = 40
-
-    # --- Dynamic Intro Line ---
-    intro_lines = [
-        f"Hey {user_name}, here is the definition for:",
-        f"Of course, {user_name}! Here is the breakdown of:",
-        f"Got it, {user_name}. Here's what you need to know about:"
-    ]
-    intro_text = random.choice(intro_lines)
-
-    # --- Dynamic Height Calculation (Extremely Tight Wrapping) ---
-    # Wrap text very tightly to fit the huge font.
-    wrapped_definition = textwrap.wrap(definition, width=25)
-    # Calculate height based on the new massive font size.
-    text_height = sum([body_font.getbbox(line)[3] + 10 for line in wrapped_definition])
-    card_height = 250 + text_height # Reduced base height for a more compact card
-
-    # --- Create Image ---
-    img = Image.new('RGB', (card_width, card_height), color=BG_COLOR)
-    draw = ImageDraw.Draw(img)
-
-    # --- Draw Elements (with Minimal Vertical Spacing) ---
-    # 1. C.A.V.Y.A. Branding Header
-    draw.text((padding, 25), "C.A.V.Y.A.", font=header_font, fill=BRAND_COLOR)
-    draw.line([(padding, 70), (card_width - padding, 70)], fill="#E1E4E8", width=2)
-
-    # 2. Personalized Intro
-    draw.text((padding, 85), intro_text, font=intro_font, fill=SECONDARY_TEXT)
-
-    # 3. Main Term (Placed very close to intro)
-    draw.text((padding, 115), term, font=term_font, fill=DARK_TEXT)
-
-    # 4. Definition Text (Placed very close to term)
-    y_text = 220
-    for line in wrapped_definition:
-        draw.text((padding, y_text), line, font=body_font, fill=BODY_TEXT)
-        y_text += body_font.getbbox(line)[3] + 10  # Minimal line spacing
-
-    # 5. Footer Separator Line
-    draw.line([(padding, card_height - 60), (card_width - padding, card_height - 60)], fill="#E1E4E8", width=2)
-
-    # 6. Footer Content
-    category_text = f"Category: {category}"
-    group_name = "Ca Inter Quiz hub 🎓"
-    draw.text((padding, card_height - 45), category_text, font=footer_font, fill=SECONDARY_TEXT)
-    group_name_width = footer_font.getbbox(group_name)[2]
-    draw.text((card_width - padding - group_name_width, card_height - 45), group_name, font=footer_font, fill=SECONDARY_TEXT)
-
-    # --- Save to Memory ---
-    img_byte_arr = io.BytesIO()
-    img.save(img_byte_arr, format='PNG')
-    img_byte_arr.seek(0)
-    return img_byte_arr
 @bot.message_handler(commands=['define'])
 @membership_required
 def handle_define_command(msg: types.Message):
     """
-    Looks up a term in the Google Sheet or local definitions.
-    Shows results in a rich formatted style, handles all errors gracefully.
+    Looks up a term ONLY in the Google Sheet.
+    If not found, it provides suggestions or prompts the user to add a new definition.
     """
     try:
-        user_id = msg.from_user.id
-        text = msg.text.strip()
-        parts = text.split(' ', 1)
+        parts = msg.text.split(' ', 1)
 
-        # --- Step 1: Check for missing term ---
         if len(parts) < 2 or not parts[1].strip():
             bot.reply_to(
                 msg,
-                "ℹ️ Aapko ek term deni hogi jise define karna hai.\n\n"
-                "<b>Example:</b> <code>/define Amortization</code>",
+                "ℹ️ Please provide a term to define.\n<b>Example:</b> <code>/define Amortization</code>",
                 parse_mode="HTML"
             )
             return
 
         search_term = parts[1].strip()
+        
+        all_terms_from_sheet = []
+        workbook = None
 
-        # --- Step 2: Try Google Sheet first ---
         try:
             workbook = get_gsheet()
             if workbook:
                 sheet = workbook.worksheet('Glossary')
-                # Case-insensitive match
+                # Find a case-insensitive match for the term
                 cell = sheet.find(search_term, in_column=2, case_sensitive=False)
 
                 if cell:
@@ -5768,8 +5636,6 @@ def handle_define_command(msg: types.Message):
                         'definition': row_values[2],
                         'category': row_values[3] if len(row_values) > 3 else 'General'
                     }
-
-                    # --- Step 3: Create a rich Telegram message ---
                     message_text = (
                         f"📘 <b>Term:</b> <code>{escape(term_data['term'])}</code>\n"
                         f"<pre>━━━━━━━━━━━━━━━━━━</pre>\n"
@@ -5777,64 +5643,42 @@ def handle_define_command(msg: types.Message):
                         f"<pre>━━━━━━━━━━━━━━━━━━</pre>\n"
                         f"📚 <b>Category:</b> <i>{escape(term_data['category'])}</i>"
                     )
-
                     bot.reply_to(msg, message_text, parse_mode="HTML")
-                    return
+                    return # Term found and sent, so we stop here.
+
+                # If not found, get all terms for suggestions
+                all_terms_from_sheet = [term for term in sheet.col_values(2)[1:] if term]
 
         except Exception as gsheet_error:
-            print(f"⚠️ GSheet Error: {gsheet_error}")
-            report_error_to_admin(f"Error during Google Sheet search in /define:\n{gsheet_error}")
-            # Graceful fallback to local dictionary below
-
-        # --- Step 4: Fallback to local `definitions` dictionary ---
-        term = next((t for t in definitions.keys() if t.lower() == search_term.lower()), None)
-        if term:
-            definition = definitions[term]
-            bot.send_message(
-                msg.chat.id,
-                f"📘 *{term}*\n\n{definition}",
-                parse_mode="Markdown"
-            )
+            print(f"⚠️ GSheet Error in /define: {gsheet_error}")
+            report_error_to_admin(f"Could not access Google Sheet in /define:\n{gsheet_error}")
+            # If sheet is unavailable, send an error and stop.
+            bot.reply_to(msg, "❌ Sorry, I'm having trouble accessing the glossary right now. Please try again later.")
             return
 
-        # --- Step 5: Not found anywhere ---
-        # Try fuzzy matching to suggest similar terms
-        all_terms = []
-
-        # Collect all known terms from both sources (if available)
-        try:
-            if workbook:
-                sheet = workbook.worksheet('Glossary')
-                all_terms.extend([cell for cell in sheet.col_values(2) if cell.strip()])
-        except Exception as e:
-            pass  # ignore errors if Google Sheet not accessible
-
-        all_terms.extend(list(definitions.keys()))
-
-        suggestions = difflib.get_close_matches(search_term, all_terms, n=3, cutoff=0.6)
+        # --- This part now runs ONLY if the term was not found in the Google Sheet ---
+        suggestions = []
+        if all_terms_from_sheet:
+            suggestions = difflib.get_close_matches(search_term, all_terms_from_sheet, n=3, cutoff=0.6)
 
         if suggestions:
             suggestion_text = "\n".join([f"• <code>{escape(s)}</code>" for s in suggestions])
             not_found_text = (
-                f"😕 '{escape(search_term)}' ki definition abhi nahi mili.\n\n"
-                f"💡 Shayad aapka matlab ye tha:\n{suggestion_text}\n\n"
-                "Agar nahi, to <code>/newdef</code> use karke add kar sakte ho! 📝"
+                f"😕 I couldn't find a definition for '<b>{escape(search_term)}</b>'.\n\n"
+                f"Did you mean one of these?\n{suggestion_text}\n\n"
+                "If not, you can help our database grow by adding it with the <code>/newdef</code> command! 📝"
             )
         else:
             not_found_text = (
-                f"😕 '{escape(search_term)}' ki definition abhi hamare database mein nahi hai.\n\n"
-                "Agar aapko iska meaning pata hai, to <code>/newdef</code> use karke add kar sakte ho! 📝"
+                f"😕 The term '<b>{escape(search_term)}</b>' is not in our database yet.\n\n"
+                "You can be the first to add it! Use the <code>/newdef</code> command to contribute. 📝"
             )
 
         bot.reply_to(msg, not_found_text, parse_mode="HTML")
 
     except Exception as e:
         report_error_to_admin(f"CRITICAL Error in /define command:\n{traceback.format_exc()}")
-        bot.reply_to(
-            msg,
-            "❌ Kuch technical problem ho gayi hai... Admin ko notify kar diya gaya hai.",
-            parse_mode="HTML"
-        )
+        bot.reply_to(msg, "❌ A critical error occurred. The admin has been notified.")
 # =============================================================================
 # 8. TELEGRAM BOT HANDLERS - NEW DEFINITION SUBMISSION FLOW
 # =============================================================================
@@ -6714,10 +6558,12 @@ def send_marathon_question(session_id):
     
     explanation_text = unescape(str(question_data.get('Explanation', '')))
     safe_explanation = escape(explanation_text[:195] + "..." if len(explanation_text) > 195 else explanation_text)
+    # Make the poll data safe for the API
+    safe_options = [escape(opt) for opt in options]
     
     poll_message = bot.send_poll(
-        chat_id=GROUP_ID, message_thread_id=QUIZ_TOPIC_ID, question=question_text, 
-        options=options, type='quiz', correct_option_id=correct_option_index, 
+        chat_id=GROUP_ID, message_thread_id=QUIZ_TOPIC_ID, question=poll_question_text.replace("'", "&#39;"), # Apostrophe fix 
+        options=safe_options, type='quiz', correct_option_id=correct_option_index, 
         is_anonymous=False, open_period=int(question_data.get('time_allotted', 60)),
         explanation=safe_explanation,
         explanation_parse_mode="HTML"
