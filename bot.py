@@ -15,7 +15,6 @@ import requests
 from flask import Flask, request, json
 from telebot import TeleBot, types
 from telebot.apihelper import ApiTelegramException
-from oauth2client.service_account import ServiceAccountCredentials
 from datetime import timezone, timedelta
 IST = timezone(timedelta(hours=5, minutes=30))
 from supabase import create_client, Client
@@ -190,25 +189,31 @@ APPRECIATION_STREAK = 3 # Days of consecutive quizzes for a shout-out
 # 4. GOOGLE SHEETS INTEGRATION
 # =============================================================================
 def get_gsheet():
-    """Connects to Google Sheets and returns the entire workbook object."""
+    """Connects to Google Sheets using the modern google-auth library."""
     try:
         scope = [
             "https://spreadsheets.google.com/feeds",
             "https://www.googleapis.com/auth/drive"
         ]
+        
         credentials_path = os.getenv('GOOGLE_SHEETS_CREDENTIALS_PATH')
         if not credentials_path:
             print("ERROR: GOOGLE_SHEETS_CREDENTIALS_PATH not set.")
             return None
-        creds = ServiceAccountCredentials.from_json_keyfile_name(
-            credentials_path, scope)
+            
+        # --- THIS IS THE NEW AUTHENTICATION METHOD ---
+        from google.oauth2 import service_account
+        creds = service_account.Credentials.from_service_account_file(credentials_path, scopes=scope)
         client = gspread.authorize(creds)
+        # --- END OF NEW METHOD ---
+        
         sheet_key = os.getenv('GOOGLE_SHEET_KEY')
         if not sheet_key:
             print("ERROR: GOOGLE_SHEET_KEY not set.")
             return None
-        # Return the whole workbook, not just the first sheet
+            
         return client.open_by_key(sheet_key)
+        
     except FileNotFoundError:
         print(f"ERROR: Credentials file not found at path: {credentials_path}.")
         return None
