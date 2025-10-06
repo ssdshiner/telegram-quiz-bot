@@ -1,6 +1,8 @@
 # =============================================================================
 # 1. IMPORTS
 # =============================================================================
+import dotenv
+dotenv.load_dotenv()
 import os
 import re
 import json
@@ -24,7 +26,7 @@ from html import escape, unescape
 from collections import namedtuple
 from postgrest.exceptions import APIError
 import httpx
-import google.generativeai as genai
+
 # =============================================================================
 # 2. CONFIGURATION & INITIALIZATION
 # =============================================================================
@@ -285,14 +287,7 @@ def has_any_permission(user_id):
     except Exception as e:
         print(f"Error checking for any permission for user {user_id}: {e}")
         return False
-# --- AI Configuration & Helper ---
-GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
-if GEMINI_API_KEY:
-    try:
-        genai.configure(api_key=GEMINI_API_KEY)
-        print("✅ Successfully configured Gemini AI client.")
-    except Exception as e:
-        print(f"❌ Gemini AI configuration failed: {e}")
+
 
 def get_ai_definition(term: str, user_name: str):
     """
