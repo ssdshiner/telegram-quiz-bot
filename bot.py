@@ -14,9 +14,6 @@ import threading
 import time
 import random
 import requests
-from PIL import Image, ImageDraw, ImageFont
-import io
-import textwrap
 from flask import Flask, request, json
 from telebot import TeleBot, types
 from telebot.apihelper import ApiTelegramException
@@ -5732,7 +5729,8 @@ def create_definition_image(user_name, term, definition, category):
 @membership_required
 def handle_define_command(msg: types.Message):
     """
-    Looks up a term in the Google Sheet and generates a visual card.
+    Looks up a term in the Google Sheet and displays it in a beautiful text format.
+    If not found, it guides the user to the /newdef command.
     """
     try:
         parts = msg.text.split(' ', 1)
@@ -5741,25 +5739,31 @@ def handle_define_command(msg: types.Message):
             return
 
         search_term = parts[1].strip()
-        user_name = msg.from_user.first_name
 
         try:
             workbook = get_gsheet()
             if workbook:
                 sheet = workbook.worksheet('Glossary')
+                # Case-insensitive search
                 cell = sheet.find(search_term, in_column=2, case_sensitive=False)
 
                 if cell:
                     row_values = sheet.row_values(cell.row)
                     term_data = {
-                        'term': row_values[1], 'definition': row_values[2],
+                        'term': row_values[1], 
+                        'definition': row_values[2],
                         'category': row_values[3] if len(row_values) > 3 else 'General'
                     }
 
-                    # Generate and send the final, high-impact image card
-                    image_file = create_definition_image(user_name, term_data['term'], term_data['definition'], term_data['category'])
-                    bot.send_photo(msg.chat.id, image_file, reply_to_message_id=msg.message_id)
-                    return # Stop the function here on success
+                    # --- The New Beautiful Text Format ---
+                    message_text = f"📖 <b>Term:</b> <code>{escape(term_data['term'])}</code>\n"
+                    message_text += "<pre>━━━━━━━━━━━━━━━━━━</pre>\n"
+                    message_text += f"<blockquote>{escape(term_data['definition'])}</blockquote>\n"
+                    message_text += "<pre>━━━━━━━━━━━━━━━━━━</pre>\n"
+                    message_text += f"📚 <b>Category:</b> <i>{escape(term_data['category'])}</i>"
+
+                    bot.reply_to(msg, message_text, parse_mode="HTML")
+                    return
 
         except Exception as gsheet_error:
             print(f"⚠️ An error occurred while searching the Google Sheet: {gsheet_error}")
@@ -5767,12 +5771,159 @@ def handle_define_command(msg: types.Message):
             bot.reply_to(msg, "❌ A database error occurred. The admin has been notified.")
             return
 
-        # If the code reaches here, it means the term was not found in the sheet.
-        bot.reply_to(msg, f"😥 Sorry, I could not find a definition for '<code>{escape(search_term)}</code>' in our glossary.", parse_mode="HTML")
+        # --- New "Not Found" Message ---
+        # This is the trigger for our new /newdef feature.
+        not_found_text = (
+            f"😥 Lo siento, '{escape(search_term)}' ki definition hamare database mein nahi hai.\n\n"
+            f"Agar aapko iska definition pata hai, to aap <code>/newdef</code> command use karke add kar sakte hain!"
+        )
+        bot.reply_to(msg, not_found_text, parse_mode="HTML")
 
     except Exception as e:
         report_error_to_admin(f"CRITICAL Error in /define command: {traceback.format_exc()}")
         bot.reply_to(msg, "❌ A critical error occurred. The admin has been notified.")
+# =============================================================================
+# 8. TELEGRAM BOT HANDLERS - NEW DEFINITION SUBMISSION FLOW
+# =============================================================================
+
+@bot.message_handler(commands=['newdef'])
+@membership_required
+def handle_newdef_command(msg: types.Message):
+    """Starts the conversational flow for a user to submit a new definition."""
+    user_id = msg.from_user.id
+    if user_id in user_states:
+        bot.reply_to(msg, "Aap pehle se hi ek doosra command use kar rahe hain. Please use /cancel before starting a new one.")
+        return
+
+    # Set the initial state for the user
+    user_states[user_id] = {'action': 'new_definition', 'step': 'awaiting_term', 'timestamp': time.time()}
+
+    prompt_text = "Naya definition add karne ke liye, shukriya! 🙏\n\nPlease enter the term or phrase jise aap define karna chahte hain."
+    bot.reply_to(msg, prompt_text)
+
+@bot.message_handler(func=lambda msg: user_states.get(msg.from_user.id, {}).get('step') == 'awaiting_term')
+def process_newdef_term(msg: types.Message):
+    """Step 2: Receives the term and checks for duplicates."""
+    user_id = msg.from_user.id
+    term = msg.text.strip()
+
+    if not term:
+        bot.reply_to(msg, "Term khaali nahi ho sakta. Please dobara try karein.")
+        return
+
+    try:
+        workbook = get_gsheet()
+        if workbook:
+            sheet = workbook.worksheet('Glossary')
+            # Case-insensitive check
+            if sheet.find(term, in_column=2, case_sensitive=False):
+                bot.reply_to(msg, "Yeh definition pehle se database mein hai, par aapke effort ke liye shukriya!")
+                del user_states[user_id] # End the conversation
+                return
+
+        # If term is new, proceed to the next step
+        user_states[user_id]['term'] = term
+        user_states[user_id]['step'] = 'awaiting_definition'
+        bot.reply_to(msg, f"Great! Ab, please '**{escape(term)}**' ke liye ek acchi si, simple definition likhein.")
+
+    except Exception as e:
+        report_error_to_admin(f"Error in newdef duplicate check: {traceback.format_exc()}")
+        bot.reply_to(msg, "Sorry, database check karte waqt ek error aa gaya. Please thodi der baad try karein.")
+        del user_states[user_id]
+
+@bot.message_handler(func=lambda msg: user_states.get(msg.from_user.id, {}).get('step') == 'awaiting_definition')
+def process_newdef_definition(msg: types.Message):
+    """Step 3: Receives the definition and asks for the category."""
+    user_id = msg.from_user.id
+    definition = msg.text.strip()
+
+    if not definition:
+        bot.reply_to(msg, "Definition khaali nahi ho sakti. Please dobara try karein.")
+        return
+
+    user_states[user_id]['definition'] = definition
+    user_states[user_id]['step'] = 'awaiting_category'
+    bot.reply_to(msg, "Bahut acche! Ab bas aakhri cheez, yeh definition kaun se subject ya chapter se hai? (Jaise: Accounting, Law, etc.)")
+
+@bot.message_handler(func=lambda msg: user_states.get(msg.from_user.id, {}).get('step') == 'awaiting_category')
+def process_newdef_category(msg: types.Message):
+    """Step 4: Receives category, confirms to user, and sends for admin approval."""
+    user_id = msg.from_user.id
+    category = msg.text.strip()
+
+    if not category:
+        bot.reply_to(msg, "Category khaali nahi ho sakti. Please subject ka naam daalein.")
+        return
+
+    state_data = user_states[user_id]
+    term = state_data['term']
+    definition = state_data['definition']
+
+    # --- Send for Admin Approval ---
+    try:
+        user_info = msg.from_user
+        admin_message = (
+            f"📬 **New Definition Submission**\n\n"
+            f"**From:** {escape(user_info.first_name)} (@{user_info.username}, ID: <code>{user_info.id}</code>)\n"
+            f"**Term:** <code>{escape(term)}</code>\n"
+            f"**Definition:** <blockquote>{escape(definition)}</blockquote>\n"
+            f"**Category:** <code>{escape(category)}</code>\n\n"
+            f"Please review this submission."
+        )
+
+        # We need to pass all data in the callback
+        callback_data_approve = f"def_approve_{user_id}_{term}|{definition}|{category}"
+        callback_data_decline = f"def_decline_{user_id}_{term}"
+
+        markup = types.InlineKeyboardMarkup()
+        markup.add(
+            types.InlineKeyboardButton("👍 Approve", callback_data=callback_data_approve),
+            types.InlineKeyboardButton("👎 Decline", callback_data=callback_data_decline)
+        )
+        bot.send_message(ADMIN_USER_ID, admin_message, reply_markup=markup, parse_mode="HTML")
+
+        # --- Final Confirmation to User ---
+        bot.reply_to(msg, f"Thank you! Aapki definition for '**{escape(term)}**' submit ho gayi hai. Yeh ab doosron ki help karegi 🙏")
+
+    except Exception as e:
+        report_error_to_admin(f"Error sending definition for approval: {traceback.format_exc()}")
+        bot.reply_to(msg, "Sorry, submission bhejte waqt ek error aa gaya.")
+    finally:
+        del user_states[user_id] # Clean up state
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('def_'))
+def handle_definition_approval(call: types.CallbackQuery):
+    """Handles the admin's approve/decline decision."""
+    action = call.data.split('_')[1]
+    data_parts = call.data.split('_', 2)[-1]
+
+    if action == "approve":
+        try:
+            user_id, submission_data = data_parts.split('_', 1)
+            term, definition, category = submission_data.split('|', 2)
+
+            workbook = get_gsheet()
+            if workbook:
+                sheet = workbook.worksheet('Glossary')
+                # Find the next available ID
+                all_ids = sheet.col_values(1)[1:] # Get all IDs except header
+                next_id = max([int(i) for i in all_ids if i.isdigit()] or [0]) + 1
+
+                # Append the new row
+                sheet.append_row([str(next_id), term, definition, category])
+
+                bot.edit_message_text(f"✅ Approved and added to glossary with ID #{next_id}.", call.message.chat.id, call.message.message_id)
+            else:
+                bot.answer_callback_query(call.id, "Error: Could not connect to Google Sheet.", show_alert=True)
+        except Exception as e:
+            report_error_to_admin(f"Error approving definition: {traceback.format_exc()}")
+            bot.answer_callback_query(call.id, "An error occurred while approving.", show_alert=True)
+
+    elif action == "decline":
+        user_id, term = data_parts.split('_', 1)
+        # As per the plan, we don't notify the user.
+        bot.edit_message_text(f"❌ Submission for '**{escape(term)}**' has been declined and discarded.", call.message.chat.id, call.message.message_id, parse_mode="HTML")
+        bot.answer_callback_query(call.id, "Submission Declined.")
 
 # --- Law Library Feature (/section) ---
 
