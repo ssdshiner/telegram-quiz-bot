@@ -6512,13 +6512,13 @@ def send_marathon_question(session_id):
             is_quiz_over = True
             session['ending'] = True
             session['is_active'] = False
-    
+
     if is_quiz_over:
         send_marathon_results(session_id)
         return
 
     question_data = session['questions'][session['current_question_index']]
-    
+
     if session['current_question_index'] in session.get('leaderboard_updates', []) and QUIZ_PARTICIPANTS.get(session_id):
         send_mid_quiz_update(session_id)
         time.sleep(4)
@@ -6549,18 +6549,21 @@ def send_marathon_question(session_id):
     options = [unescape(str(question_data.get(f'Option {c}', ''))) for c in ['A', 'B', 'C', 'D']]
     correct_answer_letter = str(question_data.get('Correct Answer', 'A')).upper()
     correct_option_index = ['A', 'B', 'C', 'D'].index(correct_answer_letter)
-    
+
     question_text = _format_marathon_poll_question(question_data, session['current_question_index'], len(session['questions']))
-    
+
     explanation_text = unescape(str(question_data.get('Explanation', '')))
     safe_explanation = escape(explanation_text[:195] + "..." if len(explanation_text) > 195 else explanation_text)
-    # Make the poll data safe for the API
-    safe_options = [escape(opt) for opt in options]
-    
+
     poll_message = bot.send_poll(
-        chat_id=GROUP_ID, message_thread_id=QUIZ_TOPIC_ID, question=poll_question_text.replace("'", "&#39;"), # Apostrophe fix 
-        options=safe_options, type='quiz', correct_option_id=correct_option_index, 
-        is_anonymous=False, open_period=int(question_data.get('time_allotted', 60)),
+        chat_id=GROUP_ID, 
+        message_thread_id=QUIZ_TOPIC_ID, 
+        question=question_text.replace("'", "&#39;"), # Apostrophe fix with the correct variable
+        options=options, 
+        type='quiz', 
+        correct_option_id=correct_option_index, 
+        is_anonymous=False, 
+        open_period=int(question_data.get('time_allotted', 60)),
         explanation=safe_explanation,
         explanation_parse_mode="HTML"
     )
