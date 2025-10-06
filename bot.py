@@ -10,6 +10,7 @@ import gspread
 import datetime
 import functools
 import traceback
+import difflib
 import threading
 import time
 import random
@@ -5732,59 +5733,108 @@ def create_definition_image(user_name, term, definition, category):
 @membership_required
 def handle_define_command(msg: types.Message):
     """
-    Looks up a term in the Google Sheet and displays it in a beautiful text format.
-    If not found, it guides the user to the /newdef command.
+    Looks up a term in the Google Sheet or local definitions.
+    Shows results in a rich formatted style, handles all errors gracefully.
     """
     try:
-        parts = msg.text.split(' ', 1)
+        user_id = msg.from_user.id
+        text = msg.text.strip()
+        parts = text.split(' ', 1)
+
+        # --- Step 1: Check for missing term ---
         if len(parts) < 2 or not parts[1].strip():
-            bot.reply_to(msg, "Please provide a term to define.\n<b>Example:</b> <code>/define Amortization</code>", parse_mode="HTML")
+            bot.reply_to(
+                msg,
+                "ℹ️ Aapko ek term deni hogi jise define karna hai.\n\n"
+                "<b>Example:</b> <code>/define Amortization</code>",
+                parse_mode="HTML"
+            )
             return
 
         search_term = parts[1].strip()
 
+        # --- Step 2: Try Google Sheet first ---
         try:
             workbook = get_gsheet()
             if workbook:
                 sheet = workbook.worksheet('Glossary')
-                # Case-insensitive search
+                # Case-insensitive match
                 cell = sheet.find(search_term, in_column=2, case_sensitive=False)
 
                 if cell:
                     row_values = sheet.row_values(cell.row)
                     term_data = {
-                        'term': row_values[1], 
+                        'term': row_values[1],
                         'definition': row_values[2],
                         'category': row_values[3] if len(row_values) > 3 else 'General'
                     }
 
-                    # --- The New Beautiful Text Format ---
-                    message_text = f"📖 <b>Term:</b> <code>{escape(term_data['term'])}</code>\n"
-                    message_text += "<pre>━━━━━━━━━━━━━━━━━━</pre>\n"
-                    message_text += f"<blockquote>{escape(term_data['definition'])}</blockquote>\n"
-                    message_text += "<pre>━━━━━━━━━━━━━━━━━━</pre>\n"
-                    message_text += f"📚 <b>Category:</b> <i>{escape(term_data['category'])}</i>"
+                    # --- Step 3: Create a rich Telegram message ---
+                    message_text = (
+                        f"📘 <b>Term:</b> <code>{escape(term_data['term'])}</code>\n"
+                        f"<pre>━━━━━━━━━━━━━━━━━━</pre>\n"
+                        f"<blockquote>{escape(term_data['definition'])}</blockquote>\n"
+                        f"<pre>━━━━━━━━━━━━━━━━━━</pre>\n"
+                        f"📚 <b>Category:</b> <i>{escape(term_data['category'])}</i>"
+                    )
 
                     bot.reply_to(msg, message_text, parse_mode="HTML")
                     return
 
         except Exception as gsheet_error:
-            print(f"⚠️ An error occurred while searching the Google Sheet: {gsheet_error}")
+            print(f"⚠️ GSheet Error: {gsheet_error}")
             report_error_to_admin(f"Error during Google Sheet search in /define:\n{gsheet_error}")
-            bot.reply_to(msg, "❌ A database error occurred. The admin has been notified.")
+            # Graceful fallback to local dictionary below
+
+        # --- Step 4: Fallback to local `definitions` dictionary ---
+        term = next((t for t in definitions.keys() if t.lower() == search_term.lower()), None)
+        if term:
+            definition = definitions[term]
+            bot.send_message(
+                msg.chat.id,
+                f"📘 *{term}*\n\n{definition}",
+                parse_mode="Markdown"
+            )
             return
 
-        # --- New "Not Found" Message ---
-        # This is the trigger for our new /newdef feature.
-        not_found_text = (
-            f"😥 Lo siento, '{escape(search_term)}' ki definition hamare database mein nahi hai.\n\n"
-            f"Agar aapko iska definition pata hai, to aap <code>/newdef</code> command use karke add kar sakte hain!"
-        )
+        # --- Step 5: Not found anywhere ---
+        # Try fuzzy matching to suggest similar terms
+        all_terms = []
+
+        # Collect all known terms from both sources (if available)
+        try:
+            if workbook:
+                sheet = workbook.worksheet('Glossary')
+                all_terms.extend([cell for cell in sheet.col_values(2) if cell.strip()])
+        except Exception as e:
+            pass  # ignore errors if Google Sheet not accessible
+
+        all_terms.extend(list(definitions.keys()))
+
+        suggestions = difflib.get_close_matches(search_term, all_terms, n=3, cutoff=0.6)
+
+        if suggestions:
+            suggestion_text = "\n".join([f"• <code>{escape(s)}</code>" for s in suggestions])
+            not_found_text = (
+                f"😕 '{escape(search_term)}' ki definition abhi nahi mili.\n\n"
+                f"💡 Shayad aapka matlab ye tha:\n{suggestion_text}\n\n"
+                "Agar nahi, to <code>/newdef</code> use karke add kar sakte ho! 📝"
+            )
+        else:
+            not_found_text = (
+                f"😕 '{escape(search_term)}' ki definition abhi hamare database mein nahi hai.\n\n"
+                "Agar aapko iska meaning pata hai, to <code>/newdef</code> use karke add kar sakte ho! 📝"
+            )
+
         bot.reply_to(msg, not_found_text, parse_mode="HTML")
 
     except Exception as e:
-        report_error_to_admin(f"CRITICAL Error in /define command: {traceback.format_exc()}")
-        bot.reply_to(msg, "❌ A critical error occurred. The admin has been notified.")
+        report_error_to_admin(f"CRITICAL Error in /define command:\n{traceback.format_exc()}")
+        bot.reply_to(
+            msg,
+            "❌ Kuch technical problem ho gayi hai... Admin ko notify kar diya gaya hai.",
+            parse_mode="HTML"
+        )
 # =============================================================================
 # 8. TELEGRAM BOT HANDLERS - NEW DEFINITION SUBMISSION FLOW
 # =============================================================================
@@ -5792,17 +5842,43 @@ def handle_define_command(msg: types.Message):
 @bot.message_handler(commands=['newdef'])
 @membership_required
 def handle_newdef_command(msg: types.Message):
-    """Starts the conversational flow for a user to submit a new definition."""
-    user_id = msg.from_user.id
-    if user_id in user_states:
-        bot.reply_to(msg, "Aap pehle se hi ek doosra command use kar rahe hain. Please use /cancel before starting a new one.")
-        return
+    """
+    Starts the conversational flow for a user to submit a new definition.
+    Combines validation, friendly Hinglish tone, and safe error handling.
+    """
+    try:
+        user_id = msg.from_user.id
 
-    # Set the initial state for the user
-    user_states[user_id] = {'action': 'new_definition', 'step': 'awaiting_term', 'timestamp': time.time()}
+        # Check if user already has an active state
+        if user_id in user_states:
+            bot.reply_to(
+                msg,
+                "⚠️ Aap ek aur command pe already kaam kar rahe ho.\n\n"
+                "Please use /cancel pehle, phir naya /newdef start karein 🙂"
+            )
+            return
 
-    prompt_text = "Naya definition add karne ke liye, shukriya! 🙏\n\nPlease enter the term or phrase jise aap define karna chahte hain."
-    bot.reply_to(msg, prompt_text)
+        # Initialize state for the user
+        user_states[user_id] = {
+            'action': 'new_definition',
+            'step': 'awaiting_term',
+            'timestamp': time.time()
+        }
+
+        prompt_text = (
+            "📝 *Naya Definition Add Karne ke liye shukriya!* 🙏\n\n"
+            "Ab please *term ya phrase* likhiye jise aap define karna chahte hain.\n\n"
+            "_Example:_ `Audit`, `Capital`, `Going Concern`"
+        )
+
+        bot.reply_to(msg, prompt_text, parse_mode="Markdown")
+
+    except Exception as e:
+        bot.send_message(
+            msg.chat.id,
+            f"⚠️ Kuch galat ho gaya... try again later!\n\n_Error:_ `{e}`",
+            parse_mode="Markdown"
+        )
 
 @bot.message_handler(func=lambda msg: user_states.get(msg.from_user.id, {}).get('step') == 'awaiting_term')
 def process_newdef_term(msg: types.Message):
