@@ -5684,7 +5684,7 @@ def handle_define_command(msg: types.Message):
 def handle_dt_command(msg: types.Message):
     """
     Fetches and displays a summary for a specific section of the Income Tax Act, 1961.
-    Includes "Did you mean?" functionality for failed searches.
+    This version is case-insensitive and includes "Did you mean?" functionality.
     """
     search_term = ""
     try:
@@ -5698,8 +5698,8 @@ def handle_dt_command(msg: types.Message):
         search_term = parts[1].strip()
         user_name = msg.from_user.first_name
 
-        # --- Database Query (FIX: Removed .single()) ---
-        response = supabase.table('income_tax_sections').select('*').eq('section_number', search_term).limit(1).execute()
+        # --- THE FIX: Use .ilike() for a case-insensitive search and remove .single() ---
+        response = supabase.table('income_tax_sections').select('*').ilike('section_number', search_term).limit(1).execute()
 
         # --- On Success: If data is found ---
         if response.data:
@@ -5724,7 +5724,7 @@ def handle_dt_command(msg: types.Message):
 
         # --- On Failure: If data is NOT found ---
         else:
-            # Call our new smart search function
+            # Call our smart search function for suggestions
             similar_res = supabase.rpc('find_similar_dt_sections', {'search_term': search_term}).execute()
 
             not_found_text = f"Sorry, Section '<code>{escape(search_term)}</code>' nahi mila. 😕\nEither it is not in the CA Inter syllabus or we missed adding it. We will add it soon; admin has been notified."
