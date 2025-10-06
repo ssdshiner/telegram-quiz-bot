@@ -5950,27 +5950,27 @@ def process_newdef_category(msg: types.Message):
             f"Please review this submission."
         )
 
-# Generate a short unique ID for this definition
-short_id = str(uuid.uuid4())[:8]
+        # Generate a short unique ID for this definition
+        short_id = str(uuid.uuid4())[:8]
 
-# Store full data server-side
-pending_definitions[short_id] = {
-    "user_id": user_id,
-    "term": term,
-    "definition": definition,
-    "category": category
-}
+        # Store full data server-side
+        pending_definitions[short_id] = {
+            "user_id": user_id,
+            "term": term,
+            "definition": definition,
+            "category": category
+        }
 
-# Create short and safe callback_data
-callback_data_approve = f"def_approve_{short_id}"
-callback_data_reject = f"def_reject_{short_id}"
+        # Create short and safe callback_data
+        callback_data_approve = f"def_approve_{short_id}"
+        callback_data_reject = f"def_reject_{short_id}"
 
-# Make inline buttons safely
-markup = types.InlineKeyboardMarkup()
-markup.row(
-    types.InlineKeyboardButton("✅ Approve", callback_data=callback_data_approve),
-    types.InlineKeyboardButton("❌ Reject", callback_data=callback_data_reject)
-)
+        # Make inline buttons safely
+        markup = types.InlineKeyboardMarkup()
+        markup.row(
+            types.InlineKeyboardButton("✅ Approve", callback_data=callback_data_approve),
+            types.InlineKeyboardButton("❌ Reject", callback_data=callback_data_reject)
+        )
 
         bot.send_message(ADMIN_USER_ID, admin_message, reply_markup=markup, parse_mode="HTML")
 
@@ -5981,7 +5981,7 @@ markup.row(
         report_error_to_admin(f"Error sending definition for approval: {traceback.format_exc()}")
         bot.reply_to(msg, "Sorry, submission bhejte waqt ek error aa gaya.")
     finally:
-        del user_states[user_id] # Clean up state
+        del user_states[user_id]
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('def_'))
 def handle_definition_approval(call: types.CallbackQuery):
