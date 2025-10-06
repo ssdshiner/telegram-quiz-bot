@@ -4963,7 +4963,6 @@ def handle_announce_command(msg: types.Message):
 
     bot.send_message(msg.chat.id, welcome_message, parse_mode="HTML")
 
-
 @bot.message_handler(func=lambda msg: msg.chat.type == 'private' and
                      msg.from_user.id in user_states and
                      user_states[msg.from_user.id].get('action') == 'create_announcement')
@@ -4973,10 +4972,12 @@ def handle_announcement_steps(msg: types.Message):
     user_state = user_states[user_id]
     current_step = user_state['step']
     
+    # --- STEP 1: AWAITING TITLE ---
     if current_step == 'awaiting_title':
-        # Store title and ask for content
+        # Store the title provided by the admin
         title = msg.text.strip()
         
+        # Validate title length
         if len(title) > 100:
             bot.send_message(msg.chat.id, """⚠️ <b>Title Too Long</b>
 
@@ -4986,9 +4987,11 @@ def handle_announcement_steps(msg: types.Message):
 ✂️ <i>Please make it shorter and try again...</i>""", parse_mode="HTML")
             return
             
+        # Update user state and proceed to the next step
         user_state['data']['title'] = title
         user_state['step'] = 'awaiting_content'
         
+        # Ask the admin for the announcement content
         content_message = f"""✅ <b>Title Saved!</b>
 
 📝 <b>Your Title:</b> "{escape(title)}"
@@ -5001,7 +5004,6 @@ def handle_announcement_steps(msg: types.Message):
 • Write the main announcement message
 • Can be multiple paragraphs
 • Keep it clear and informative
-• Use line breaks for better readability
 
 🔤 <b>What's your announcement content?</b>
 
@@ -5009,10 +5011,12 @@ def handle_announcement_steps(msg: types.Message):
 
         bot.send_message(msg.chat.id, content_message, parse_mode="HTML")
         
+    # --- STEP 2: AWAITING CONTENT ---
     elif current_step == 'awaiting_content':
-        # Store content and ask for priority/style
+        # Store the content provided by the admin
         content = msg.text.strip()
         
+        # Validate content length
         if len(content) > 2000:
             bot.send_message(msg.chat.id, f"""⚠️ <b>Content Too Long</b>
 
@@ -5022,9 +5026,11 @@ def handle_announcement_steps(msg: types.Message):
 ✂️ <i>Please shorten your message and try again...</i>""", parse_mode="HTML")
             return
             
+        # Update user state and proceed to the next step
         user_state['data']['content'] = content
         user_state['step'] = 'awaiting_priority'
         
+        # Ask the admin for the priority level
         priority_message = f"""✅ <b>Content Saved!</b>
 
 📄 <b>Preview:</b>
@@ -5036,63 +5042,49 @@ def handle_announcement_steps(msg: types.Message):
 
 💡 <b>Choose announcement style:</b>
 
-<b>1</b> - 📢 <b>Regular</b> (Normal importance)
-<b>2</b> - ⚠️ <b>Important</b> (Medium priority) 
-<b>3</b> - 🚨 <b>Urgent</b> (High priority)
-<b>4</b> - 🎉 <b>Celebration</b> (Good news/events)
+<b>1</b> - 📢 <b>Regular</b>
+<b>2</b> - ⚠️ <b>Important</b>
+<b>3</b> - 🚨 <b>Urgent</b>
+<b>4</b> - 🎉 <b>Celebration</b>
 
 🔢 <b>Type the number (1-4) for your choice:</b>
 
-<i>This will determine the visual style and emoji theme...</i>"""
+<i>This will determine the visual style...</i>"""
 
         bot.send_message(msg.chat.id, priority_message, parse_mode="HTML")
         
+    # --- STEP 3: AWAITING PRIORITY & FINAL CONFIRMATION ---
     elif current_step == 'awaiting_priority':
-        # Process priority and create final announcement
+        # Get and validate the admin's priority choice
         priority_input = msg.text.strip()
-        
         if priority_input not in ['1', '2', '3', '4']:
             bot.send_message(msg.chat.id, """❌ <b>Invalid Choice</b>
 
-🔢 <b>Please choose a number between 1-4:</b>
-
-<b>1</b> - 📢 Regular
-<b>2</b> - ⚠️ Important  
-<b>3</b> - 🚨 Urgent
-<b>4</b> - 🎉 Celebration
+🔢 <b>Please choose a number between 1-4.</b>
 
 <i>Type just the number...</i>""", parse_mode="HTML")
             return
             
-        # Create beautiful announcement based on priority
+        # Assemble all the data for the final announcement
         title = user_state['data']['title']
         content = user_state['data']['content']
         time_now_ist = datetime.datetime.now(IST)
         current_time_str = time_now_ist.strftime("%I:%M %p")
         current_date_str = time_now_ist.strftime("%d %B %Y")
         
-        # Style based on priority
-        if priority_input == '1':  # Regular
-            header_emoji = "📢"
-            border = "---------------------"
+        # Determine the visual style based on priority
+        if priority_input == '1':
             priority_tag = "📋 <b>ANNOUNCEMENT</b>"
-            
-        elif priority_input == '2':  # Important
-            header_emoji = "⚠️"
-            border = "---------------------"
+        elif priority_input == '2':
             priority_tag = "⚠️ <b>IMPORTANT NOTICE</b>"
-            
-        elif priority_input == '3':  # Urgent
-            header_emoji = "🚨"
-            border = "---------------------"
+        elif priority_input == '3':
             priority_tag = "🚨 <b>URGENT ANNOUNCEMENT</b>"
-            
-        else:  # Celebration
-            header_emoji = "🎉"
-            border = "---------------------"
+        else: # priority_input == '4'
             priority_tag = "🎉 <b>CELEBRATION</b>"
         
-        # Create final announcement
+        border = "---------------------"
+        
+        # Create the final formatted announcement text
         final_announcement = f"""{priority_tag}
 
 {border}
@@ -5108,18 +5100,22 @@ def handle_announcement_steps(msg: types.Message):
 
 <b>C.A.V.Y.A Management Team</b> 💝"""
 
-# Show preview to admin with interactive buttons
-preview_message = f"""🎯 <b>ANNOUNCEMENT PREVIEW</b>\n\n{final_announcement}\n\n✅ <b>Ready to post?</b>\n\nThis will be posted and pinned in the Updates topic."""
-
+        # Show a preview to the admin with interactive buttons
+        preview_message = f"""🎯 <b>ANNOUNCEMENT PREVIEW</b>\n\n{final_announcement}\n\n✅ <b>Ready to post?</b>\n\nThis will be posted and pinned in the Updates topic."""
+    
+        # Update the user's state one last time before confirmation
         user_state['data']['final_announcement'] = final_announcement
         user_state['data']['priority_choice'] = priority_input
-        user_state['step'] = 'awaiting_confirmation' # This step is now handled by a callback
+        user_state['step'] = 'awaiting_confirmation' # Next step is handled by the button callback
 
+        # Create the confirmation buttons
         markup = types.InlineKeyboardMarkup()
         markup.add(
             types.InlineKeyboardButton("✅ Yes, Post & Pin", callback_data="announce_confirm_yes"),
             types.InlineKeyboardButton("❌ No, Cancel", callback_data="announce_confirm_no")
         )
+        
+        # Send the preview message with buttons to the admin
         bot.send_message(msg.chat.id, preview_message, reply_markup=markup, parse_mode="HTML")
         
 @bot.callback_query_handler(func=lambda call: call.data.startswith('announce_confirm_'))
