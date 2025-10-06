@@ -5684,7 +5684,9 @@ def handle_define_command(msg: types.Message):
 def handle_dt_command(msg: types.Message):
     """
     Fetches and displays a summary for a specific section of the Income Tax Act, 1961.
+    Includes "Did you mean?" functionality for failed searches.
     """
+    search_term = ""
     try:
         parts = msg.text.split(' ', 1)
         # --- Error Handling: No Section Provided ---
@@ -5696,43 +5698,51 @@ def handle_dt_command(msg: types.Message):
         search_term = parts[1].strip()
         user_name = msg.from_user.first_name
 
-        # --- Database Query ---
-        response = supabase.table('income_tax_sections').select('*').eq('section_number', search_term).single().execute()
+        # --- Database Query (FIX: Removed .single()) ---
+        response = supabase.table('income_tax_sections').select('*').eq('section_number', search_term).limit(1).execute()
 
-        # --- Error Handling: Section Not Found ---
-        if not response.data:
-            not_found_text = f"Either Section '<code>{escape(search_term)}</code>' is not in the CA Inter syllabus or we missed adding it. We will add it soon, admin has been notified."
+        # --- On Success: If data is found ---
+        if response.data:
+            section_data = response.data[0]
+            example_text = (section_data.get('example') or "No example available.").replace("{user_name}", user_name)
+
+            message_text = (
+                f"💰 <b>Income Tax Act, 1961</b>\n"
+                f"<pre>━━━━━━━━━━━━━━━━━━</pre>\n\n"
+                f"📖 <b>Section <code>{escape(section_data.get('section_number', 'N/A'))}</code></b>\n"
+                f"<b>{escape(section_data.get('title', 'No Title'))}</b>\n\n"
+                f"<pre>──────────────────</pre>\n\n"
+                f"<b>Summary:</b>\n"
+                f"<blockquote>{escape(section_data.get('summary', 'No summary available.'))}</blockquote>\n"
+                f"<b>Practical Example:</b>\n"
+                f"<blockquote>{escape(example_text)}</blockquote>\n"
+                f"<pre>━━━━━━━━━━━━━━━━━━</pre>\n"
+                f"⚠️ <i>This is a simplified summary from ICAI materials for Jan 26 attempt. Always cross-verify with the latest amendments.</i>"
+            )
+            bot.reply_to(msg, message_text, parse_mode="HTML")
+            return
+
+        # --- On Failure: If data is NOT found ---
+        else:
+            # Call our new smart search function
+            similar_res = supabase.rpc('find_similar_dt_sections', {'search_term': search_term}).execute()
+
+            not_found_text = f"Sorry, Section '<code>{escape(search_term)}</code>' nahi mila. 😕\nEither it is not in the CA Inter syllabus or we missed adding it. We will add it soon; admin has been notified."
+
+            if similar_res.data:
+                suggestions = [f"<code>{s['section_number']}</code>" for s in similar_res.data]
+                not_found_text += "\n\nDid you mean one of these?\n" + ", ".join(suggestions)
+
             bot.reply_to(msg, not_found_text, parse_mode="HTML")
+
+            # Notify the admin in the background
             admin_notification = f"FYI: User {escape(msg.from_user.first_name)} searched for a non-existent DT Section: '{escape(search_term)}'. Please consider adding it to the database."
             report_error_to_admin(admin_notification)
             return
 
-        # --- On Success: Format and Send the Message ---
-        section_data = response.data
-        
-        # Replace the placeholder with the user's name in the example
-        example_text = (section_data.get('example') or "No example available.").replace("{user_name}", user_name)
-
-        # The New, Better Visual Format
-        message_text = (
-            f"💰 <b>Income Tax Act, 1961</b>\n"
-            f"<pre>━━━━━━━━━━━━━━━━━━</pre>\n\n"
-            f"📖 <b>Section <code>{escape(section_data.get('section_number', 'N/A'))}</code></b>\n"
-            f"<b>{escape(section_data.get('title', 'No Title'))}</b>\n\n"
-            f"<pre>──────────────────</pre>\n\n"
-            f"<b>Summary:</b>\n"
-            f"<blockquote>{escape(section_data.get('summary', 'No summary available.'))}</blockquote>\n"
-            f"<b>Practical Example:</b>\n"
-            f"<blockquote>{escape(example_text)}</blockquote>\n"
-            f"<pre>━━━━━━━━━━━━━━━━━━</pre>\n"
-            f"⚠️ <i>This is a simplified AI driven summary from ICAI materials for Jan 26 attempt. Always cross-verify with the latest amendments.</i>"
-        )
-
-        bot.reply_to(msg, message_text, parse_mode="HTML")
-
     except Exception as e:
         # --- Backend Error Handling ---
-        report_error_to_admin(f"CRITICAL Error in /dt command for section '{locals().get('search_term', 'N/A')}':\n{traceback.format_exc()}")
+        report_error_to_admin(f"CRITICAL Error in /dt command for section '{search_term}':\n{traceback.format_exc()}")
         bot.reply_to(msg, "Sorry, abhi database se connect nahi ho pa raha hai. Please try again later.")
 # =============================================================================
 # 8. TELEGRAM BOT HANDLERS - NEW DEFINITION SUBMISSION FLOW
