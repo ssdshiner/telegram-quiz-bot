@@ -2832,7 +2832,7 @@ def handle_info_command(msg: types.Message):
     
     info_text = """🤖 <b>Bot Commands</b> 🤖
 
-💡 <i>Tap command to copy, then paste to use.</i>
+💡 <i>Tap a command to copy it, then paste to use.</i>
 
 ━━ <b>Quiz & Stats</b> ━━
 <code>/todayquiz</code> - 📋 Today's Schedule
@@ -2840,17 +2840,28 @@ def handle_info_command(msg: types.Message):
 <code>/mystats</code> - 📊 My Personal Stats
 <code>/my_analysis</code> - 🔍 My Deep Analysis
 
+━━ <b>CA Reference Library</b> ━━
+<code>/dt [section]</code> - 💰 Income Tax Act
+<code>/gst [section]</code> - 🧾 GST Act
+<code>/llp [section]</code> - 🤝 LLP Act
+<code>/fema [section]</code> - 🌍 FEMA Act
+<code>/gca [section]</code> - 📜 General Clauses Act
+<code>/caro [rule]</code> - 📋 CARO Rules
+<code>/sa [number]</code> - 🔍 Standards on Auditing
+<code>/as [number]</code> - 📊 Accounting Standards
+
 ━━ <b>Resources & Notes</b> ━━
 <code>/listfile</code> - 🗂️ Browse All Notes
-<code>/need &lt;keyword&gt;</code> - 🔎 Search for Notes
-<code>/section &lt;num&gt;</code> - 📖 Get Law Section Details
+<code>/need [keyword]</code> - 🔎 Search for Notes
+<code>/define [term]</code> - 📖 Get Definition
+<code>/newdef</code> - ✍️ Add a New Definition
 
 ━━ <b>Written Practice</b> ━━
 <code>/submit</code> - 📤 Submit Answer Sheet
 <code>/review_done</code> - ✅ Mark Review Complete
 
 ━━ <b>Other Commands</b> ━━
-<code>/feedback &lt;message&gt;</code> - 💬 Send Feedback
+<code>/feedback [message]</code> - 💬 Send Feedback
 
 <b>C.A.V.Y.A is here to help you 💝</b>"""
 
@@ -5676,30 +5687,27 @@ def handle_define_command(msg: types.Message):
         report_error_to_admin(f"CRITICAL Error in /define command:\n{traceback.format_exc()}")
         bot.reply_to(msg, "❌ A critical error occurred. The admin has been notified.")
 # =============================================================================
-# 8. TELEGRAM BOT HANDLERS - LAW LIBRARY: INCOME TAX ACT
+# 8. TELEGRAM BOT HANDLERS - GENERIC LAW LIBRARY HANDLER
 # =============================================================================
 
-@bot.message_handler(commands=['dt'])
-@membership_required
-def handle_dt_command(msg: types.Message):
+def generate_law_library_response(msg: types.Message, command: str, table_name: str, act_name: str, emoji: str):
     """
-    Fetches and displays a summary for a specific section of the Income Tax Act, 1961.
-    This version is case-insensitive and includes "Did you mean?" functionality.
+    A generic master function to handle all law library commands.
     """
     search_term = ""
     try:
         parts = msg.text.split(' ', 1)
         # --- Error Handling: No Section Provided ---
         if len(parts) < 2 or not parts[1].strip():
-            reply_text = "Section number toh batao! 😉\n<b>Example:</b> <code>/dt 14A</code>"
+            reply_text = f"Please provide a section/standard number. 😉\n<b>Example:</b> <code>{command} 10</code>"
             bot.reply_to(msg, reply_text, parse_mode="HTML")
             return
 
         search_term = parts[1].strip()
         user_name = msg.from_user.first_name
 
-        # --- THE FIX: Use .ilike() for a case-insensitive search and remove .single() ---
-        response = supabase.table('income_tax_sections').select('*').ilike('section_number', search_term).limit(1).execute()
+        # --- Database Query ---
+        response = supabase.table(table_name).select('*').ilike('section_number', search_term).limit(1).execute()
 
         # --- On Success: If data is found ---
         if response.data:
@@ -5707,9 +5715,9 @@ def handle_dt_command(msg: types.Message):
             example_text = (section_data.get('example') or "No example available.").replace("{user_name}", user_name)
 
             message_text = (
-                f"💰 <b>Income Tax Act, 1961</b>\n"
+                f"{emoji} <b>{escape(act_name)}</b>\n"
                 f"<pre>━━━━━━━━━━━━━━━━━━</pre>\n\n"
-                f"📖 <b>Section <code>{escape(section_data.get('section_number', 'N/A'))}</code></b>\n"
+                f"📖 <b>Section/Standard <code>{escape(section_data.get('section_number', 'N/A'))}</code></b>\n"
                 f"<b>{escape(section_data.get('title', 'No Title'))}</b>\n\n"
                 f"<pre>──────────────────</pre>\n\n"
                 f"<b>Summary:</b>\n"
@@ -5724,26 +5732,63 @@ def handle_dt_command(msg: types.Message):
 
         # --- On Failure: If data is NOT found ---
         else:
-            # Call our smart search function for suggestions
-            similar_res = supabase.rpc('find_similar_dt_sections', {'search_term': search_term}).execute()
-
-            not_found_text = f"Sorry, Section '<code>{escape(search_term)}</code>' nahi mila. 😕\nEither it is not in the CA Inter syllabus or we missed adding it. We will add it soon; admin has been notified."
-
-            if similar_res.data:
-                suggestions = [f"<code>{s['section_number']}</code>" for s in similar_res.data]
-                not_found_text += "\n\nDid you mean one of these?\n" + ", ".join(suggestions)
-
+            not_found_text = f"Sorry, Section '<code>{escape(search_term)}</code>' {escape(act_name)} ke database mein nahi mila. 😕\nEither it is not in the CA Inter syllabus or we missed adding it."
             bot.reply_to(msg, not_found_text, parse_mode="HTML")
 
-            # Notify the admin in the background
-            admin_notification = f"FYI: User {escape(msg.from_user.first_name)} searched for a non-existent DT Section: '{escape(search_term)}'. Please consider adding it to the database."
+            admin_notification = f"FYI: User {escape(msg.from_user.first_name)} searched for a non-existent section in {act_name}: '{escape(search_term)}'."
             report_error_to_admin(admin_notification)
             return
 
     except Exception as e:
-        # --- Backend Error Handling ---
-        report_error_to_admin(f"CRITICAL Error in /dt command for section '{search_term}':\n{traceback.format_exc()}")
+        report_error_to_admin(f"CRITICAL Error in {command} command for section '{search_term}':\n{traceback.format_exc()}")
         bot.reply_to(msg, "Sorry, abhi database se connect nahi ho pa raha hai. Please try again later.")
+# =============================================================================
+# 8. TELEGRAM BOT HANDLERS - LAW LIBRARY: INCOME TAX ACT
+# =============================================================================
+
+# =============================================================================
+# 8. TELEGRAM BOT HANDLERS - SPECIFIC LAW COMMANDS
+# =============================================================================
+
+@bot.message_handler(commands=['dt'])
+@membership_required
+def handle_dt_command(msg: types.Message):
+    generate_law_library_response(msg, '/dt', 'income_tax_sections', 'Income Tax Act, 1961', '💰')
+
+@bot.message_handler(commands=['gst'])
+@membership_required
+def handle_gst_command(msg: types.Message):
+    generate_law_library_response(msg, '/gst', 'gst_sections', 'Goods and Services Tax Act, 2017', '🧾')
+
+@bot.message_handler(commands=['llp'])
+@membership_required
+def handle_llp_command(msg: types.Message):
+    generate_law_library_response(msg, '/llp', 'llp_sections', 'Limited Liability Partnership Act, 2008', '🤝')
+
+@bot.message_handler(commands=['fema'])
+@membership_required
+def handle_fema_command(msg: types.Message):
+    generate_law_library_response(msg, '/fema', 'fema_sections', 'Foreign Exchange Management Act, 1999', '🌍')
+
+@bot.message_handler(commands=['gca'])
+@membership_required
+def handle_gca_command(msg: types.Message):
+    generate_law_library_response(msg, '/gca', 'gca_sections', 'General Clauses Act, 1897', '📜')
+
+@bot.message_handler(commands=['caro'])
+@membership_required
+def handle_caro_command(msg: types.Message):
+    generate_law_library_response(msg, '/caro', 'caro_rules', 'CARO, 2020', '📋')
+
+@bot.message_handler(commands=['sa'])
+@membership_required
+def handle_sa_command(msg: types.Message):
+    generate_law_library_response(msg, '/sa', 'auditing_standards', 'Standards on Auditing', '🔍')
+
+@bot.message_handler(commands=['as'])
+@membership_required
+def handle_as_command(msg: types.Message):
+    generate_law_library_response(msg, '/as', 'accounting_standards', 'Accounting Standards', '📊')
 # =============================================================================
 # 8. TELEGRAM BOT HANDLERS - NEW DEFINITION SUBMISSION FLOW
 # =============================================================================
