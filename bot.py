@@ -301,7 +301,7 @@ def get_ai_definition(term: str, user_name: str):
         return None
 
     # This is the stable v1 API endpoint that we are forcing the code to use.
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={GEMINI_API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.0-pro:generateContent?key={GEMINI_API_KEY}"
 
     prompt = f"""Aap CA (Chartered Accountancy) ke ek expert tutor hain. '{term}' is term ko aasan Hinglish me samjhaiye.
 
