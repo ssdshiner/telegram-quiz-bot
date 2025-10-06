@@ -296,33 +296,49 @@ if GEMINI_API_KEY:
 
 def get_ai_definition(term: str, user_name: str):
     """
-    Calls the Gemini AI to get a personalized, Hinglish definition for a term.
+    Calls the Gemini AI using a direct REST API call to bypass library issues.
     """
     if not GEMINI_API_KEY:
         print("WARNING: GEMINI_API_KEY not set. AI definitions are disabled.")
         return None
+
+    # This is the stable v1 API endpoint that we are forcing the code to use.
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={GEMINI_API_KEY}"
+
+    prompt = f"""Aap CA (Chartered Accountancy) ke ek expert tutor hain. '{term}' is term ko aasan Hinglish me samjhaiye.
+
+    Definition clear aur 100 words se kam honi chahiye.
+
+    Ek practical example bhi dijiye jisme aap '{user_name}' ka naam use karein. Apne jawab me important words ko bold karne ke liye <b> tags ka use karein."""
+
+    headers = {'Content-Type': 'application/json'}
+
+    data = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "safetySettings": [
+            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
+        ]
+    }
+
     try:
-        # --- THIS IS THE FIX ---
-        # Switched to the 'gemini-1.5-flash-latest' model for better compatibility
-        model = genai.GenerativeModel('gemini-pro')
+        response = requests.post(url, headers=headers, json=data, timeout=20)
+        response.raise_for_status()  # This will raise an error for bad status codes (4xx or 5xx)
 
-        prompt = f"""Aap CA (Chartered Accountancy) ke ek expert tutor hain. '{term}' is term ko aasan Hinglish me samjhaiye.
+        result = response.json()
+        return result['candidates'][0]['content']['parts'][0]['text'].strip()
 
-        Definition clear aur 100 words se kam honi chahiye.
-
-        Ek practical example bhi dijiye jisme aap '{user_name}' ka naam use karein. Apne jawab me important words ko bold karne ke liye <b> tags ka use karein."""
-
-        safety_config = {
-            'HARM_CATEGORY_HARASSMENT': 'BLOCK_NONE',
-            'HARM_CATEGORY_HATE_SPEECH': 'BLOCK_NONE',
-            'HARM_CATEGORY_SEXUALLY_EXPLICIT': 'BLOCK_NONE',
-            'HARM_CATEGORY_DANGEROUS_CONTENT': 'BLOCK_NONE',
-        }
-
-        response = model.generate_content(prompt, safety_settings=safety_config)
-        return response.text.strip()
-    except Exception as e:
-        print(f"Error calling Gemini API: {e}")
+    except requests.exceptions.RequestException as e:
+        print(f"Error calling Gemini REST API: {e}")
+        if e.response is not None:
+            print(f"Response Body: {e.response.text}")
+        return None
+    except (KeyError, IndexError) as e:
+        print(f"Error parsing Gemini REST API response: {e}")
+        result = locals().get('result', 'No response object')
+        print(f"Full Response: {result}")
         return None
 # NEW: Live Countdown Helper (More Efficient Version, now using SAFE HTML)
 def live_countdown(chat_id, message_id, duration_seconds):
