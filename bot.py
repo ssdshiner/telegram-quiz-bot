@@ -5694,16 +5694,15 @@ def handle_study_tip_command(msg: types.Message):
         report_error_to_admin(f"Could not fetch/send study tip:\n{e}")
         bot.send_message(msg.chat.id, "❌ An error occurred while fetching the tip from the database.")
 def create_definition_image(user_name, term, definition, category):
-    """Creates a professional, branded, and personalized image card for a definition."""
-    # --- Card and Font Setup ---
+    """Creates a professional, high-contrast, and highly readable image card."""
+    # --- Card and Font Setup (Larger and Bolder) ---
     try:
-        # Using common, clean fonts. Ensure they are available or use default.
-        # Using 'arial' as it is widely available.
-        header_font = ImageFont.truetype("arialbd.ttf", 36)
-        intro_font = ImageFont.truetype("arial.ttf", 28)
-        term_font = ImageFont.truetype("arialbd.ttf", 60)
-        body_font = ImageFont.truetype("arial.ttf", 32)
-        footer_font = ImageFont.truetype("arial.ttf", 22)
+        # Using bold fonts for better weight and readability
+        header_font = ImageFont.truetype("arialbd.ttf", 40)
+        intro_font = ImageFont.truetype("arial.ttf", 30)
+        term_font = ImageFont.truetype("arialbd.ttf", 72)
+        body_font = ImageFont.truetype("arial.ttf", 40)
+        footer_font = ImageFont.truetype("arial.ttf", 24)
     except IOError:
         # Fallback to default font if specific fonts are not found
         header_font = ImageFont.load_default()
@@ -5712,29 +5711,29 @@ def create_definition_image(user_name, term, definition, category):
         body_font = ImageFont.load_default()
         footer_font = ImageFont.load_default()
 
-    # --- Color Palette ---
-    BG_COLOR = "#F5F7FA"
-    BRAND_COLOR = "#007BFF"
-    DARK_TEXT = "#161b22"
-    BODY_TEXT = "#333333"
-    SECONDARY_TEXT = "#8b949e"
+    # --- High-Contrast Color Palette ---
+    BG_COLOR = "#FFFFFF"  # Pure White background
+    BRAND_COLOR = "#0D47A1" # Deep, strong blue
+    DARK_TEXT = "#000000"  # Pure Black for the term
+    BODY_TEXT = "#212121"  # Very dark grey for the definition
+    SECONDARY_TEXT = "#424242" # Medium-dark grey for secondary info
 
     # --- Card Layout ---
     card_width = 800
-    padding = 50
+    padding = 60 # Increased padding
 
     # --- Dynamic Intro Line ---
     intro_lines = [
-        f"Hey {user_name}, here's the definition you asked for:",
+        f"Hey {user_name}, here is the definition for:",
         f"Of course, {user_name}! Here is the breakdown of:",
         f"Got it, {user_name}. Here's what you need to know about:"
     ]
     intro_text = random.choice(intro_lines)
 
-    # --- Dynamic Height Calculation ---
-    wrapped_definition = textwrap.wrap(definition, width=45)
-    text_height = sum([body_font.getbbox(line)[3] + 10 for line in wrapped_definition])
-    card_height = 320 + text_height
+    # --- Dynamic Height Calculation (with shorter line width for wrapping) ---
+    wrapped_definition = textwrap.wrap(definition, width=38) # Shorter width = bigger text
+    text_height = sum([body_font.getbbox(line)[3] + 15 for line in wrapped_definition])
+    card_height = 350 + text_height
 
     # --- Create Image ---
     img = Image.new('RGB', (card_width, card_height), color=BG_COLOR)
@@ -5742,35 +5741,35 @@ def create_definition_image(user_name, term, definition, category):
 
     # --- Draw Elements ---
     # 1. C.A.V.Y.A. Branding Header
-    draw.text((padding, 30), "C.A.V.Y.A.", font=header_font, fill=BRAND_COLOR)
-    draw.line([(padding, 80), (card_width - padding, 80)], fill="#E1E4E8", width=2)
+    draw.text((padding, 40), "C.A.V.Y.A.", font=header_font, fill=BRAND_COLOR)
+    draw.line([(padding, 95), (card_width - padding, 95)], fill="#DEE2E6", width=2)
 
     # 2. Personalized Intro
-    draw.text((padding, 100), intro_text, font=intro_font, fill=SECONDARY_TEXT)
+    draw.text((padding, 115), intro_text, font=intro_font, fill=SECONDARY_TEXT)
 
-    # 3. Main Term
-    draw.text((padding, 140), term, font=term_font, fill=DARK_TEXT)
+    # 3. Main Term (Much Bigger)
+    draw.text((padding, 160), term, font=term_font, fill=DARK_TEXT)
 
-    # 4. Definition Text (with wrapping)
-    y_text = 230
+    # 4. Definition Text (Bigger and Bolder)
+    y_text = 260
     for line in wrapped_definition:
         draw.text((padding, y_text), line, font=body_font, fill=BODY_TEXT)
-        y_text += body_font.getbbox(line)[3] + 10  # Add spacing
+        y_text += body_font.getbbox(line)[3] + 15  # Increased line spacing
 
     # 5. Footer Separator Line
-    draw.line([(padding, card_height - 70), (card_width - padding, card_height - 70)], fill="#E1E4E8", width=2)
+    draw.line([(padding, card_height - 80), (card_width - padding, card_height - 80)], fill="#DEE2E6", width=2)
 
     # 6. Footer Content
     category_text = f"Category: {category}"
     group_name = "Ca Inter Quiz hub 🎓"
-    draw.text((padding, card_height - 50), category_text, font=footer_font, fill=SECONDARY_TEXT)
+    draw.text((padding, card_height - 55), category_text, font=footer_font, fill=SECONDARY_TEXT)
     group_name_width = footer_font.getbbox(group_name)[2]
-    draw.text((card_width - padding - group_name_width, card_height - 50), group_name, font=footer_font, fill=SECONDARY_TEXT)
+    draw.text((card_width - padding - group_name_width, card_height - 55), group_name, font=footer_font, fill=SECONDARY_TEXT)
 
     # --- Save to Memory ---
     img_byte_arr = io.BytesIO()
     img.save(img_byte_arr, format='PNG')
-    img_byte_arr.seek(0)  # Rewind buffer
+    img_byte_arr.seek(0)
     return img_byte_arr
 @bot.message_handler(commands=['define'])
 @membership_required
