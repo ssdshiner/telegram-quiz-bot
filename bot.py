@@ -5985,37 +5985,48 @@ def process_newdef_category(msg: types.Message):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('def_'))
 def handle_definition_approval(call: types.CallbackQuery):
-    """Handles the admin's approve/decline decision."""
-    action = call.data.split('_')[1]
-    data_parts = call.data.split('_', 2)[-1]
+    """Handles the admin's approve/decline decision using a secure dictionary lookup."""
+    try:
+        action = call.data.split('_')[1]
+        short_id = call.data.split('_')[-1]
 
-    if action == "approve":
-        try:
-            user_id, submission_data = data_parts.split('_', 1)
-            term, definition, category = submission_data.split('|', 2)
+        if short_id not in pending_definitions:
+            bot.edit_message_text("❌ This action has expired or the data was not found.", call.message.chat.id, call.message.message_id)
+            bot.answer_callback_query(call.id, "Action expired.", show_alert=True)
+            return
 
-            workbook = get_gsheet()
-            if workbook:
-                sheet = workbook.worksheet('Glossary')
-                # Find the next available ID
-                all_ids = sheet.col_values(1)[1:] # Get all IDs except header
-                next_id = max([int(i) for i in all_ids if i.isdigit()] or [0]) + 1
+        # Retrieve the full data using the short_id
+        submission_data = pending_definitions.pop(short_id)
+        user_id = submission_data['user_id']
+        user_name = submission_data['user_name']
+        term = submission_data['term']
+        definition = submission_data['definition']
+        category = submission_data['category']
 
-                # Append the new row
-                sheet.append_row([str(next_id), term, definition, category])
+        if action == "approve":
+            try:
+                workbook = get_gsheet()
+                if workbook:
+                    sheet = workbook.worksheet('Glossary')
+                    all_ids = sheet.col_values(1)[1:]
+                    next_id = max([int(i) for i in all_ids if i.isdigit()] or [0]) + 1
+                    sheet.append_row([str(next_id), term, definition, category])
 
-                bot.edit_message_text(f"✅ Approved and added to glossary with ID #{next_id}.", call.message.chat.id, call.message.message_id)
-            else:
-                bot.answer_callback_query(call.id, "Error: Could not connect to Google Sheet.", show_alert=True)
-        except Exception as e:
-            report_error_to_admin(f"Error approving definition: {traceback.format_exc()}")
-            bot.answer_callback_query(call.id, "An error occurred while approving.", show_alert=True)
+                    bot.edit_message_text(f"✅ Submission from <b>{escape(user_name)}</b> for '<b>{escape(term)}</b>' has been approved and added to the glossary.", call.message.chat.id, call.message.message_id, parse_mode="HTML")
+                    bot.send_message(user_id, f"🎉 Good news! Your definition for '<b>{escape(term)}</b>' has been approved by the admin. Thank you for contributing!", parse_mode="HTML")
+                else:
+                    bot.answer_callback_query(call.id, "Error: Could not connect to Google Sheet.", show_alert=True)
+            except Exception as e:
+                report_error_to_admin(f"Error approving definition: {traceback.format_exc()}")
+                bot.answer_callback_query(call.id, "An error occurred while approving.", show_alert=True)
 
-    elif action == "decline":
-        user_id, term = data_parts.split('_', 1)
-        # As per the plan, we don't notify the user.
-        bot.edit_message_text(f"❌ Submission for '**{escape(term)}**' has been declined and discarded.", call.message.chat.id, call.message.message_id, parse_mode="HTML")
-        bot.answer_callback_query(call.id, "Submission Declined.")
+        elif action == "reject":
+            bot.edit_message_text(f"❌ Submission from <b>{escape(user_name)}</b> for '<b>{escape(term)}</b>' has been declined and discarded.", call.message.chat.id, call.message.message_id, parse_mode="HTML")
+            bot.send_message(user_id, f"Hi {escape(user_name)}, regarding your submission for '<b>{escape(term)}</b>': the admin has declined it for now. Thank you for your effort!", parse_mode="HTML")
+
+    except Exception as e:
+        report_error_to_admin(f"Critical error in handle_definition_approval: {traceback.format_exc()}")
+        bot.answer_callback_query(call.id, "A critical error occurred.", show_alert=True)
 
 # --- Law Library Feature (/section) ---
 
