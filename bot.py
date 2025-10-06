@@ -5693,52 +5693,84 @@ def handle_study_tip_command(msg: types.Message):
         print(f"Error in /studytip command: {traceback.format_exc()}")
         report_error_to_admin(f"Could not fetch/send study tip:\n{e}")
         bot.send_message(msg.chat.id, "❌ An error occurred while fetching the tip from the database.")
-def create_definition_image(term, definition, category):
-    """Creates a visually appealing image card for a definition."""
+def create_definition_image(user_name, term, definition, category):
+    """Creates a professional, branded, and personalized image card for a definition."""
     # --- Card and Font Setup ---
     try:
-        # Use a common, clean font. If not found, it will default.
-        title_font = ImageFont.truetype("arialbd.ttf", 48)
-        body_font = ImageFont.truetype("arial.ttf", 28)
-        footer_font = ImageFont.truetype("ariali.ttf", 24)
+        # Using common, clean fonts. Ensure they are available or use default.
+        # Using 'arial' as it is widely available.
+        header_font = ImageFont.truetype("arialbd.ttf", 36)
+        intro_font = ImageFont.truetype("arial.ttf", 28)
+        term_font = ImageFont.truetype("arialbd.ttf", 60)
+        body_font = ImageFont.truetype("arial.ttf", 32)
+        footer_font = ImageFont.truetype("arial.ttf", 22)
     except IOError:
-        title_font = ImageFont.load_default()
+        # Fallback to default font if specific fonts are not found
+        header_font = ImageFont.load_default()
+        intro_font = ImageFont.load_default()
+        term_font = ImageFont.load_default()
         body_font = ImageFont.load_default()
         footer_font = ImageFont.load_default()
 
+    # --- Color Palette ---
+    BG_COLOR = "#F5F7FA"
+    BRAND_COLOR = "#007BFF"
+    DARK_TEXT = "#161b22"
+    BODY_TEXT = "#333333"
+    SECONDARY_TEXT = "#8b949e"
+
+    # --- Card Layout ---
     card_width = 800
-    padding = 40
+    padding = 50
+
+    # --- Dynamic Intro Line ---
+    intro_lines = [
+        f"Hey {user_name}, here's the definition you asked for:",
+        f"Of course, {user_name}! Here is the breakdown of:",
+        f"Got it, {user_name}. Here's what you need to know about:"
+    ]
+    intro_text = random.choice(intro_lines)
 
     # --- Dynamic Height Calculation ---
-    wrapped_definition = textwrap.wrap(definition, width=50)
-    text_height = sum([body_font.getbbox(line)[3] for line in wrapped_definition])
-    card_height = 250 + text_height 
+    wrapped_definition = textwrap.wrap(definition, width=45)
+    text_height = sum([body_font.getbbox(line)[3] + 10 for line in wrapped_definition])
+    card_height = 320 + text_height
 
     # --- Create Image ---
-    img = Image.new('RGB', (card_width, card_height), color='#161b22')
+    img = Image.new('RGB', (card_width, card_height), color=BG_COLOR)
     draw = ImageDraw.Draw(img)
 
     # --- Draw Elements ---
-    # 1. Title (Term)
-    draw.text((padding, padding), term, font=title_font, fill='#58a6ff')
+    # 1. C.A.V.Y.A. Branding Header
+    draw.text((padding, 30), "C.A.V.Y.A.", font=header_font, fill=BRAND_COLOR)
+    draw.line([(padding, 80), (card_width - padding, 80)], fill="#E1E4E8", width=2)
 
-    # 2. Separator Line
-    draw.line([(padding, 110), (card_width - padding, 110)], fill='#30363d', width=2)
+    # 2. Personalized Intro
+    draw.text((padding, 100), intro_text, font=intro_font, fill=SECONDARY_TEXT)
 
-    # 3. Definition Text (with wrapping)
-    y_text = 140
+    # 3. Main Term
+    draw.text((padding, 140), term, font=term_font, fill=DARK_TEXT)
+
+    # 4. Definition Text (with wrapping)
+    y_text = 230
     for line in wrapped_definition:
-        draw.text((padding, y_text), line, font=body_font, fill='#c9d1d9')
-        y_text += body_font.getbbox(line)[3] + 5 # Add spacing between lines
+        draw.text((padding, y_text), line, font=body_font, fill=BODY_TEXT)
+        y_text += body_font.getbbox(line)[3] + 10  # Add spacing
 
-    # 4. Footer (Category)
-    footer_text = f"Category: {category}"
-    draw.text((padding, card_height - 60), footer_text, font=footer_font, fill='#8b949e')
+    # 5. Footer Separator Line
+    draw.line([(padding, card_height - 70), (card_width - padding, card_height - 70)], fill="#E1E4E8", width=2)
+
+    # 6. Footer Content
+    category_text = f"Category: {category}"
+    group_name = "Ca Inter Quiz hub 🎓"
+    draw.text((padding, card_height - 50), category_text, font=footer_font, fill=SECONDARY_TEXT)
+    group_name_width = footer_font.getbbox(group_name)[2]
+    draw.text((card_width - padding - group_name_width, card_height - 50), group_name, font=footer_font, fill=SECONDARY_TEXT)
 
     # --- Save to Memory ---
     img_byte_arr = io.BytesIO()
     img.save(img_byte_arr, format='PNG')
-    img_byte_arr.seek(0) # Rewind the buffer to the beginning
+    img_byte_arr.seek(0)  # Rewind buffer
     return img_byte_arr
 @bot.message_handler(commands=['define'])
 @membership_required
@@ -5754,7 +5786,8 @@ def handle_define_command(msg: types.Message):
             return
 
         search_term = parts[1].strip()
-        user_name = escape(msg.from_user.first_name)
+        # We get the user's name here
+        user_name = msg.from_user.first_name
 
         definition_found = False
         try:
@@ -5770,13 +5803,12 @@ def handle_define_command(msg: types.Message):
                         'category': row_values[3] if len(row_values) > 3 else 'General'
                     }
 
-                    # --- THIS IS THE NEW LOGIC ---
                     if term_data.get('category') == 'AI-Generated (Hinglish)':
-                        # Fallback to text for AI definitions
                         bot.reply_to(msg, term_data['definition'], parse_mode="HTML")
                     else:
-                        # Generate and send the image card
-                        image_file = create_definition_image(term_data['term'], term_data['definition'], term_data['category'])
+                        # --- THIS IS THE UPDATED CALL ---
+                        # We now pass the user_name to the image generator
+                        image_file = create_definition_image(user_name, term_data['term'], term_data['definition'], term_data['category'])
                         bot.send_photo(msg.chat.id, image_file, reply_to_message_id=msg.message_id)
 
                     definition_found = True
@@ -5791,6 +5823,7 @@ def handle_define_command(msg: types.Message):
 
         ai_definition = None
         try:
+            # We also pass the user_name to the AI function
             ai_definition = get_ai_definition(search_term, user_name)
             bot.delete_message(wait_msg.chat.id, wait_msg.message_id)
         except Exception:
