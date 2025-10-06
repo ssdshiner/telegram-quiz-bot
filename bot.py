@@ -5971,7 +5971,10 @@ def process_newdef_category(msg: types.Message):
             types.InlineKeyboardButton("✅ Approve", callback_data=callback_data_approve),
             types.InlineKeyboardButton("❌ Reject", callback_data=callback_data_reject)
         )
-
+        # Add the new "Edit" button on a separate row
+        markup.row(
+            types.InlineKeyboardButton("✏️ Edit & Approve", callback_data=f"def_edit_{short_id}")
+        )
         bot.send_message(ADMIN_USER_ID, admin_message, reply_markup=markup, parse_mode="HTML")
 
         # --- Final Confirmation to User ---
@@ -5985,17 +5988,40 @@ def process_newdef_category(msg: types.Message):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('def_'))
 def handle_definition_approval(call: types.CallbackQuery):
-    """Handles the admin's approve/decline decision using a secure dictionary lookup."""
+    """Handles the admin's approve/decline/edit decision."""
     try:
-        action = call.data.split('_')[1]
-        short_id = call.data.split('_')[-1]
+        parts = call.data.split('_')
+        action = parts[1]
+        short_id = parts[2]
 
         if short_id not in pending_definitions:
             bot.edit_message_text("❌ This action has expired or the data was not found.", call.message.chat.id, call.message.message_id)
             bot.answer_callback_query(call.id, "Action expired.", show_alert=True)
             return
 
-        # Retrieve the full data using the short_id
+        # --- HANDLE EDIT ACTION ---
+        if action == "edit":
+            admin_id = call.from_user.id
+            original_submission = pending_definitions[short_id]
+            
+            # Set the admin's state to wait for their new text
+            user_states[admin_id] = {
+                'action': 'editing_definition',
+                'short_id': short_id,
+                'timestamp': time.time()
+            }
+            
+            prompt_text = (
+                f"✏️ Okay, you are editing the definition for '<b>{escape(original_submission['term'])}</b>'.\n\n"
+                "Please send the new, corrected definition now."
+            )
+            
+            prompt_message = bot.edit_message_text(prompt_text, call.message.chat.id, call.message.message_id, parse_mode="HTML")
+            bot.register_next_step_handler(prompt_message, process_edited_definition)
+            bot.answer_callback_query(call.id)
+            return
+
+        # --- HANDLE APPROVE & REJECT ACTIONS ---
         submission_data = pending_definitions.pop(short_id)
         user_id = submission_data['user_id']
         user_name = submission_data['user_name']
@@ -6004,29 +6030,64 @@ def handle_definition_approval(call: types.CallbackQuery):
         category = submission_data['category']
 
         if action == "approve":
-            try:
-                workbook = get_gsheet()
-                if workbook:
-                    sheet = workbook.worksheet('Glossary')
-                    all_ids = sheet.col_values(1)[1:]
-                    next_id = max([int(i) for i in all_ids if i.isdigit()] or [0]) + 1
-                    sheet.append_row([str(next_id), term, definition, category])
+            workbook = get_gsheet()
+            if workbook:
+                sheet = workbook.worksheet('Glossary')
+                all_ids = sheet.col_values(1)[1:]
+                next_id = max([int(i) for i in all_ids if i.isdigit()] or [0]) + 1
+                sheet.append_row([str(next_id), term, definition, category])
 
-                    bot.edit_message_text(f"✅ Submission from <b>{escape(user_name)}</b> for '<b>{escape(term)}</b>' has been approved and added to the glossary.", call.message.chat.id, call.message.message_id, parse_mode="HTML")
-                    bot.send_message(user_id, f"🎉 Good news! Your definition for '<b>{escape(term)}</b>' has been approved by the admin. Thank you for contributing!", parse_mode="HTML")
-                else:
-                    bot.answer_callback_query(call.id, "Error: Could not connect to Google Sheet.", show_alert=True)
-            except Exception as e:
-                report_error_to_admin(f"Error approving definition: {traceback.format_exc()}")
-                bot.answer_callback_query(call.id, "An error occurred while approving.", show_alert=True)
-
+                bot.edit_message_text(f"✅ Submission from <b>{escape(user_name)}</b> for '<b>{escape(term)}</b>' has been approved.", call.message.chat.id, call.message.message_id, parse_mode="HTML")
+                bot.send_message(user_id, f"🎉 Good news! Your definition for '<b>{escape(term)}</b>' has been approved. Thank you!", parse_mode="HTML")
+            else:
+                bot.answer_callback_query(call.id, "Error: Could not connect to Google Sheet.", show_alert=True)
+        
         elif action == "reject":
-            bot.edit_message_text(f"❌ Submission from <b>{escape(user_name)}</b> for '<b>{escape(term)}</b>' has been declined and discarded.", call.message.chat.id, call.message.message_id, parse_mode="HTML")
-            bot.send_message(user_id, f"Hi {escape(user_name)}, regarding your submission for '<b>{escape(term)}</b>': the admin has declined it for now. Thank you for your effort!", parse_mode="HTML")
+            bot.edit_message_text(f"❌ Submission from <b>{escape(user_name)}</b> for '<b>{escape(term)}</b>' has been declined.", call.message.chat.id, call.message.message_id, parse_mode="HTML")
+            bot.send_message(user_id, f"Hi {escape(user_name)}, regarding your submission for '<b>{escape(term)}</b>': the admin has declined it. Thank you for your effort!", parse_mode="HTML")
 
     except Exception as e:
-        report_error_to_admin(f"Critical error in handle_definition_approval: {traceback.format_exc()}")
+        report_error_to_admin(f"Error in handle_definition_approval: {traceback.format_exc()}")
         bot.answer_callback_query(call.id, "A critical error occurred.", show_alert=True)
+
+
+def process_edited_definition(message: types.Message):
+    """Receives the admin's edited text and finalizes the approval."""
+    admin_id = message.from_user.id
+    try:
+        state_data = user_states.get(admin_id, {})
+        if not state_data or state_data.get('action') != 'editing_definition':
+            return # Ignore if the admin is not in the editing state
+
+        new_definition = message.text.strip()
+        short_id = state_data['short_id']
+        
+        # Retrieve and remove original data
+        submission_data = pending_definitions.pop(short_id)
+        user_id = submission_data['user_id']
+        term = submission_data['term']
+        category = submission_data['category']
+
+        # Save the EDITED version to Google Sheets
+        workbook = get_gsheet()
+        if workbook:
+            sheet = workbook.worksheet('Glossary')
+            all_ids = sheet.col_values(1)[1:]
+            next_id = max([int(i) for i in all_ids if i.isdigit()] or [0]) + 1
+            sheet.append_row([str(next_id), term, new_definition, category])
+
+            bot.send_message(admin_id, f"✅ Success! The definition for '<b>{escape(term)}</b>' has been edited and approved.", parse_mode="HTML")
+            bot.send_message(user_id, f"🎉 Good news! Your definition for '<b>{escape(term)}</b>' has been approved by the admin (with some edits). Thank you for contributing!", parse_mode="HTML")
+        else:
+             bot.send_message(admin_id, "❌ Error: Could not connect to Google Sheet to save the edited definition.")
+
+    except Exception as e:
+        report_error_to_admin(f"Error processing edited definition: {traceback.format_exc()}")
+        bot.send_message(admin_id, "❌ An error occurred while saving the edited definition.")
+    finally:
+        # Clean up the admin's state
+        if admin_id in user_states:
+            del user_states[admin_id]
 
 # --- Law Library Feature (/section) ---
 
@@ -8074,85 +8135,6 @@ def handle_run_checks_command(msg: types.Message):
         print(f"Error in /run_checks: {traceback.format_exc()}")
         bot.send_message(admin_id, "❌ An error occurred during the check.")
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith('send_actions_'))
-def handle_run_checks_confirmation(call: types.CallbackQuery):
-    """Handles the admin's confirmation to send the messages."""
-    admin_id = call.from_user.id
-    bot.edit_message_text("Processing your choice...", admin_id, call.message.message_id, reply_markup=None)
-# --- Handle definition approval/rejection ---
-elif call.data.startswith("def_approve_") or call.data.startswith("def_reject_"):
-    short_id = call.data.split("_")[-1]
-
-    if short_id not in pending_definitions:
-        bot.answer_callback_query(call.id, "❗ This definition data was not found or expired.")
-        return
-
-    data = pending_definitions.pop(short_id)
-    user_id = data["user_id"]
-    term = data["term"]
-    definition = data["definition"]
-    category = data["category"]
-
-    if call.data.startswith("def_approve_"):
-        bot.send_message(
-            user_id,
-            f"✅ Your definition for <b>{term}</b> has been approved and added to the {category} category!",
-            parse_mode="HTML"
-        )
-        bot.answer_callback_query(call.id, "Approved successfully ✅")
-    else:
-        bot.send_message(
-            user_id,
-            f"❌ Your definition for <b>{term}</b> was rejected by the admin.",
-            parse_mode="HTML"
-        )
-        bot.answer_callback_query(call.id, "Rejected ❌")
-
-    if call.data == 'send_actions_no':
-        bot.send_message(admin_id, "❌ Operation cancelled. No messages were sent to the group.")
-        if admin_id in user_states and 'pending_actions' in user_states[admin_id]:
-            del user_states[admin_id]['pending_actions']
-        return
-
-    try:
-        actions = user_states.get(admin_id, {}).get('pending_actions')
-        if not actions:
-            bot.send_message(admin_id, "❌ Action expired or data not found. Please run /run_checks again.")
-            return
-
-        if actions['first_warnings']:
-            # This message is already safe HTML from our previous fix
-            user_list = [f"{escape(user['user_name'])}" for user in actions['first_warnings']]
-            message = (f"⚠️ <b>Quiz Activity Warning!</b> ⚠️\n"
-                       f"The following members have not participated in any quiz for the last 3 days: {', '.join(user_list)}.\n"
-                       f"This is your final 24-hour notice.")
-            bot.send_message(GROUP_ID, message, parse_mode="HTML", message_thread_id=UPDATES_TOPIC_ID)
-            user_ids_to_update = [user['user_id'] for user in actions['first_warnings']]
-            supabase.table('quiz_activity').update({'warning_level': 1}).in_('user_id', user_ids_to_update).execute()
-        
-        if actions['final_warnings']:
-            user_list_str = format_user_mention_list(actions['final_warnings'])
-            message = f"Admins, please take action. The following members did not participate even after a final warning:\n" + user_list_str
-            bot.send_message(GROUP_ID, message, parse_mode="HTML", message_thread_id=UPDATES_TOPIC_ID)
-            user_ids_to_update = [user['user_id'] for user in actions['final_warnings']]
-            supabase.table('quiz_activity').update({'warning_level': 2}).in_('user_id', user_ids_to_update).execute()
-
-        if actions['appreciations']:
-            for user in actions['appreciations']:
-                # This message is also already safe HTML
-                safe_user_name = escape(user['user_name'])
-                message = (f"🏆 <b>Star Performer Alert!</b> 🏆\n\n"
-                           f"Hats off to <b>@{safe_user_name}</b> for showing incredible consistency! Your dedication is what makes this community awesome. Keep it up! 👏")
-                bot.send_message(GROUP_ID, message, parse_mode="HTML", message_thread_id=UPDATES_TOPIC_ID)
-
-        bot.send_message(admin_id, "✅ All approved messages have been sent to the group.")
-    
-    except Exception as e:
-        print(f"Error in handle_run_checks_confirmation: {traceback.format_exc()}")
-        bot.send_message(admin_id, "❌ An error occurred while sending messages.")
-    finally:
-        if admin_id in user_states and 'pending_actions' in user_states[admin_id]:
-            del user_states[admin_id]['pending_actions']
 
 
 @bot.message_handler(content_types=['new_chat_members'])
