@@ -304,7 +304,7 @@ def get_ai_definition(term: str, user_name: str):
     try:
         # --- THIS IS THE FIX ---
         # Switched to the 'gemini-1.5-flash-latest' model for better compatibility
-        model = genai.GenerativeModel('gemini-1.5-flash-latest')
+        model = genai.GenerativeModel('gemini-pro')
 
         prompt = f"""Aap CA (Chartered Accountancy) ke ek expert tutor hain. '{term}' is term ko aasan Hinglish me samjhaiye.
 
