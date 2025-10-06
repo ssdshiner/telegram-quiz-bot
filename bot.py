@@ -45,10 +45,14 @@ BOT_USERNAME = "CAVYA_bot"
 PUBLIC_GROUP_COMMANDS = [
     # Schedule & Performance
     'todayquiz', 'kalkaquiz', 'mystats', 'my_analysis', 'webquiz',
-    # Vault & Tools
-    'listfile', 'need', 'section',
+
+    # CA Reference, Glossary & Vault
+    'listfile', 'need', 'define', 'newdef',
+    'dt', 'gst', 'llp', 'fema', 'gca', 'caro', 'sa', 'as',
+
     # Written Practice
     'submit', 'review_done', 'questions_posted',
+
     # General
     'feedback', 'info'
 ]
@@ -3072,56 +3076,64 @@ DELEGATABLE_COMMANDS = {
 @admin_required
 def handle_promote_command(msg: types.Message):
     """
-    Starts the interactive flow to grant specific permissions to a user,
-    but ONLY if they are an admin in the group.
+    Starts the interactive flow to grant permissions, supporting both @username and reply.
     """
+    target_user_info = None
     try:
-        parts = msg.text.split(' ')
-        if len(parts) < 2 or not parts[1].startswith('@'):
-            bot.reply_to(msg, "Please provide a username.\n<b>Usage:</b> <code>/promote @username</code>", parse_mode="HTML")
+        # Method 1: By Replying to a message
+        if msg.reply_to_message:
+            replied_user = msg.reply_to_message.from_user
+            target_user_info = {
+                'user_id': replied_user.id,
+                'first_name': replied_user.first_name
+            }
+        # Method 2: By @username
+        else:
+            parts = msg.text.split(' ')
+            if len(parts) < 2 or not parts[1].startswith('@'):
+                bot.reply_to(msg, "Please provide a username, or reply to the user's message.\n<b>Usage:</b> <code>/promote @username</code> OR reply <code>/promote</code>", parse_mode="HTML")
+                return
+
+            # Use the existing helper function for username lookup
+            found_user = get_user_by_username(parts[1])
+            if found_user:
+                target_user_info = found_user
+
+        if not target_user_info:
+            bot.reply_to(msg, f"❌ User not found. Please make sure you provide a valid @username or reply to their message.", parse_mode="HTML")
             return
 
-        target_user = get_user_by_username(parts[1])
-        
-        if not target_user:
-            bot.reply_to(msg, f"❌ User <code>{escape(parts[1])}</code> not found in my database records.", parse_mode="HTML")
-            return
-            
-        target_user_id = target_user['user_id']
-        
-        # --- NEW ADMIN CHECK ---
-        # Pehle check karo ki ye user group ka admin hai ya nahi
+        target_user_id = target_user_info['user_id']
+
+        # --- Admin Check ---
         try:
             chat_admins = bot.get_chat_administrators(GROUP_ID)
             admin_ids = [admin.user.id for admin in chat_admins]
-            if target_user_id not in admin_ids:
-                bot.reply_to(msg, f"❌ <b>Action Failed!</b>\n\n<b>{escape(target_user['first_name'])}</b> is not an admin in the group. You can only grant special permissions to group admins.", parse_mode="HTML")
+            if target_user_id not in admin_ids and not is_admin(target_user_id):
+                bot.reply_to(msg, f"❌ <b>Action Failed!</b>\n\n<b>{escape(target_user_info['first_name'])}</b> is not an admin in the group. You can only grant special permissions to group admins.", parse_mode="HTML")
                 return
         except Exception as admin_check_error:
             report_error_to_admin(f"Could not check group admins in /promote: {admin_check_error}")
             bot.reply_to(msg, "❌ Could not verify the user's admin status. Please try again.")
             return
-        # --- END OF NEW CHECK ---
-        
+
         markup = types.InlineKeyboardMarkup(row_width=2)
         buttons = []
         for command_name, button_label in DELEGATABLE_COMMANDS.items():
             callback_data = f"grant_{msg.from_user.id}_{target_user_id}_{command_name}"
             buttons.append(types.InlineKeyboardButton(button_label, callback_data=callback_data))
-        
+
         for i in range(0, len(buttons), 2):
             if i + 1 < len(buttons):
                 markup.row(buttons[i], buttons[i+1])
             else:
                 markup.row(buttons[i])
 
-        bot.reply_to(msg, f"Choose a permission to grant to group admin <b>{escape(target_user['first_name'])}</b>:", reply_markup=markup, parse_mode="HTML")
+        bot.reply_to(msg, f"Choose a permission to grant to group admin <b>{escape(target_user_info['first_name'])}</b>:", reply_markup=markup, parse_mode="HTML")
 
     except Exception as e:
-        print(f"Error in /promote: {traceback.format_exc()}")
         report_error_to_admin(f"Error in /promote: {traceback.format_exc()}")
         bot.reply_to(msg, "❌ An error occurred.")
-
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('grant_'))
 def handle_grant_permission_callback(call: types.CallbackQuery):
@@ -3206,37 +3218,48 @@ def handle_view_perms(msg: types.Message):
 @bot.message_handler(commands=['revoke'])
 @admin_required
 def handle_revoke_command(msg: types.Message):
-    """Starts the interactive flow to revoke a permission."""
+    """Starts the interactive flow to revoke a permission, supporting both @username and reply."""
+    target_user_info = None
     try:
-        parts = msg.text.split(' ')
-        if len(parts) < 2 or not parts[1].startswith('@'):
-            bot.reply_to(msg, "Please provide a username.\n<b>Usage:</b> <code>/revoke @username</code>", parse_mode="HTML")
+        # Method 1: By Replying to a message
+        if msg.reply_to_message:
+            replied_user = msg.reply_to_message.from_user
+            target_user_info = {
+                'user_id': replied_user.id,
+                'first_name': replied_user.first_name
+            }
+        # Method 2: By @username
+        else:
+            parts = msg.text.split(' ')
+            if len(parts) < 2 or not parts[1].startswith('@'):
+                bot.reply_to(msg, "Please provide a username, or reply to the user's message.\n<b>Usage:</b> <code>/revoke @username</code> OR reply <code>/revoke</code>", parse_mode="HTML")
+                return
+
+            found_user = get_user_by_username(parts[1])
+            if found_user:
+                target_user_info = found_user
+
+        if not target_user_info:
+            bot.reply_to(msg, f"❌ User not found. Please make sure you provide a valid @username or reply to their message.", parse_mode="HTML")
             return
 
-        # THIS IS THE CLEANED UP PART
-        target_user = get_user_by_username(parts[1])
-        if not target_user:
-            bot.reply_to(msg, f"❌ User <code>{escape(parts[1])}</code> not found.", parse_mode="HTML")
-            return
-            
-        perms_response = supabase.table('user_permissions').select('command_name').eq('user_id', target_user['user_id']).execute()
+        perms_response = supabase.table('user_permissions').select('command_name').eq('user_id', target_user_info['user_id']).execute()
 
         if not perms_response.data:
-            bot.reply_to(msg, f"<b>{escape(target_user['first_name'])}</b> has no permissions to revoke.", parse_mode="HTML")
+            bot.reply_to(msg, f"<b>{escape(target_user_info['first_name'])}</b> has no permissions to revoke.", parse_mode="HTML")
             return
-            
+
         markup = types.InlineKeyboardMarkup(row_width=2)
         for perm in perms_response.data:
             command_name = perm['command_name']
-            callback_data = f"revoke_{msg.from_user.id}_{target_user['user_id']}_{command_name}"
+            callback_data = f"revoke_{msg.from_user.id}_{target_user_info['user_id']}_{command_name}"
             markup.add(types.InlineKeyboardButton(f"❌ Revoke {command_name}", callback_data=callback_data))
 
-        bot.reply_to(msg, f"Choose a permission to revoke from <b>{escape(target_user['first_name'])}</b>:", reply_markup=markup, parse_mode="HTML")
+        bot.reply_to(msg, f"Choose a permission to revoke from <b>{escape(target_user_info['first_name'])}</b>:", reply_markup=markup, parse_mode="HTML")
 
     except Exception as e:
         report_error_to_admin(f"Error in /revoke: {traceback.format_exc()}")
         bot.reply_to(msg, "❌ An error occurred.")
-
 @bot.callback_query_handler(func=lambda call: call.data.startswith('revoke_'))
 def handle_revoke_permission_callback(call: types.CallbackQuery):
     """Handles the permission revoking button click."""
