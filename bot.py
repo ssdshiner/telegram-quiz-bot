@@ -196,22 +196,21 @@ def get_gsheet():
             "https://spreadsheets.google.com/feeds",
             "https://www.googleapis.com/auth/drive"
         ]
-        
-        credentials_path = os.getenv('GOOGLE_SHEETS_CREDENTIALS_PATH')
-        if not credentials_path:
-            print("ERROR: GOOGLE_SHEETS_CREDENTIALS_PATH not set.")
-            return None
-            
+
+        # --- THIS IS THE FIX ---
+        # Use the exact filename you created on Render.
+        credentials_path = 'google_credentials.json'
+
         creds = service_account.Credentials.from_service_account_file(credentials_path, scopes=scope)
         client = gspread.authorize(creds)
-        
+
         sheet_key = os.getenv('GOOGLE_SHEET_KEY')
         if not sheet_key:
             print("ERROR: GOOGLE_SHEET_KEY not set.")
             return None
-            
+
         return client.open_by_key(sheet_key)
-        
+
     except FileNotFoundError:
         print(f"ERROR: Credentials file not found at path: {credentials_path}.")
         return None
@@ -304,22 +303,22 @@ def get_ai_definition(term: str, user_name: str):
         return None
     try:
         # --- THIS IS THE FIX ---
-        # Updated the model name from 'gemini-pro' to 'gemini-1.0-pro'
-        model = genai.GenerativeModel('gemini-1.0-pro')
-        
+        # Updated the model name from 'gemini-1.0-pro' to 'gemini-pro'
+        model = genai.GenerativeModel('gemini-pro')
+
         prompt = f"""Aap CA (Chartered Accountancy) ke ek expert tutor hain. '{term}' is term ko aasan Hinglish me samjhaiye.
 
         Definition clear aur 100 words se kam honi chahiye.
 
         Ek practical example bhi dijiye jisme aap '{user_name}' ka naam use karein. Apne jawab me important words ko bold karne ke liye <b> tags ka use karein."""
-        
+
         safety_config = {
             'HARM_CATEGORY_HARASSMENT': 'BLOCK_NONE',
             'HARM_CATEGORY_HATE_SPEECH': 'BLOCK_NONE',
             'HARM_CATEGORY_SEXUALLY_EXPLICIT': 'BLOCK_NONE',
             'HARM_CATEGORY_DANGEROUS_CONTENT': 'BLOCK_NONE',
         }
-        
+
         response = model.generate_content(prompt, safety_settings=safety_config)
         return response.text.strip()
     except Exception as e:
