@@ -84,7 +84,22 @@ UPDATES_TOPIC_ID = 2595
 QNA_TOPIC_ID = 2612
 QUIZ_TOPIC_ID = 2592
 CHATTING_TOPIC_ID = 2624
+# =============================================================================
+# 2. CONFIGURATION & INITIALIZATION (Continued)
+# =============================================================================
 
+# --- Law Library Mapping ---
+LAW_LIBRARIES = {
+    "it_act": {"name": "💰 Income Tax Act", "table": "income_tax_sections"},
+    "comp_act": {"name": "⚖️ Companies Act", "table": "law_sections"},
+    "gst_act": {"name": "🧾 GST Act", "table": "gst_sections"},
+    "llp_act": {"name": "🤝 LLP Act", "table": "llp_sections"},
+    "fema_act": {"name": "🌍 FEMA Act", "table": "fema_sections"},
+    "gca_act": {"name": "📜 General Clauses Act", "table": "gca_sections"},
+    "caro": {"name": "📋 CARO Rules", "table": "caro_rules"},
+    "sa": {"name": "🔍 Standards on Auditing", "table": "auditing_standards"},
+    "as": {"name": "📊 Accounting Standards", "table": "accounting_standards"},
+}
 # =============================================================================
 # 2.5. NETWORK STABILITY PATCH (MONKEY-PATCHING)
 # =============================================================================
@@ -6090,8 +6105,151 @@ def format_section_message(section_data, user_name):
         f"<pre>{example}</pre>\n\n"
         f"<i>Disclaimer: Please cross-check with the latest amendments.</i>")
     return message_text
+# =============================================================================
+# 8. TELEGRAM BOT HANDLERS - ADD SECTION FLOW
+# =============================================================================
+
+@bot.message_handler(commands=['addsection'])
+@membership_required
+def handle_addsection_command(msg: types.Message):
+    """Starts the conversational flow for adding or editing a law library entry."""
+    user_id = msg.from_user.id
+    if user_id in user_states:
+        bot.reply_to(msg, "Aap pehle se hi ek doosra command use kar rahe hain. Please use /cancel before starting a new one.")
+        return
+
+    # Set the initial state
+    user_states[user_id] = {'action': 'add_section', 'step': 'choosing_act', 'timestamp': time.time()}
+
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    # Create buttons dynamically from our map
+    for key, lib in LAW_LIBRARIES.items():
+        markup.add(types.InlineKeyboardButton(lib["name"], callback_data=f"addsec_act_{key}"))
+
+    prompt_text = "Awesome! Let's contribute to our law library. ✍️\n\nWhich library do you want to add or update?"
+    bot.reply_to(msg, prompt_text, reply_markup=markup)
 
 
+@bot.callback_query_handler(func=lambda call: call.data.startswith('addsec_act_'))
+def handle_addsection_act_choice(call: types.CallbackQuery):
+    """Step 2: Handles the user's choice of law library."""
+    user_id = call.from_user.id
+
+    # --- Robustness Check: Ensure user is in the correct state ---
+    if not user_states.get(user_id) or user_states[user_id].get('action') != 'add_section':
+        bot.edit_message_text("This action has expired. Please start over with /addsection.", call.message.chat.id, call.message.message_id)
+        return
+
+    try:
+        act_key = call.data.split('_')[-1]
+        selected_library = LAW_LIBRARIES[act_key]
+
+        # Store the user's choice
+        user_states[user_id]['step'] = 'choosing_type'
+        user_states[user_id]['library_key'] = act_key
+        user_states[user_id]['library_name'] = selected_library['name']
+        user_states[user_id]['table_name'] = selected_library['table']
+
+        # --- Conditional Buttons Logic ---
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        buttons = [
+            types.InlineKeyboardButton("Section", callback_data="addsec_type_Section"),
+            types.InlineKeyboardButton("Rule", callback_data="addsec_type_Rule"),
+            types.InlineKeyboardButton("Form", callback_data="addsec_type_Form")
+        ]
+        # If it's SA or AS, add the "Number" button
+        if act_key in ['sa', 'as']:
+            buttons.append(types.InlineKeyboardButton("Number", callback_data="addsec_type_Number"))
+        
+        markup.add(*buttons)
+
+        prompt_text = f"Got it. For **{selected_library['name']}**, are you adding a..."
+        bot.edit_message_text(prompt_text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
+        bot.answer_callback_query(call.id)
+
+    except Exception as e:
+        report_error_to_admin(f"Error in addsection act choice: {traceback.format_exc()}")
+        bot.edit_message_text("Sorry, an unexpected error occurred. Please try again from /addsection.", call.message.chat.id, call.message.message_id)
+        if user_id in user_states:
+            del user_states[user_id]
+@bot.callback_query_handler(func=lambda call: call.data.startswith('addsec_type_'))
+def handle_addsection_type_choice(call: types.CallbackQuery):
+    """Step 3: Handles the user's choice of entry type (Section, Rule, etc.)."""
+    user_id = call.from_user.id
+
+    # --- Robustness Check ---
+    if not user_states.get(user_id) or user_states[user_id].get('step') != 'choosing_type':
+        bot.edit_message_text("This action has expired. Please start over with /addsection.", call.message.chat.id, call.message.message_id)
+        return
+
+    try:
+        entry_type = call.data.split('_')[-1]
+        
+        # Store the choice and move to the next step
+        user_states[user_id]['step'] = 'awaiting_number'
+        user_states[user_id]['entry_type'] = entry_type
+
+        prompt_text = f"Okay, please enter the **{entry_type} Number** you want to add or edit."
+        bot.edit_message_text(prompt_text, call.message.chat.id, call.message.message_id, parse_mode="HTML")
+        bot.answer_callback_query(call.id)
+
+    except Exception as e:
+        report_error_to_admin(f"Error in addsection type choice: {traceback.format_exc()}")
+        bot.edit_message_text("Sorry, an unexpected error occurred. Please try again from /addsection.", call.message.chat.id, call.message.message_id)
+        if user_id in user_states:
+            del user_states[user_id]
+
+@bot.message_handler(func=lambda msg: user_states.get(msg.from_user.id, {}).get('step') == 'awaiting_number')
+def process_addsection_number(msg: types.Message):
+    """Step 4: Receives the entry number and checks if it exists in the database."""
+    user_id = msg.from_user.id
+    state = user_states.get(user_id)
+
+    if not state: return # Safety check
+
+    try:
+        entry_number = msg.text.strip()
+        table_name = state['table_name']
+        entry_type = state['entry_type']
+        
+        # Store the number for later use
+        state['entry_number'] = entry_number
+
+        # --- The "Check & Branch" Point ---
+        response = supabase.table(table_name).select('*').ilike('section_number', entry_number).limit(1).execute()
+
+        # Scenario A: The Entry ALREADY EXISTS
+        if response.data:
+            state['step'] = 'awaiting_edit_choice'
+            state['action_type'] = 'UPDATE' # This will be an update if they proceed
+            
+            existing_data = response.data[0]
+            display_text = (
+                f"Heads up! '{escape(entry_number)}' is already in our database:\n\n"
+                f"<b>Title:</b> {escape(existing_data.get('title', 'N/A'))}\n"
+                f"<b>Summary:</b> <blockquote>{escape(existing_data.get('summary', 'N/A'))}</blockquote>\n\n"
+                f"What would you like to do?"
+            )
+            
+            markup = types.InlineKeyboardMarkup()
+            markup.add(
+                types.InlineKeyboardButton("✏️ Edit This Entry", callback_data="addsec_edit_yes"),
+                types.InlineKeyboardButton("❌ Cancel", callback_data="addsec_edit_cancel")
+            )
+            bot.reply_to(msg, display_text, reply_markup=markup, parse_mode="HTML")
+
+        # Scenario B: The Entry is NEW
+        else:
+            state['step'] = 'awaiting_title'
+            state['action_type'] = 'INSERT' # This will be a new entry
+            
+            bot.reply_to(msg, f"Great! Let's add the details for **{entry_type} {escape(entry_number)}**.\n\nFirst, please enter the full **Title** for this entry.")
+
+    except Exception as e:
+        report_error_to_admin(f"Error in process_addsection_number: {traceback.format_exc()}")
+        bot.reply_to(msg, "Sorry, a database error occurred. Please start over with /addsection.")
+        if user_id in user_states:
+            del user_states[user_id]
 @bot.message_handler(commands=['reset_content'])
 @admin_required
 def handle_reset_content(msg: types.Message):
@@ -8264,7 +8422,139 @@ def handle_unknown_messages(msg: types.Message):
             "❌ I don't recognize that command. Please use /suru to see your options."
         )
 
+@bot.callback_query_handler(func=lambda call: call.data.startswith('addsec_edit_'))
+def handle_addsection_edit_choice(call: types.CallbackQuery):
+    """Step 4b: Handles the user's choice to either edit an existing entry or cancel."""
+    user_id = call.from_user.id
+    state = user_states.get(user_id)
 
+    # --- Robustness Check ---
+    if not state or state.get('step') != 'awaiting_edit_choice':
+        bot.edit_message_text("This action has expired. Please start over with /addsection.", call.message.chat.id, call.message.message_id)
+        return
+
+    if call.data == 'addsec_edit_yes':
+        # Start the data collection flow for editing
+        state['step'] = 'awaiting_title'
+        bot.edit_message_text(f"Okay, let's edit the details for **{state['entry_type']} {state['entry_number']}**.\n\nPlease enter the new **Title**.", call.message.chat.id, call.message.message_id, parse_mode="HTML")
+    else: # Cancel
+        bot.edit_message_text("Okay, the operation has been cancelled.", call.message.chat.id, call.message.message_id)
+        del user_states[user_id]
+    
+    bot.answer_callback_query(call.id)
+
+@bot.message_handler(func=lambda msg: user_states.get(msg.from_user.id, {}).get('step') == 'awaiting_title')
+def process_addsection_title(msg: types.Message):
+    """Step 5: Collects the Title and asks for the Summary."""
+    user_id = msg.from_user.id
+    state = user_states.get(user_id)
+    if not state: return
+
+    state['title'] = msg.text.strip()
+    state['step'] = 'awaiting_summary'
+    bot.reply_to(msg, "Great. Now, please write a simple Hinglish **Summary** for this entry.")
+
+@bot.message_handler(func=lambda msg: user_states.get(msg.from_user.id, {}).get('step') == 'awaiting_summary')
+def process_addsection_summary(msg: types.Message):
+    """Step 6: Collects the Summary and asks for the Example."""
+    user_id = msg.from_user.id
+    state = user_states.get(user_id)
+    if not state: return
+
+    state['summary'] = msg.text.strip()
+    state['step'] = 'awaiting_example'
+    bot.reply_to(msg, "Perfect. Lastly, please provide a practical Hinglish **Example**. Remember to use `{user_name}` where you want the user's name to appear.")
+
+@bot.message_handler(func=lambda msg: user_states.get(msg.from_user.id, {}).get('step') == 'awaiting_example')
+def process_addsection_example_and_submit(msg: types.Message):
+    """Step 7: Collects the Example, confirms to user, and sends for admin approval."""
+    user_id = msg.from_user.id
+    state = user_states.get(user_id)
+    if not state: return
+
+    state['example'] = msg.text.strip()
+
+    try:
+        user_info = msg.from_user
+        action_text = "New Section Submission" if state['action_type'] == 'INSERT' else "Section Edit Suggestion"
+        
+        # --- Prepare data for admin message ---
+        admin_message = (
+            f"📬 **{action_text}**\n\n"
+            f"**From:** {escape(user_info.first_name)} (@{user_info.username}, ID: <code>{user_info.id}</code>)\n"
+            f"**Library:** {state['library_name']}\n"
+            f"**Action:** <code>{state['action_type']}</code>\n\n"
+            f"**Entry:** <code>{escape(state['entry_number'])}</code>\n"
+            f"**Title:** {escape(state['title'])}\n"
+            f"**Summary:** <blockquote>{escape(state['summary'])}</blockquote>\n"
+            f"**Example:** <blockquote>{escape(state['example'])}</blockquote>\n\n"
+            f"Please review this change."
+        )
+
+        # Encode all the data into the callback for the admin buttons
+        # Using a simple separator `|~|` to handle complex text
+        submission_data = f"{state['table_name']}|~|{state['action_type']}|~|{state['entry_number']}|~|{state['title']}|~|{state['summary']}|~|{state['example']}"
+        callback_data_accept = f"addsec_admin_accept_{submission_data}"
+        callback_data_decline = f"addsec_admin_decline"
+
+        # Check for callback data length limit
+        if len(callback_data_accept) > 64:
+            bot.reply_to(msg, "Sorry, the text you entered is too long for submission. Please try again with shorter content.")
+            del user_states[user_id]
+            return
+
+        markup = types.InlineKeyboardMarkup()
+        markup.add(
+            types.InlineKeyboardButton("✅ Accept", callback_data=callback_data_accept),
+            types.InlineKeyboardButton("🚫 Decline", callback_data=callback_data_decline)
+        )
+        
+        bot.send_message(ADMIN_USER_ID, admin_message, reply_markup=markup, parse_mode="HTML")
+
+        # --- Final Confirmation to User ---
+        bot.reply_to(msg, "Thank you! Your submission has been sent for review. 🙏")
+
+    except Exception as e:
+        report_error_to_admin(f"Error submitting section for approval: {traceback.format_exc()}")
+        bot.reply_to(msg, "Sorry, submission bhejte waqt ek error aa gaya.")
+    finally:
+        del user_states[user_id] # Clean up state
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('addsec_admin_'))
+def handle_addsection_admin_approval(call: types.CallbackQuery):
+    """Handles the admin's final accept/decline decision."""
+    action = call.data.split('_')[2]
+
+    if action == "accept":
+        try:
+            # Unpack the data from the callback string
+            _, _, _, submission_data = call.data.split('_', 3)
+            table_name, action_type, entry_number, title, summary, example = submission_data.split('|~|', 5)
+
+            data_to_upsert = {
+                'section_number': entry_number,
+                'title': title,
+                'summary': summary,
+                'example': example
+            }
+
+            # Perform INSERT or UPDATE
+            if action_type == 'INSERT':
+                supabase.table(table_name).insert(data_to_upsert).execute()
+                confirmation_text = f"✅ Accepted and **added** to the `{table_name}` table."
+            else: # UPDATE
+                supabase.table(table_name).update(data_to_upsert).eq('section_number', entry_number).execute()
+                confirmation_text = f"✅ Accepted and **updated** in the `{table_name}` table."
+
+            bot.edit_message_text(confirmation_text, call.message.chat.id, call.message.message_id)
+
+        except Exception as e:
+            report_error_to_admin(f"Error accepting submission: {traceback.format_exc()}")
+            bot.answer_callback_query(call.id, "An error occurred while updating the database.", show_alert=True)
+
+    elif action == "decline":
+        bot.edit_message_text("🚫 Declined. The submission has been discarded.", call.message.chat.id, call.message.message_id)
+        bot.answer_callback_query(call.id, "Submission Declined.")
 # =============================================================================
 # 18. MAIN EXECUTION BLOCK (ENHANCED WITH HEALTH CHECKS)
 # =============================================================================
