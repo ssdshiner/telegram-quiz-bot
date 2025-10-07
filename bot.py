@@ -47,7 +47,7 @@ PUBLIC_GROUP_COMMANDS = [
     'todayquiz', 'kalkaquiz', 'mystats', 'my_analysis', 'webquiz',
 
     # CA Reference, Glossary & Vault
-    'listfile', 'need', 'define', 'newdef',
+    'listfile', 'need', 'define', 'newdef','section',
     'dt', 'gst', 'llp', 'fema', 'gca', 'caro', 'sa', 'as',
 
     # Written Practice
@@ -2846,6 +2846,7 @@ def handle_info_command(msg: types.Message):
 
 ━━ <b>CA Reference Library</b> ━━
 <code>/dt [section]</code> - 💰 Income Tax Act
+<code>/section [sect. no]</code> - ⚖️ Companies Act
 <code>/gst [section]</code> - 🧾 GST Act
 <code>/llp [section]</code> - 🤝 LLP Act
 <code>/fema [section]</code> - 🌍 FEMA Act
