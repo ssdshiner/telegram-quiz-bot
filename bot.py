@@ -47,7 +47,7 @@ PUBLIC_GROUP_COMMANDS = [
     'todayquiz', 'kalkaquiz', 'mystats', 'my_analysis', 'webquiz',
 
     # CA Reference, Glossary & Vault
-    'listfile', 'need', 'define', 'newdef','section',
+    'listfile', 'need', 'define', 'newdef','addsection','section',
     'dt', 'gst', 'llp', 'fema', 'gca', 'caro', 'sa', 'as',
 
     # Written Practice
@@ -2875,6 +2875,7 @@ def handle_info_command(msg: types.Message):
 <code>/need [keyword]</code> - 🔎 Search for Notes
 <code>/define [term]</code> - 📖 Get Definition
 <code>/newdef</code> - ✍️ Add a New Definition
+<code>/addsection</code> - ➕ Add/Edit a Law Section
 
 ━━ <b>Written Practice</b> ━━
 <code>/submit</code> - 📤 Submit Answer Sheet
