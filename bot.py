@@ -537,7 +537,7 @@ Creates a visually enhanced, paginated file list with file-type emojis.
 """
 def create_compact_file_list_page(group, subject, resource_type, page=1):
     """
-    Creates a visually enhanced, paginated file list with file-type emojis.
+    Creates a visually enhanced, paginated file list with subject-specific emojis.
     """
     try:
         offset = (page - 1) * FILES_PER_PAGE
@@ -553,29 +553,32 @@ def create_compact_file_list_page(group, subject, resource_type, page=1):
 
         total_pages = (total_files + FILES_PER_PAGE - 1) // FILES_PER_PAGE
 
-        # --- Build the Enhanced Message ---
-        header_emoji = "🎵" if subject == "Audio Notes" else "📚"
+        # --- NEW: Subject to Emoji Mapping ---
+        subject_emojis = {
+            "Law": "⚖️",
+            "Taxation": "💰",
+            "GST": "🧾",
+            "Accounts": "📊",
+            "Auditing": "🔍",
+            "Costing": "🧮",
+            "SM": "📈",
+            "FM & SM": "📈",
+            "Audio Notes": "🎧",
+            "General": "🌟"
+        }
+        header_emoji = subject_emojis.get(subject, "📚") # Default emoji
+
         message_text = f"{header_emoji} <b>{escape(subject)} - {escape(resource_type)}</b>\n"
         message_text += f"📄 Page {page}/{total_pages} ({total_files} total files)\n\n"
 
         buttons = []
         for i, resource in enumerate(files_on_page, 1):
-            file_type = resource.get('file_type', '').lower()
-            file_name = resource.get('file_name', '').lower()
-
-            # Assign an emoji based on file type or extension
-            if 'pdf' in file_type or '.pdf' in file_name:
-                emoji = "📄"
-            elif 'audio' in file_type or any(ext in file_name for ext in ['.mp3', '.ogg', '.wav']):
-                emoji = "🎧"
-            elif 'image' in file_type or any(ext in file_name for ext in ['.jpg', '.jpeg', '.png']):
-                emoji = "🖼️"
-            elif 'video' in file_type or any(ext in file_name for ext in ['.mp4', '.mov', '.avi']):
-                emoji = "📹"
-            else:
-                emoji = "📎" # Generic attachment
-
-            message_text += f"<code>{i}.</code> {emoji} {escape(resource['file_name'])}\n"
+            file_name = resource.get('file_name', '')
+            
+            # Use subject emoji for consistency, fallback to file type for others
+            emoji = subject_emojis.get(resource.get('subject'), "📎")
+            
+            message_text += f"<code>{i}.</code> {emoji} {escape(file_name)}\n"
             buttons.append(types.InlineKeyboardButton(f"{emoji} {i}", callback_data=f"getfile_{resource['id']}"))
 
         markup = types.InlineKeyboardMarkup(row_width=5)
@@ -586,12 +589,9 @@ def create_compact_file_list_page(group, subject, resource_type, page=1):
         if page > 1:
             nav_buttons.append(types.InlineKeyboardButton("⬅️ Prev", callback_data=f"v_page_{page-1}_{group}_{subject}_{resource_type}"))
 
-        # Determine the correct "Back" destination
         if subject == "Audio Notes":
-            # If it's Audio Notes, back should go to the subject list of its group
             nav_buttons.append(types.InlineKeyboardButton("↩️ Back", callback_data=f"v_group_{group}"))
         else:
-             # Otherwise, back goes to the resource type list for that subject
             nav_buttons.append(types.InlineKeyboardButton("↩️ Back", callback_data=f"v_subj_{group}_{subject}"))
 
         if page < total_pages:
@@ -3881,8 +3881,7 @@ def handle_listfile_command(msg: types.Message):
 @membership_required
 def handle_need_command(msg: types.Message):
     """
-    (SMART SEARCH) Searches for resources using a ranked, full-text search
-    that finds files with any matching words and ranks the best results first.
+    Searches for resources and sends the file with its description if a single match is found.
     """
     try:
         supabase.rpc('update_chat_activity', {'p_user_id': msg.from_user.id, 'p_user_name': msg.from_user.username or msg.from_user.first_name}).execute()
@@ -3896,29 +3895,39 @@ def handle_need_command(msg: types.Message):
             return
 
         search_term = parts[1].strip()
-        print(f"User {msg.from_user.id} smart searching for: '{search_term}'")
-
-        # --- THIS IS THE FINAL UPGRADE ---
-        # We are now calling the new 'smart_search' function.
         response = supabase.rpc('smart_search', {'p_search_terms': search_term}).execute()
 
         if not response.data:
             bot.reply_to(msg, f"😥 Sorry, I couldn't find any files matching '<code>{escape(search_term)}</code>'.\n\nTry using broader terms or browse with <code>/listfile</code>.", parse_mode="HTML")
             return
 
-        # The result display logic is already perfect and needs no changes.
         if len(response.data) == 1:
             resource = response.data[0]
-            file_id = resource['file_id']
-            path = f"<b>Path:</b> <code>{escape(resource['group_name'])} > {escape(resource['subject'])} > {escape(resource['resource_type'])}</code>"
+            # --- UPDATED: Fetch description for single result ---
+            full_resource_res = supabase.table('resources').select('file_id, file_name, description').eq('id', resource['id']).single().execute()
+            if not full_resource_res.data:
+                # Fallback if the file was deleted between searches
+                bot.reply_to(msg, "Sorry, the matched file seems to have been deleted.", parse_mode="HTML")
+                return
+
+            full_resource = full_resource_res.data
+            file_id = full_resource['file_id']
+            description = full_resource.get('description', 'No description available.')
+            
             caption = (f"✅ Found the best match for '<code>{escape(search_term)}</code>':\n\n"
-                       f"<b>File:</b> {escape(resource['file_name'])}\n{path}")
+                       f"📄 **File:** `{escape(full_resource['file_name'])}`\n\n"
+                       f"📝 **Description:**\n{escape(description)}")
             bot.send_document(msg.chat.id, file_id, caption=caption, reply_to_message_id=msg.message_id, parse_mode="HTML")
         else:
             markup = types.InlineKeyboardMarkup(row_width=1)
-            results_text = f"🔎 I found <b>{len(response.data)}</b> relevant files for '<code>{escape(search_term)}</code>'.\n\nHere are the top results:\n"
+            results_text = f"🔎 I found <b>{len(response.data)}</b> relevant files for '<code>{escape(search_term)}</code>'. Here are the top results:\n"
+            
+            # --- UPDATED: Use subject-specific emojis in search results ---
+            subject_emojis = { "Law": "⚖️", "Taxation": "💰", "GST": "🧾", "Accounts": "📊", "Auditing": "🔍", "Costing": "🧮", "SM": "📈", "FM & SM": "📈", "Audio Notes": "🎧", "General": "🌟"}
+
             for resource in response.data:
-                button_text = f"📄 {resource['file_name']}  ({escape(resource['subject'])})"
+                emoji = subject_emojis.get(resource.get('subject'), "📄")
+                button_text = f"{emoji} {resource['file_name']}  ({escape(resource['subject'])})"
                 button = types.InlineKeyboardButton(text=button_text, callback_data=f"getfile_{resource['id']}")
                 markup.add(button)
             bot.reply_to(msg, results_text, reply_markup=markup, parse_mode="HTML")
@@ -3931,65 +3940,52 @@ def handle_need_command(msg: types.Message):
 @bot.callback_query_handler(func=lambda call: call.data.startswith('getfile_'))
 def handle_getfile_callback(call: types.CallbackQuery):
     """
-    Handles a file request from a button click with enhanced error handling.
-    Fetches the file_id from Supabase and sends the document.
+    Handles a file request, fetching the file and its description to send as a caption.
     """
     try:
         resource_id_str = call.data.split('_', 1)[1]
         
         if not resource_id_str.isdigit():
             bot.answer_callback_query(call.id, text="❌ Error: Invalid file reference.", show_alert=True)
-            print(f"Error: Invalid resource_id in callback data: {call.data}")
             return
             
         resource_id = int(resource_id_str)
         bot.answer_callback_query(call.id, text="✅ Fetching your file from the Vault...")
         
-        # --- Database Fetch with Specific Error Handling ---
-        try:
-            response = supabase.table('resources').select('file_id, file_name').eq('id', resource_id).single().execute()
-        except APIError as db_error:
-            report_error_to_admin(f"Supabase APIError in getfile callback for resource_id {resource_id}:\n{db_error}")
-            bot.edit_message_text("❌ A database error occurred. Please try again later.", call.message.chat.id, call.message.message_id)
-            return
+        # --- UPDATED: Fetch description along with file details ---
+        response = supabase.table('resources').select('file_id, file_name, description').eq('id', resource_id).single().execute()
 
         if not response.data:
             bot.answer_callback_query(call.id, text="❌ File not found in database.", show_alert=True)
-            bot.edit_message_text("❌ Sorry, this file seems to have been deleted by an admin. Please try another file.", call.message.chat.id, call.message.message_id, reply_markup=None)
+            bot.edit_message_text("❌ Sorry, this file seems to have been deleted.", call.message.chat.id, call.message.message_id, reply_markup=None)
             return
 
         file_id_to_send = response.data['file_id']
         file_name_to_send = response.data['file_name']
-        
-        # --- Send Document with Specific Telegram Error Handling ---
+        description_to_send = response.data.get('description', 'No description available.')
+
+        # --- UPDATED: Create a beautiful caption ---
+        caption = f"📄 **File:** `{escape(file_name_to_send)}`\n\n"
+        caption += f"📝 **Description:**\n{escape(description_to_send)}"
+
         try:
             bot.send_document(
                 chat_id=call.message.chat.id, 
                 document=file_id_to_send,
+                caption=caption,
+                parse_mode="HTML",
                 reply_to_message_id=call.message.message_id
             )
             
-            # On success, edit the original message to give confirmation.
             confirmation_text = f"✅ Success! You have downloaded:\n<b>{escape(file_name_to_send)}</b>"
-            bot.edit_message_text(
-                confirmation_text, 
-                call.message.chat.id, 
-                call.message.message_id, 
-                reply_markup=None, # Remove buttons
-                parse_mode="HTML"
-            )
+            bot.edit_message_text(confirmation_text, call.message.chat.id, call.message.message_id, reply_markup=None, parse_mode="HTML")
+
         except ApiTelegramException as telegram_error:
-            # This is a common error if the file_id is old or invalid.
-            print(f"Telegram API Error for file_id {file_id_to_send}: {telegram_error}")
-            report_error_to_admin(f"Failed to send document (ID: {resource_id}, FileID: {file_id_to_send}). It may be expired on Telegram's servers.\nError: {telegram_error}")
-            
-            # Inform the user clearly.
-            error_message = f"❌ Failed to send '<code>{escape(file_name_to_send)}</code>'.\n\nThe file may have been corrupted or deleted from Telegram's servers. The admin has been notified."
+            report_error_to_admin(f"Failed to send document (ID: {resource_id}, FileID: {file_id_to_send}). Error: {telegram_error}")
+            error_message = f"❌ Failed to send '<code>{escape(file_name_to_send)}</code>'. The file may be expired. Admin has been notified."
             bot.edit_message_text(error_message, call.message.chat.id, call.message.message_id, parse_mode="HTML")
 
     except Exception as e:
-        # A final catch-all for any other unexpected errors.
-        print(f"Critical Error in handle_getfile_callback: {traceback.format_exc()}")
         report_error_to_admin(f"Critical error sending file from callback:\n{traceback.format_exc()}")
         bot.answer_callback_query(call.id, text="❌ A critical error occurred.", show_alert=True)
 # --- Admin Command: Direct Messaging System (/dm) ---
