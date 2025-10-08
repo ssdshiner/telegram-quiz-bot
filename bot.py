@@ -3881,7 +3881,7 @@ def handle_listfile_command(msg: types.Message):
 @membership_required
 def handle_need_command(msg: types.Message):
     """
-    Searches for resources and sends the file with its description if a single match is found.
+    Searches for resources and sends the file with the new stylish caption.
     """
     try:
         supabase.rpc('update_chat_activity', {'p_user_id': msg.from_user.id, 'p_user_name': msg.from_user.username or msg.from_user.first_name}).execute()
@@ -3903,28 +3903,26 @@ def handle_need_command(msg: types.Message):
 
         if len(response.data) == 1:
             resource = response.data[0]
-            # --- UPDATED: Fetch description for single result ---
             full_resource_res = supabase.table('resources').select('file_id, file_name, description').eq('id', resource['id']).single().execute()
             if not full_resource_res.data:
-                # Fallback if the file was deleted between searches
                 bot.reply_to(msg, "Sorry, the matched file seems to have been deleted.", parse_mode="HTML")
                 return
 
             full_resource = full_resource_res.data
             file_id = full_resource['file_id']
-            description = full_resource.get('description', 'No description available.')
+            file_name = full_resource['file_name']
+            description = full_resource.get('description', file_name)
             
-            caption = (f"✅ Found the best match for '<code>{escape(search_term)}</code>':\n\n"
-                       f"📄 **File:** `{escape(full_resource['file_name'])}`\n\n"
-                       f"📝 **Description:**\n{escape(description)}")
-            bot.send_document(msg.chat.id, file_id, caption=caption, reply_to_message_id=msg.message_id, parse_mode="HTML")
+            # --- THIS IS THE CHANGE ---
+            # Call the new caption generator
+            stylish_caption = create_stylish_caption(file_name, description)
+            
+            bot.send_document(msg.chat.id, file_id, caption=stylish_caption, reply_to_message_id=msg.message_id, parse_mode="HTML")
         else:
+            # ... (The rest of the function for displaying multiple results remains the same)
             markup = types.InlineKeyboardMarkup(row_width=1)
             results_text = f"🔎 I found <b>{len(response.data)}</b> relevant files for '<code>{escape(search_term)}</code>'. Here are the top results:\n"
-            
-            # --- UPDATED: Use subject-specific emojis in search results ---
             subject_emojis = { "Law": "⚖️", "Taxation": "💰", "GST": "🧾", "Accounts": "📊", "Auditing": "🔍", "Costing": "🧮", "SM": "📈", "FM & SM": "📈", "Audio Notes": "🎧", "General": "🌟"}
-
             for resource in response.data:
                 emoji = subject_emojis.get(resource.get('subject'), "📄")
                 button_text = f"{emoji} {resource['file_name']}  ({escape(resource['subject'])})"
@@ -3940,7 +3938,7 @@ def handle_need_command(msg: types.Message):
 @bot.callback_query_handler(func=lambda call: call.data.startswith('getfile_'))
 def handle_getfile_callback(call: types.CallbackQuery):
     """
-    Handles a file request, fetching the file and its description to send as a caption.
+    Handles a file request, using the new stylish caption generator.
     """
     try:
         resource_id_str = call.data.split('_', 1)[1]
@@ -3952,7 +3950,6 @@ def handle_getfile_callback(call: types.CallbackQuery):
         resource_id = int(resource_id_str)
         bot.answer_callback_query(call.id, text="✅ Fetching your file from the Vault...")
         
-        # --- UPDATED: Fetch description along with file details ---
         response = supabase.table('resources').select('file_id, file_name, description').eq('id', resource_id).single().execute()
 
         if not response.data:
@@ -3962,17 +3959,17 @@ def handle_getfile_callback(call: types.CallbackQuery):
 
         file_id_to_send = response.data['file_id']
         file_name_to_send = response.data['file_name']
-        description_to_send = response.data.get('description', 'No description available.')
+        description = response.data.get('description', file_name_to_send)
 
-        # --- UPDATED: Create a beautiful caption ---
-        caption = f"📄 **File:** `{escape(file_name_to_send)}`\n\n"
-        caption += f"📝 **Description:**\n{escape(description_to_send)}"
+        # --- THIS IS THE CHANGE ---
+        # Call the new caption generator
+        stylish_caption = create_stylish_caption(file_name_to_send, description)
 
         try:
             bot.send_document(
                 chat_id=call.message.chat.id, 
                 document=file_id_to_send,
-                caption=caption,
+                caption=stylish_caption,
                 parse_mode="HTML",
                 reply_to_message_id=call.message.message_id
             )
@@ -5507,7 +5504,33 @@ def handle_public_report_confirmation(call: types.CallbackQuery):
     if admin_id in user_states and 'last_report_data' in user_states[admin_id]:
         del user_states[admin_id]['last_report_data']
 # --- Helper functions for parsing text ---
+def create_stylish_caption(file_name, description):
+    """
+    Creates a beautiful, mobile-optimized caption in the 'Elegant & Thematic' style.
+    """
+    # --- Logic to extract title and author from the description ---
+    # This makes the caption smarter. It assumes the first line is the title
+    # and the line starting with "by" is the author.
+    lines = description.split('\n')
+    title = escape(lines[0].strip())
+    author_line = next((line for line in lines if line.strip().lower().startswith("by")), None)
+    
+    if author_line:
+        author = escape(author_line.strip())
+    else:
+        # Fallback if no "by" line is found
+        author = f"Source: {escape(file_name)}"
 
+    # --- Build the HTML Caption ---
+    caption = (
+        f"•───≪ ⚜️ ≫───•\n\n"
+        f"<b>{title}</b>\n"
+        f"<i>{author}</i>\n\n"
+        f"•───≪ ⚜️ ≫───•\n\n"
+        f"📜 For more notes & discussions, join us:\n"
+        f"➡️ <a href=\"https://t.me/cainterquizhub\">CA INTER QUIZ HUB</a> | @cainterquizhub"
+    )
+    return caption
 def parse_time_to_seconds(time_str):
     """Converts time string like '4 min 37 sec' or '56.1 sec' to total seconds."""
     seconds = 0
