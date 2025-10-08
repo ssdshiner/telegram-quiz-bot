@@ -44,7 +44,7 @@ ADMIN_USER_ID_STR = os.getenv('ADMIN_USER_ID')
 BOT_USERNAME = "CAVYA_bot"
 PUBLIC_GROUP_COMMANDS = [
     # Schedule & Performance
-    'todayquiz', 'kalkaquiz', 'mystats', 'my_analysis', 'webquiz',
+    'todayquiz', 'kalkaquiz', 'mystats', 'my_analysis', 'webquiz','testme',
 
     # CA Reference, Glossary & Vault
     'listfile', 'need', 'define', 'newdef','addsection','section',
@@ -421,6 +421,21 @@ def get_user_by_username(username_str: str):
     except Exception as e:
         print(f"Error looking up user @{username_to_find}: {e}")
         return None
+def safe_reply(message: types.Message, text: str, **kwargs):
+    """
+    A robust wrapper for bot.reply_to that prevents crashes if the original message is deleted.
+    """
+    try:
+        reply_params = types.ReplyParameters(
+            message_id=message.message_id,
+            allow_sending_without_reply=True
+        )
+        # Use the universally patched bot.send_message, which is safer
+        return bot.send_message(message.chat.id, text, reply_parameters=reply_params, **kwargs)
+    except Exception as e:
+        # Fallback in case of any unexpected error
+        print(f"Error in safe_reply: {e}. Sending message without reply.")
+        return bot.send_message(message.chat.id, text, **kwargs)
 # =============================================================================
 # 5. HELPER FUNCTIONS (Continued) - Access Control
 # =============================================================================
@@ -2862,6 +2877,7 @@ def handle_info_command(msg: types.Message):
 <code>/kalkaquiz</code> - 🔮 Tomorrow's Schedule
 <code>/mystats</code> - 📊 My Personal Stats
 <code>/my_analysis</code> - 🔍 My Deep Analysis
+<code>/testme</code> - 🧠 Start any Law/AS/SA/CARO Section Quiz
 
 ━━ <b>CA Reference Library</b> ━━
 <code>/dt [section]</code> - 💰 Income Tax Act
@@ -2940,146 +2956,189 @@ def handle_group_message_content(msg: types.Message):
 
 
 # --- Admin Command: /fileid Conversational Flow ---
+# =============================================================================
+# 8. TELEGRAM BOT HANDLERS - SMART FILE ID COMMAND
+# =============================================================================
 
 @bot.message_handler(commands=['fileid'])
 @admin_required
-def handle_fileid_command(msg: types.Message):
-    """Starts the conversational flow to get a file_id and add it to a quiz question."""
+def handle_smart_fileid_command(msg: types.Message):
+    """Starts the smart file ID process, which handles images and other files differently."""
     if not msg.chat.type == 'private':
-        bot.reply_to(msg, "🤫 Please use this command in a private chat with me.")
+        bot.reply_to(msg, "🤫 Please use this powerful command in a private chat with me.")
         return
+    
+    user_id = msg.from_user.id
+    user_states[user_id] = {'action': 'getting_smart_file_ids', 'timestamp': time.time()}
+    
+    bot.reply_to(msg, "✅ Ready! Please send me any files. I will handle images and other file types (like PDFs) differently.")
 
+
+@bot.message_handler(
+    func=lambda msg: user_states.get(msg.from_user.id, {}).get('action') == 'getting_smart_file_ids',
+    content_types=['document', 'photo', 'video', 'audio']
+)
+def handle_smart_files(message: types.Message):
+    """
+    Acts as a router. If the file is a photo, it starts the quiz flow.
+    Otherwise, it batches other file types to get their IDs.
+    """
+    user_id = message.from_user.id
+
+    # --- BRANCH 1: Handle Images (Photos) ---
+    if message.photo:
+        # Stop any batching timers that might be running for other files
+        if user_id in batch_timers:
+            batch_timers[user_id].cancel()
+        
+        # Immediately start the image-to-quiz workflow
+        start_image_to_quiz_flow(message)
+
+    # --- BRANCH 2: Handle Other File Types (PDF, Video, Audio) ---
+    else:
+        # Use the batching logic for all non-image files
+        if user_id in batch_timers:
+            batch_timers[user_id].cancel()
+
+        batch_key = message.media_group_id or user_id
+        
+        if batch_key not in photo_batches:
+            photo_batches[batch_key] = []
+        
+        photo_batches[batch_key].append(message)
+        
+        timer = threading.Timer(2.0, process_generic_file_batch, [batch_key, user_id])
+        batch_timers[user_id] = timer
+        timer.start()
+
+
+def start_image_to_quiz_flow(msg: types.Message):
+    """Initiates the quiz-linking flow after an image is received."""
     admin_id = msg.from_user.id
-    # THIS IS THE CHANGE: Added a timestamp
-    user_states[admin_id] = {'timestamp': time.time()}
-    prompt = bot.send_message(admin_id, "Please send me the image you want to use for a quiz question.")
-    bot.register_next_step_handler(prompt, process_fileid_image)
-
-
-def process_fileid_image(msg: types.Message):
-    """Receives the image, shows the file_id, and asks for confirmation."""
-    admin_id = msg.from_user.id
-    if not msg.photo:
-        prompt = bot.reply_to(msg, "That doesn't seem to be an image. Please send a photo, or type /cancel.")
-        bot.register_next_step_handler(prompt, process_fileid_image)
-        return
-
     file_id = msg.photo[-1].file_id
-    # THIS IS THE CHANGE: Added a timestamp
-    user_states[admin_id] = {'image_file_id': file_id, 'timestamp': time.time()}
+    
+    # Store the file ID and switch the user's state
+    user_states[admin_id] = {
+        'action': 'adding_image_to_quiz', 
+        'image_file_id': file_id, 
+        'timestamp': time.time()
+    }
     
     markup = types.InlineKeyboardMarkup()
     markup.add(
-        types.InlineKeyboardButton("✅ Yes, Add It", callback_data="add_fileid_yes"),
-        types.InlineKeyboardButton("❌ No, Thanks", callback_data="add_fileid_no")
+        types.InlineKeyboardButton("✅ Yes, Add It to a Quiz", callback_data="add_img_to_quiz_yes"),
+        types.InlineKeyboardButton("❌ No, Just Get ID", callback_data="add_img_to_quiz_no")
     )
     
-    message_text = (f"✅ Image received!\n\n"
+    message_text = (f"🖼️ **Image Detected!**\n\n"
                     f"Its File ID is:\n<code>{escape(file_id)}</code>\n\n"
-                    f"Would you like to add this ID to a question in the <code>quiz_questions</code> table?")
+                    f"Would you like to link this image to a quiz question?")
     bot.send_message(admin_id, message_text, reply_markup=markup, parse_mode="HTML")
 
 
-@bot.callback_query_handler(func=lambda call: call.data in ['add_fileid_yes', 'add_fileid_no'])
-def handle_fileid_confirmation(call: types.CallbackQuery):
-    """Handles the Yes/No confirmation and then asks for the quiz type."""
+def process_generic_file_batch(batch_key, user_id):
+    """Processes a batch of non-image files and sends a list of their IDs."""
+    try:
+        if batch_key not in photo_batches: return
+        batch_items = photo_batches[batch_key]
+        if not batch_items: return
+        
+        chat_id = batch_items[0].chat.id
+        response_message = f"✅ Here are the File IDs for the {len(batch_items)} file(s) you sent:\n<pre>━━━━━━━━━━━━━━━━━━</pre>\n\n"
+
+        for i, msg in enumerate(batch_items, 1):
+            file_name, file_id = "N/A", "N/A"
+            if msg.document:
+                file_name, file_id = msg.document.file_name, msg.document.file_id
+            elif msg.video:
+                file_name, file_id = msg.video.file_name or f"video_{msg.message_id}.mp4", msg.video.file_id
+            elif msg.audio:
+                file_name, file_id = msg.audio.file_name or f"audio_{msg.message_id}.mp3", msg.audio.file_id
+            
+            response_message += f"📄 **File {i}:** `{escape(file_name)}`\n"
+            response_message += f"🆔 **ID:** `{escape(file_id)}`\n\n"
+
+        bot.send_message(chat_id, response_message, parse_mode="HTML")
+
+    except Exception as e:
+        report_error_to_admin(f"Error in process_generic_file_batch: {traceback.format_exc()}")
+    finally:
+        if batch_key in photo_batches: del photo_batches[batch_key]
+        if user_id in batch_timers: del batch_timers[user_id]
+        # Reset the state so the user can send more files
+        if user_id in user_states and user_states[user_id].get('action') == 'getting_smart_file_ids':
+            del user_states[user_id]
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('add_img_to_quiz_'))
+def handle_image_to_quiz_confirmation(call: types.CallbackQuery):
+    """Handles the Yes/No confirmation for linking an image to a quiz."""
     admin_id = call.from_user.id
     
-    if call.data == 'add_fileid_yes':
-        # Ab hum direct ID poochne ke bajaye, quiz type poochenge
+    if call.data == 'add_img_to_quiz_yes':
         markup = types.InlineKeyboardMarkup()
         markup.add(
-            types.InlineKeyboardButton("🎲 Random Quiz", callback_data="add_fileid_to_random"),
-            types.InlineKeyboardButton("🏁 Quiz Marathon", callback_data="add_fileid_to_marathon")
+            types.InlineKeyboardButton("🎲 Random Quiz", callback_data="link_img_to_random"),
+            types.InlineKeyboardButton("🏁 Quiz Marathon", callback_data="link_img_to_marathon")
         )
         bot.edit_message_text(
-            text="✅ Okay, let's add this image to a question.\n\n<b>Which quiz system is this for?</b>",
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id,
-            reply_markup=markup,
-            parse_mode="HTML"
+            text="✅ Okay, let's link this image.\n\n<b>Which quiz system is this for?</b>",
+            chat_id=call.message.chat.id, message_id=call.message.message_id,
+            reply_markup=markup, parse_mode="HTML"
         )
-    else: # 'add_fileid_no'
-        if admin_id in user_states:
-            del user_states[admin_id]
-        bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id)
-        bot.send_message(admin_id, "👍 Okay, operation cancelled. You can copy the File ID above for manual use.")
+    else: # 'add_img_to_quiz_no'
+        if admin_id in user_states: del user_states[admin_id]
+        bot.edit_message_text("👍 Okay, operation cancelled. You can copy the File ID above for manual use.", call.message.chat.id, call.message.message_id)
 
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith('add_fileid_to_'))
-def handle_fileid_quiz_type_choice(call: types.CallbackQuery):
-    """
-    Handles the quiz type choice, edits the old message, and sends a new one to ask for the Question ID.
-    """
+@bot.callback_query_handler(func=lambda call: call.data.startswith('link_img_to_'))
+def handle_image_quiz_type_choice(call: types.CallbackQuery):
+    """Handles the quiz type choice and asks for the Question ID."""
     admin_id = call.from_user.id
-    quiz_type = call.data.split('_')[-1] # 'random' or 'marathon'
+    quiz_type = call.data.split('_')[-1]
     
-    # Store the choice in the user's state
-    if admin_id in user_states:
-        user_states[admin_id]['quiz_type'] = quiz_type
-    else:
-        # If state doesn't exist, handle the error gracefully
+    state = user_states.get(admin_id)
+    if not state or state.get('action') != 'adding_image_to_quiz':
         bot.edit_message_text("❌ Sorry, your session expired. Please start over with /fileid.", call.message.chat.id, call.message.message_id)
         return
 
-    # Determine the correct table name based on the user's choice
+    state['quiz_type'] = quiz_type
     table_name = "questions" if quiz_type == "random" else "quiz_questions"
     
-    # ** THE FIX PART 1: **
-    # First, edit the previous message to confirm the choice and clean up the buttons.
-    confirmation_text = f"✅ Great! You've selected the <b>{quiz_type.title()} Quiz</b>."
-    bot.edit_message_text(
-        text=confirmation_text, 
-        chat_id=call.message.chat.id, 
-        message_id=call.message.message_id, 
-        parse_mode="HTML"
-    )
+    bot.edit_message_text(f"✅ Great! You've selected the <b>{quiz_type.title()} Quiz</b>.", call.message.chat.id, call.message.message_id, parse_mode="HTML")
 
-    # ** THE FIX PART 2: **
-    # Now, send a NEW message to ask for the ID. This is more reliable.
     prompt_text = f"Please tell me the numeric <b>Question ID</b> from the <code>{table_name}</code> table that you want to add this image to."
-    prompt_message = bot.send_message(
-        chat_id=call.message.chat.id,
-        text=prompt_text,
-        parse_mode="HTML"
-    )
+    prompt_message = bot.send_message(call.message.chat.id, prompt_text, parse_mode="HTML")
     
-    # Register the next step based on the NEW prompt message.
-    bot.register_next_step_handler(prompt_message, process_fileid_question_id)
+    bot.register_next_step_handler(prompt_message, process_image_question_id)
 
 
-def process_fileid_question_id(msg: types.Message):
-    """Receives the Question ID and updates the correct database table based on the stored state."""
+def process_image_question_id(msg: types.Message):
+    """Receives the Question ID and updates the correct database table."""
     admin_id = msg.from_user.id
+    state = user_states.get(admin_id)
     
     try:
-        state_data = user_states.get(admin_id, {})
-        question_id = int(msg.text.strip())
-        file_id_to_add = state_data.get('image_file_id')
-        quiz_type = state_data.get('quiz_type')
-
-        if not file_id_to_add or not quiz_type:
-            bot.send_message(admin_id, "❌ Sorry, something went wrong. Your session data was lost. Please start over with /fileid.")
+        if not state or not state.get('image_file_id') or not state.get('quiz_type'):
+            bot.send_message(admin_id, "❌ Sorry, your session data was lost. Please start over with /fileid.")
             return
 
-        # Sahi table ka naam chunein
-        table_name = "questions" if quiz_type == "random" else "quiz_questions"
+        question_id = int(msg.text.strip())
+        table_name = "questions" if state['quiz_type'] == "random" else "quiz_questions"
         
-        # Sahi table ko update karein
-        supabase.table(table_name).update({'image_file_id': file_id_to_add}).eq('id', question_id).execute()
+        supabase.table(table_name).update({'image_file_id': state['image_file_id']}).eq('id', question_id).execute()
         
-        success_message = f"✅ Success! The image has been linked to Question ID <b>{question_id}</b> in the <b>{quiz_type.title()} Quiz</b> table."
+        success_message = f"✅ Success! The image has been linked to Question ID <b>{question_id}</b> in the <b>{state['quiz_type'].title()} Quiz</b> table."
         bot.send_message(admin_id, success_message, parse_mode="HTML")
 
     except ValueError:
         prompt = bot.reply_to(msg, "That's not a valid number. Please provide the numeric Question ID, or type /cancel.")
-        bot.register_next_step_handler(prompt, process_fileid_question_id)
+        bot.register_next_step_handler(prompt, process_image_question_id)
     except Exception as e:
-        report_error_to_admin(f"Failed to add file_id to question:\n{e}")
+        report_error_to_admin(f"Failed to add file_id to question: {e}")
         bot.send_message(admin_id, "❌ An error occurred while updating the database.")
     finally:
-        if admin_id in user_states:
-            del user_states[admin_id]
+        if admin_id in user_states: del user_states[admin_id]
 # =============================================================================
 # 8. TELEGRAM BOT HANDLERS - MEMBER & ROLE MANAGEMENT
 # =============================================================================
@@ -4355,102 +4414,107 @@ def format_analysis_for_webapp(analysis_data, user_name):
 @membership_required
 def handle_my_analysis_command(msg: types.Message):
     """
-    Sends a rich, detailed, UNIFIED analysis to the user in the desired combined format.
+    Sends a rich, detailed, UNIFIED analysis including Section Mastery.
     """
     user_id = msg.from_user.id
     user_name = escape(msg.from_user.first_name)
     
     try:
-        # Call our powerful unified analysis function
-        response = supabase.rpc('get_unified_user_analysis', {'p_user_id': user_id}).execute()
-        analysis_data = response.data
+        # --- Fetch all analysis data in one go ---
+        marathon_analysis_res = supabase.rpc('get_unified_user_analysis', {'p_user_id': user_id}).execute()
+        section_mastery_res = supabase.table('section_mastery').select('*').eq('user_id', user_id).order('quiz_date', desc=True).limit(5).execute()
 
-        # Extract the different pieces of data
-        web_stats = analysis_data.get('web_quiz_stats')
-        topic_stats = analysis_data.get('marathon_topic_stats')
-        type_stats = analysis_data.get('marathon_type_stats')
+        analysis_data = marathon_analysis_res.data
+        mastery_data = section_mastery_res.data
 
-        if not topic_stats and (not web_stats or not web_stats.get('top_3_web_scores')):
+        # --- Check if any data exists at all ---
+        if not analysis_data and not mastery_data:
             bot.reply_to(msg, f"📊 <b>{user_name}'s Analysis</b>\n\nNo quiz data found yet. Participate in quizzes to generate your report!")
             return
 
-        # --- PART 1: Rebuild the original, detailed Marathon analysis ---
-        main_message = f"📊 <b>{user_name}'s Performance Snapshot</b>\n━━━━━━━━━━━━━━━━━━\n"
-        weakest_topic_for_suggestion = None
-
-        if topic_stats:
-            total_correct = sum(t['total_correct'] for t in topic_stats)
-            total_attempted = sum(t['total_attempted'] for t in topic_stats)
-            total_time = sum(t['total_correct'] * t['avg_time_per_question'] for t in topic_stats if t.get('avg_time_per_question'))
-            
-            overall_accuracy = (total_correct / total_attempted * 100) if total_attempted > 0 else 0
-            overall_avg_time = (total_time / total_correct) if total_correct > 0 else 0
-
-            main_message += f"🎯 {overall_accuracy:.0f}% Accuracy | 📚 {len(topic_stats)} Topics | ❓ {total_attempted} Ques\n"
-            main_message += f" • <b>Avg. Time / Ques:</b> {overall_avg_time:.1f}s\n\n"
-
-            main_message += "🧠 <b>Theory vs. Practical</b>\n"
-            if type_stats:
-                for q_type in type_stats:
-                    type_accuracy = (q_type['total_correct'] / q_type['total_attempted'] * 100) if q_type['total_attempted'] > 0 else 0
-                    main_message += f" • <b>{q_type['question_type']}:</b> {type_accuracy:.0f}% Accuracy\n"
-            else:
-                main_message += " • Not enough data yet.\n"
-            main_message += "\n"
-
-            strongest = sorted([t for t in topic_stats if (t['total_correct']/t['total_attempted']*100) >= 80], key=lambda x: (x['total_correct']/x['total_attempted']), reverse=True)[:7]
-            weakest = sorted([t for t in topic_stats if (t['total_correct']/t['total_attempted']*100) < 65], key=lambda x: (x['total_correct']/x['total_attempted']))[:7]
-            
-            if weakest:
-                weakest_topic_for_suggestion = weakest[0]
-
-            main_message += "🏆 <b>Top 7 Strongest Topics</b>\n"
-            if strongest:
-                for i, t in enumerate(strongest, 1):
-                    accuracy = (t['total_correct'] / t['total_attempted'] * 100)
-                    main_message += f"  {i}. {escape(t['topic'])} ({accuracy:.0f}%)\n"
-            else:
-                main_message += "  Keep playing to identify your strengths!\n"
-            main_message += "\n"
-
-            main_message += "📚 <b>Top 7 Improvement Areas</b>\n"
-            if weakest:
-                for i, t in enumerate(weakest, 1):
-                    accuracy = (t['total_correct'] / t['total_attempted'] * 100)
-                    avg_time = t.get('avg_time_per_question', 0)
-                    main_message += f"  {i}. {escape(t['topic'])} ({accuracy:.0f}% | {avg_time:.1f}s)\n"
-            else:
-                main_message += "  No specific areas for improvement found yet. Great work!\n"
+        # --- Build the message piece by piece ---
+        message_parts = [f"📊 <b>{user_name}'s Performance Snapshot</b>\n━━━━━━━━━━━━━━━━━━\n"]
         
-        # --- PART 2: Create the Web Quiz performance section ---
-        web_quiz_section = ""
-        if web_stats and web_stats.get('top_3_web_scores'):
-            web_quiz_section += "\n<b>💻 <u>Web Quiz Performance</u></b>\n"
-            web_quiz_section += "<b>Top 3 Scores:</b>\n"
-            for score in web_stats['top_3_web_scores']:
-                # --- THIS IS THE CORRECTED LINE ---
-                web_quiz_section += f"  • {score['score']}% - <i>({escape(score['quiz_set'])})</i>\n"
-            
-            if web_stats.get('latest_strongest_topic'):
-                 web_quiz_section += f"<b>Strongest Area:</b> {escape(web_stats['latest_strongest_topic'])}\n"
-            if web_stats.get('latest_weakest_topic'):
-                 web_quiz_section += f"<b>Improvement Area:</b> {escape(web_stats['latest_weakest_topic'])}\n"
+        # --- PART 1: Marathon, Web Quiz, and Suggestions Analysis ---
+        if analysis_data:
+            web_stats = analysis_data.get('web_quiz_stats')
+            topic_stats = analysis_data.get('marathon_topic_stats')
+            type_stats = analysis_data.get('marathon_type_stats')
+            weakest_topic_for_suggestion = None
+
+            if topic_stats:
+                total_correct = sum(t['total_correct'] for t in topic_stats)
+                total_attempted = sum(t['total_attempted'] for t in topic_stats)
+                total_time = sum(t['total_correct'] * t['avg_time_per_question'] for t in topic_stats if t.get('avg_time_per_question'))
+                
+                overall_accuracy = (total_correct / total_attempted * 100) if total_attempted > 0 else 0
+                overall_avg_time = (total_time / total_correct) if total_correct > 0 else 0
+
+                message_parts.append(f"🎯 {overall_accuracy:.0f}% Accuracy | 📚 {len(topic_stats)} Topics | ❓ {total_attempted} Ques\n")
+                message_parts.append(f" • <b>Avg. Time / Ques:</b> {overall_avg_time:.1f}s\n\n")
+                
+                message_parts.append("🧠 <b>Theory vs. Practical</b>\n")
+                if type_stats:
+                    for q_type in type_stats:
+                        type_accuracy = (q_type['total_correct'] / q_type['total_attempted'] * 100) if q_type['total_attempted'] > 0 else 0
+                        message_parts.append(f" • <b>{q_type['question_type']}:</b> {type_accuracy:.0f}% Accuracy\n")
+                else:
+                    message_parts.append(" • Not enough data yet.\n")
+                message_parts.append("\n")
+
+                strongest = sorted([t for t in topic_stats if (t['total_correct']/t['total_attempted']*100) >= 80], key=lambda x: (x['total_correct']/x['total_attempted']), reverse=True)[:7]
+                weakest = sorted([t for t in topic_stats if (t['total_correct']/t['total_attempted']*100) < 65], key=lambda x: (x['total_correct']/x['total_attempted']))[:7]
+                if weakest:
+                    weakest_topic_for_suggestion = weakest[0]
+
+                message_parts.append("🏆 <b>Top 7 Strongest Topics</b>\n")
+                if strongest:
+                    for i, t in enumerate(strongest, 1):
+                        accuracy = (t['total_correct'] / t['total_attempted'] * 100)
+                        message_parts.append(f"  {i}. {escape(t['topic'])} ({accuracy:.0f}%)\n")
+                else:
+                    message_parts.append("  Keep playing to identify your strengths!\n")
+                message_parts.append("\n")
+
+                message_parts.append("📚 <b>Top 7 Improvement Areas</b>\n")
+                if weakest:
+                    for i, t in enumerate(weakest, 1):
+                        accuracy = (t['total_correct'] / t['total_attempted'] * 100)
+                        avg_time = t.get('avg_time_per_question', 0)
+                        message_parts.append(f"  {i}. {escape(t['topic'])} ({accuracy:.0f}% | {avg_time:.1f}s)\n")
+                else:
+                    message_parts.append("  No specific areas for improvement found yet. Great work!\n")
+
+            if web_stats and web_stats.get('top_3_web_scores'):
+                message_parts.append("\n<b>💻 <u>Web Quiz Performance</u></b>\n")
+                message_parts.append("<b>Top 3 Scores:</b>\n")
+                for score in web_stats['top_3_web_scores']:
+                    message_parts.append(f"  • {score['score']}% - <i>({escape(score['quiz_set'])})</i>\n")
+                if web_stats.get('latest_strongest_topic'):
+                    message_parts.append(f"<b>Strongest Area:</b> {escape(web_stats['latest_strongest_topic'])}\n")
+                if web_stats.get('latest_weakest_topic'):
+                    message_parts.append(f"<b>Improvement Area:</b> {escape(web_stats['latest_weakest_topic'])}\n")
+
+            if weakest_topic_for_suggestion:
+                weakest_topic_name = escape(weakest_topic_for_suggestion['topic'])
+                message_parts.append(f"\n⭐ <u>Smart Suggestion</u>\n")
+                message_parts.append(f"Your theory knowledge is a major strength! Apply that same foundational approach to practical questions in '<b>{weakest_topic_name}</b>' to see a significant score boost.\n")
+                message_parts.append(f"\n⚠️ <u>Your Hidden Challenge</u>\n")
+                message_parts.append(f"Your biggest opportunity for improvement is <b>reducing time on Practical questions</b>. While your accuracy is good, speeding up here will give you a major advantage in exams.\n")
+                message_parts.append(f"\n🎯 <u>Your Next Milestone</u>\n")
+                message_parts.append(f"Aim to increase your accuracy in <b>{weakest_topic_name}</b> to over 60% in your next 5 attempts. You can do it!")
+
+        # --- PART 2: Build the new "Section Mastery" section ---
+        if mastery_data:
+            message_parts.append("\n\n🧠 **<u>Law Library Quiz Mastery (Last 5)</u>**\n")
+            for record in mastery_data:
+                library_name = record.get('library_name', 'N/A').replace("💰", "").replace("🧾", "").strip()
+                accuracy = record.get('accuracy_percentage', 0)
+                message_parts.append(f"  • {accuracy}% - <i>({escape(library_name)})</i>\n")
         
-        # --- PART 3: Add the Smart Suggestions from the old format ---
-        suggestions_section = ""
-        if weakest_topic_for_suggestion:
-            weakest_topic_name = escape(weakest_topic_for_suggestion['topic'])
-            suggestions_section += f"\n⭐ <u>Smart Suggestion</u>\n"
-            suggestions_section += f"Your theory knowledge is a major strength! Apply that same foundational approach to practical questions in '<b>{weakest_topic_name}</b>' to see a significant score boost.\n"
-            suggestions_section += f"\n⚠️ <u>Your Hidden Challenge</u>\n"
-            suggestions_section += f"Your biggest opportunity for improvement is <b>reducing time on Practical questions</b>. While your accuracy is good, speeding up here will give you a major advantage in exams.\n"
-            suggestions_section += f"\n🎯 <u>Your Next Milestone</u>\n"
-            suggestions_section += f"Aim to increase your accuracy in <b>{weakest_topic_name}</b> to over 60% in your next 5 attempts. You can do it!"
+        # --- PART 3: Assemble and send the final message ---
+        final_message = "".join(message_parts)
 
-        # --- PART 4: Assemble the final message in the correct order ---
-        final_message = main_message + web_quiz_section + suggestions_section
-
-        # --- PART 5: Send the final, combined message ---
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("🗑️ Delete This Analysis", callback_data="delete_analysis_msg"))
         
@@ -5813,7 +5877,334 @@ def handle_llp_command(msg: types.Message):
 @membership_required
 def handle_fema_command(msg: types.Message):
     generate_law_library_response(msg, '/fema', 'fema_sections', 'Foreign Exchange Management Act, 1999', '🌍')
+# =============================================================================
+# 8. TELEGRAM BOT HANDLERS - LAW LIBRARY REVISION QUIZ (/testme)
+# =============================================================================
 
+@bot.message_handler(commands=['testme'])
+@membership_required
+def handle_testme_command(msg: types.Message):
+    """Starts the conversational flow for the revision quiz."""
+    user_id = msg.from_user.id
+    if user_id in user_states:
+        bot.reply_to(msg, "Aap pehle se hi ek doosra command use kar rahe hain. Please use /cancel before starting a new one.")
+        return
+
+    # Set the initial state for the quiz
+    user_states[user_id] = {'action': 'law_quiz', 'step': 'choosing_library', 'timestamp': time.time()}
+
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    # Reuse the LAW_LIBRARIES map to create buttons
+    for key, lib in LAW_LIBRARIES.items():
+        markup.add(types.InlineKeyboardButton(lib["name"], callback_data=f"quiz_lib_{key}"))
+
+    prompt_text = "Let's start a quick revision quiz! 🧠\n\nWhich subject do you want to test your knowledge on?"
+    bot.reply_to(msg, prompt_text, reply_markup=markup)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('quiz_lib_'))
+def handle_quiz_library_choice(call: types.CallbackQuery):
+    """Handles the user's choice of library and asks for the number of questions."""
+    user_id = call.from_user.id
+
+    # --- Robustness Check ---
+    if not user_states.get(user_id) or user_states[user_id].get('action') != 'law_quiz':
+        bot.edit_message_text("This quiz session has expired. Please start over with /testme.", call.message.chat.id, call.message.message_id)
+        return
+
+    try:
+        lib_key = call.data.split('_')[-1]
+        selected_library = LAW_LIBRARIES[lib_key]
+        table_name = selected_library['table']
+
+        # --- CRITICAL: Error Handling for Not Enough Data ---
+        # Check if the table has at least 4 entries to create a valid quiz question
+        count_response = supabase.table(table_name).select('id', count='exact').execute()
+        if count_response.count < 4:
+            bot.edit_message_text(f"Sorry, the '{selected_library['name']}' library doesn't have enough entries (at least 4) to create a quiz yet. Please add more sections first!", call.message.chat.id, call.message.message_id)
+            del user_states[user_id] # End conversation
+            return
+
+        # Store the user's choice
+        user_states[user_id]['step'] = 'awaiting_question_count'
+        user_states[user_id]['table_name'] = table_name
+        user_states[user_id]['library_name'] = selected_library['name']
+
+        prompt_text = "Great choice! How many questions would you like? (Please enter a number between 3 and 10)"
+        bot.edit_message_text(prompt_text, call.message.chat.id, call.message.message_id)
+        bot.answer_callback_query(call.id)
+
+    except Exception as e:
+        report_error_to_admin(f"Error in handle_quiz_library_choice: {traceback.format_exc()}")
+        bot.edit_message_text("Sorry, an unexpected error occurred. Please try again from /testme.", call.message.chat.id, call.message.message_id)
+        if user_id in user_states:
+            del user_states[user_id]
+# =============================================================================
+# 8. TELEGRAM BOT HANDLERS - LAW LIBRARY REVISION QUIZ (/testme) (Continued)
+# =============================================================================
+
+@bot.message_handler(func=lambda msg: user_states.get(msg.from_user.id, {}).get('step') == 'awaiting_question_count')
+def process_quiz_question_count(msg: types.Message):
+    """
+    Receives the number of questions and starts the quiz waiting room.
+    """
+    user_id = msg.from_user.id
+    state = user_states.get(user_id)
+    if not state: return
+
+    try:
+        # --- Input Validation ---
+        if not msg.text.strip().isdigit():
+            bot.reply_to(msg, "That's not a number. Please enter a number between 3 and 10.")
+            bot.register_next_step_handler(msg, process_quiz_question_count)
+            return
+        
+        num_questions = int(msg.text.strip())
+        if not (3 <= num_questions <= 10):
+            bot.reply_to(msg, "Please enter a number within the allowed range (3 to 10).")
+            bot.register_next_step_handler(msg, process_quiz_question_count)
+            return
+
+        # --- Setup the Quiz Session in a global dictionary ---
+        # Using the message ID as a unique session ID
+        session_id = str(msg.message_id)
+        QUIZ_SESSIONS[session_id] = {
+            'creator_id': user_id,
+            'library_name': state['library_name'],
+            'table_name': state['table_name'],
+            'num_questions': num_questions,
+            'participants': {user_id: {'name': msg.from_user.first_name, 'score': 0}},
+            'questions': [],
+            'current_question': 0,
+            'is_active': False
+        }
+
+        # --- Create the "Waiting Room" message ---
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("✅ Join Quiz!", callback_data=f"quiz_join_{session_id}"))
+        markup.add(types.InlineKeyboardButton("▶️ Start Quiz (Creator Only)", callback_data=f"quiz_start_{session_id}"))
+
+        waiting_text = (
+            f"🚀 **A new revision quiz is starting!**\n\n"
+            f"**Subject:** {state['library_name']}\n"
+            f"**Questions:** {num_questions}\n\n"
+            f"Click the button below to join the challenge!\n\n"
+            f"**Players Joined (1):**\n"
+            f"  - {escape(msg.from_user.first_name)}"
+        )
+        
+        bot.send_message(msg.chat.id, waiting_text, reply_markup=markup, parse_mode="HTML")
+        
+    except Exception as e:
+        report_error_to_admin(f"Error in process_quiz_question_count: {traceback.format_exc()}")
+        bot.reply_to(msg, "Sorry, an error occurred while setting up the quiz.")
+    finally:
+        if user_id in user_states:
+            del user_states[user_id] # Clean up the initial state
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('quiz_join_'))
+def handle_quiz_join(call: types.CallbackQuery):
+    """Handles other users joining the quiz."""
+    session_id = call.data.split('_')[-1]
+    session = QUIZ_SESSIONS.get(session_id)
+    user_id = call.from_user.id
+
+    if not session:
+        bot.answer_callback_query(call.id, "This quiz session has expired.", show_alert=True)
+        return
+
+    if user_id in session['participants']:
+        bot.answer_callback_query(call.id, "You have already joined this quiz!", show_alert=True)
+        return
+
+    # Add the new participant
+    session['participants'][user_id] = {'name': call.from_user.first_name, 'score': 0}
+    bot.answer_callback_query(call.id, "You have successfully joined the quiz!")
+
+    # Update the waiting room message with the new list of players
+    participant_list = "\n".join([f"  - {escape(p['name'])}" for p in session['participants'].values()])
+    
+    updated_text = (
+        f"🚀 **A new revision quiz is starting!**\n\n"
+        f"**Subject:** {session['library_name']}\n"
+        f"**Questions:** {session['num_questions']}\n\n"
+        f"Click the button below to join the challenge!\n\n"
+        f"**Players Joined ({len(session['participants'])}):**\n"
+        f"{participant_list}"
+    )
+    
+    # Use the same markup as before
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("✅ Join Quiz!", callback_data=f"quiz_join_{session_id}"))
+    markup.add(types.InlineKeyboardButton("▶️ Start Quiz (Creator Only)", callback_data=f"quiz_start_{session_id}"))
+    
+    try:
+        bot.edit_message_text(updated_text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
+    except Exception:
+        pass # Ignore "message not modified" errors
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('quiz_start_'))
+def handle_quiz_start(call: types.CallbackQuery):
+    """Starts the quiz if the creator clicks the button."""
+    session_id = call.data.split('_')[-1]
+    session = QUIZ_SESSIONS.get(session_id)
+    user_id = call.from_user.id
+
+    if not session:
+        bot.answer_callback_query(call.id, "This quiz session has expired.", show_alert=True)
+        return
+
+    # --- Security and Rules Check ---
+    if user_id != session['creator_id']:
+        bot.answer_callback_query(call.id, "Only the person who started the quiz can begin it.", show_alert=True)
+        return
+        
+    if len(session['participants']) < 2:
+        bot.answer_callback_query(call.id, "You need at least 2 players to start the quiz.", show_alert=True)
+        return
+        
+    session['is_active'] = True
+    bot.edit_message_text(f"The quiz is starting now with {len(session['participants'])} players! Get ready...", call.message.chat.id, call.message.message_id)
+    
+    # Start the quiz loop
+    send_law_quiz_question(call.message.chat.id, session_id)
+
+
+def send_law_quiz_question(chat_id, session_id):
+    """Fetches data, creates, and sends a single law quiz question."""
+    session = QUIZ_SESSIONS.get(session_id)
+    if not session or not session['is_active'] or session['current_question'] >= session['num_questions']:
+        # End the quiz if it's over
+        if session:
+            display_law_quiz_results(chat_id, session_id)
+        return
+
+    try:
+        # Fetch 4 random entries using our Supabase function
+        response = supabase.rpc('get_random_law_entries', {'table_name_input': session['table_name']}).execute()
+        if not response.data or len(response.data) < 4:
+            bot.send_message(chat_id, "Could not fetch enough unique questions to continue the quiz. Ending now.")
+            display_law_quiz_results(chat_id, session_id)
+            return
+
+        question_data = response.data
+        correct_entry = question_data[0]
+        
+        # Prepare options and shuffle them
+        options = [entry['section_number'] for entry in question_data]
+        random.shuffle(options)
+        correct_option_index = options.index(correct_entry['section_number'])
+
+        question_text = f"**Q{session['current_question'] + 1}/{session['num_questions']}:** Which section/standard relates to this summary?\n\n<blockquote>{escape(correct_entry['summary'])}</blockquote>"
+        
+        poll_message = bot.send_poll(
+            chat_id=chat_id,
+            question=question_text,
+            options=options,
+            type='quiz',
+            correct_option_id=correct_option_index,
+            is_anonymous=False,
+            open_period=45, # 45 seconds per question
+            explanation=f"Correct Answer: {correct_entry['section_number']}\nTitle: {correct_entry['title']}",
+            explanation_parse_mode="HTML"
+        )
+
+        session['questions'].append({
+            'poll_id': poll_message.poll.id,
+            'correct_section': correct_entry['section_number']
+        })
+        session['current_question'] += 1
+        
+        # Schedule the next question
+        time.sleep(50) # 45s for poll + 5s buffer
+        send_law_quiz_question(chat_id, session_id)
+
+    except Exception as e:
+        report_error_to_admin(f"Error sending law quiz question: {traceback.format_exc()}")
+        bot.send_message(chat_id, "An error occurred while generating the next question. The quiz will end.")
+        display_law_quiz_results(chat_id, session_id)
+
+
+def display_law_quiz_results(chat_id, session_id):
+    """Calculates, displays, and saves the final results of the law quiz."""
+    session = QUIZ_SESSIONS.get(session_id)
+    if not session: return
+
+    # Sort participants by score (highest first)
+    sorted_participants = sorted(session['participants'].values(), key=lambda p: p['score'], reverse=True)
+
+    results_text = f"🏁 **Quiz Over!** 🏁\n\n**Subject:** {session['library_name']}\n**Final Results:**\n<pre>━━━━━━━━━━━━━━━━━━</pre>\n"
+    
+    rank_emojis = ["🥇", "🥈", "🥉"]
+    for i, participant in enumerate(sorted_participants):
+        rank = rank_emojis[i] if i < 3 else f" {i + 1}."
+        results_text += f"{rank} {escape(participant['name'])} - **{participant['score']} Points**\n"
+
+    results_text += "<pre>━━━━━━━━━━━━━━━━━━</pre>\nCongratulations to everyone who participated!"
+    
+    bot.send_message(chat_id, results_text, parse_mode="HTML")
+    
+    # --- NEW: Save results to the section_mastery table ---
+    try:
+        records_to_insert = []
+        num_questions = session['num_questions']
+        for user_id, data in session['participants'].items():
+            accuracy = int((data['score'] / (num_questions * 10)) * 100) if num_questions > 0 else 0
+            records_to_insert.append({
+                'user_id': user_id,
+                'user_name': data['name'],
+                'library_name': session['library_name'],
+                'score': data['score'],
+                'total_questions': num_questions,
+                'accuracy_percentage': accuracy
+            })
+        
+        if records_to_insert:
+            supabase.table('section_mastery').insert(records_to_insert).execute()
+            print(f"Successfully saved {len(records_to_insert)} law quiz results.")
+
+    except Exception as e:
+        report_error_to_admin(f"Error saving law quiz results: {traceback.format_exc()}")
+    
+    # Clean up the session
+    if session_id in QUIZ_SESSIONS:
+        del QUIZ_SESSIONS[session_id]
+
+
+
+@bot.poll_answer_handler()
+def handle_law_quiz_answer(poll_answer: types.PollAnswer):
+    """Handles answers for the law library quiz."""
+    user_id = poll_answer.user.id
+    poll_id = poll_answer.poll_id
+    
+    # Find the active quiz session this poll belongs to
+    active_session_id = None
+    for session_id, session in QUIZ_SESSIONS.items():
+        if session.get('is_active'):
+            for q in session['questions']:
+                if q['poll_id'] == poll_id:
+                    active_session_id = session_id
+                    break
+        if active_session_id:
+            break
+            
+    if not active_session_id:
+        return # Not a law quiz poll answer, so ignore it
+
+    session = QUIZ_SESSIONS[active_session_id]
+    
+    # Find the question corresponding to the poll
+    question = next((q for q in session['questions'] if q['poll_id'] == poll_id), None)
+    poll_obj = next((p for p in bot.get_updates() if p.poll and p.poll.id == poll_id), None)
+    
+    if question and poll_obj:
+        # Check if the user's selected option is the correct one
+        if poll_obj.poll.options[poll_answer.option_ids[0]].text == question['correct_section']:
+            if user_id in session['participants']:
+                session['participants'][user_id]['score'] += 10 # Award 10 points
 @bot.message_handler(commands=['gca'])
 @membership_required
 def handle_gca_command(msg: types.Message):
