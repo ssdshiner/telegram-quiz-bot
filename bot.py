@@ -426,15 +426,16 @@ def safe_reply(message: types.Message, text: str, **kwargs):
     A robust wrapper for bot.reply_to that prevents crashes if the original message is deleted.
     """
     try:
+        # Use reply_parameters for a safer way to reply
         reply_params = types.ReplyParameters(
             message_id=message.message_id,
             allow_sending_without_reply=True
         )
-        # Use the universally patched bot.send_message, which is safer
+        # Use the universally patched bot.send_message, which is more resilient
         return bot.send_message(message.chat.id, text, reply_parameters=reply_params, **kwargs)
     except Exception as e:
-        # Fallback in case of any unexpected error
-        print(f"Error in safe_reply: {e}. Sending message without reply.")
+        # As a fallback, if replying fails for any reason, send a normal message
+        print(f"Error in safe_reply, sending without reply. Error: {e}")
         return bot.send_message(message.chat.id, text, **kwargs)
 # =============================================================================
 # 5. HELPER FUNCTIONS (Continued) - Access Control
@@ -2953,11 +2954,8 @@ def handle_group_message_content(msg: types.Message):
     finally:
         if admin_id in user_states:
             del user_states[admin_id]
-
-
-# --- Admin Command: /fileid Conversational Flow ---
 # =============================================================================
-# 8. TELEGRAM BOT HANDLERS - SMART FILE ID COMMAND
+# 8. TELEGRAM BOT HANDLERS - SMART FILE ID COMMAND (CORRECTED)
 # =============================================================================
 
 @bot.message_handler(commands=['fileid'])
@@ -2987,16 +2985,12 @@ def handle_smart_files(message: types.Message):
 
     # --- BRANCH 1: Handle Images (Photos) ---
     if message.photo:
-        # Stop any batching timers that might be running for other files
         if user_id in batch_timers:
             batch_timers[user_id].cancel()
-        
-        # Immediately start the image-to-quiz workflow
         start_image_to_quiz_flow(message)
 
     # --- BRANCH 2: Handle Other File Types (PDF, Video, Audio) ---
     else:
-        # Use the batching logic for all non-image files
         if user_id in batch_timers:
             batch_timers[user_id].cancel()
 
@@ -3017,7 +3011,6 @@ def start_image_to_quiz_flow(msg: types.Message):
     admin_id = msg.from_user.id
     file_id = msg.photo[-1].file_id
     
-    # Store the file ID and switch the user's state
     user_states[admin_id] = {
         'action': 'adding_image_to_quiz', 
         'image_file_id': file_id, 
@@ -3030,7 +3023,8 @@ def start_image_to_quiz_flow(msg: types.Message):
         types.InlineKeyboardButton("❌ No, Just Get ID", callback_data="add_img_to_quiz_no")
     )
     
-    message_text = (f"🖼️ **Image Detected!**\n\n"
+    # CORRECTED FORMATTING: Changed Markdown bold to HTML bold
+    message_text = (f"🖼️ <b>Image Detected!</b>\n\n"
                     f"Its File ID is:\n<code>{escape(file_id)}</code>\n\n"
                     f"Would you like to link this image to a quiz question?")
     bot.send_message(admin_id, message_text, reply_markup=markup, parse_mode="HTML")
@@ -3039,12 +3033,15 @@ def start_image_to_quiz_flow(msg: types.Message):
 def process_generic_file_batch(batch_key, user_id):
     """Processes a batch of non-image files and sends a list of their IDs."""
     try:
+        state = user_states.get(user_id, {})
+        if not state: return
+
         if batch_key not in photo_batches: return
         batch_items = photo_batches[batch_key]
         if not batch_items: return
         
         chat_id = batch_items[0].chat.id
-        response_message = f"✅ Here are the File IDs for the {len(batch_items)} file(s) you sent:\n━━━━━━━━━━━━━━━━━━</pre>\n\n"
+        response_message = f"✅ Here are the File IDs for the {len(batch_items)} file(s) you sent:\n<pre>━━━━━━━━━━━━━━━━━━</pre>\n\n"
 
         for i, msg in enumerate(batch_items, 1):
             file_name, file_id = "N/A", "N/A"
@@ -3055,8 +3052,9 @@ def process_generic_file_batch(batch_key, user_id):
             elif msg.audio:
                 file_name, file_id = msg.audio.file_name or f"audio_{msg.message_id}.mp3", msg.audio.file_id
             
-            response_message += f"📄 **File {i}:** `{escape(file_name)}`\n"
-            response_message += f"🆔 **ID:** `{escape(file_id)}`\n\n"
+            # CORRECTED FORMATTING: Changed Markdown to HTML tags
+            response_message += f"📄 <b>File {i}:</b> <code>{escape(file_name)}</code>\n"
+            response_message += f"🆔 <b>ID:</b> <code>{escape(file_id)}</code>\n\n"
 
         bot.send_message(chat_id, response_message, parse_mode="HTML")
 
@@ -3065,7 +3063,6 @@ def process_generic_file_batch(batch_key, user_id):
     finally:
         if batch_key in photo_batches: del photo_batches[batch_key]
         if user_id in batch_timers: del batch_timers[user_id]
-        # Reset the state so the user can send more files
         if user_id in user_states and user_states[user_id].get('action') == 'getting_smart_file_ids':
             del user_states[user_id]
 
