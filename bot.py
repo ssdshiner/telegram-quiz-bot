@@ -1303,6 +1303,14 @@ def save_resource_to_db(user_id):
     """
     try:
         state = user_states[user_id]
+        
+        # --- THE FIX ---
+        # Get the raw keyword string from the user's input
+        raw_keywords = state.get('keywords', '')
+        # Convert the comma-separated string into a clean list of keywords
+        # This handles extra spaces and removes any empty items
+        keyword_list = [keyword.strip() for keyword in raw_keywords.split(',') if keyword.strip()]
+        
         supabase.table('resources').insert({
             'file_id': state['file_id'],
             'file_name': state['file_name'],
@@ -1310,7 +1318,7 @@ def save_resource_to_db(user_id):
             'group_name': state['group_name'],
             'subject': state['subject'],
             'resource_type': state['resource_type'],
-            'keywords': state['keywords'],
+            'keywords': keyword_list,  # Use the new list here
             'description': state['description'],
             'uploaded_by': user_id
         }).execute()
