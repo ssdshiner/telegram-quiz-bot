@@ -281,7 +281,7 @@ def report_error_to_admin(error_message: str):
     """Sends a formatted error message to the admin using safe HTML."""
     try:
         # This function already uses the safe HTML format, which is great.
-        error_text = f"🚨 <b>BOT ERROR</b> 🚨\n\nAn error occurred:\n\n<pre>{escape(str(error_message)[:3500])}</pre>"
+        error_text = f"🚨 <b>BOT ERROR</b> 🚨\n\nAn error occurred:\n\n{escape(str(error_message)[:3500])}</pre>"
         bot.send_message(ADMIN_USER_ID, error_text, parse_mode="HTML")
     except Exception as e:
         print(f"CRITICAL: Failed to report error to admin: {e}")
@@ -1979,7 +1979,7 @@ def send_next_battle_question(chat_id, session_id):
                 # THIS IS THE FIX: Replaces unsupported <br> tags with newlines
                 cleaned_case_study = case_study_text.replace('<br>', '\n').replace('<br/>', '\n').replace('<br />', '\n')
                 
-                header = f"📖 <b>Case Study for Question {idx + 1}</b>\n<pre>------------------</pre>\n"
+                header = f"📖 <b>Case Study for Question {idx + 1}</b>\n------------------</pre>\n"
                 full_message = header + cleaned_case_study
                 bot.send_message(chat_id, full_message, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
                 time.sleep(5) # Give users time to read
@@ -3044,7 +3044,7 @@ def process_generic_file_batch(batch_key, user_id):
         if not batch_items: return
         
         chat_id = batch_items[0].chat.id
-        response_message = f"✅ Here are the File IDs for the {len(batch_items)} file(s) you sent:\n<pre>━━━━━━━━━━━━━━━━━━</pre>\n\n"
+        response_message = f"✅ Here are the File IDs for the {len(batch_items)} file(s) you sent:\n━━━━━━━━━━━━━━━━━━</pre>\n\n"
 
         for i, msg in enumerate(batch_items, 1):
             file_name, file_id = "N/A", "N/A"
@@ -5718,12 +5718,11 @@ def handle_study_tip_command(msg: types.Message):
 @membership_required
 def handle_define_command(msg: types.Message):
     """
-    Looks up a term ONLY in the Google Sheet.
-    If not found, it provides suggestions or prompts the user to add a new definition.
+    Looks up a term in the Google Sheet.
+    If found, displays it. If not found, provides a button to add it.
     """
     try:
         parts = msg.text.split(' ', 1)
-
         if len(parts) < 2 or not parts[1].strip():
             bot.reply_to(
                 msg,
@@ -5734,9 +5733,6 @@ def handle_define_command(msg: types.Message):
 
         search_term = parts[1].strip()
         
-        all_terms_from_sheet = []
-        workbook = None
-
         try:
             workbook = get_gsheet()
             if workbook:
@@ -5752,44 +5748,26 @@ def handle_define_command(msg: types.Message):
                         'category': row_values[3] if len(row_values) > 3 else 'General'
                     }
                     message_text = (
-                        f"📘 <b>Term:</b> <code>{escape(term_data['term'])}</code>\n"
-                        f"<pre>━━━━━━━━━━━━━━━━━━</pre>\n"
+                        f"📖 <b>Term:</b> <code>{escape(term_data['term'])}</code>\n"
+                        f"━━━━━━━━━━━━━━━━━━\n"
                         f"<blockquote>{escape(term_data['definition'])}</blockquote>\n"
-                        f"<pre>━━━━━━━━━━━━━━━━━━</pre>\n"
+                        f"━━━━━━━━━━━━━━━━━━\n"
                         f"📚 <b>Category:</b> <i>{escape(term_data['category'])}</i>"
                     )
                     bot.reply_to(msg, message_text, parse_mode="HTML")
                     return # Term found and sent, so we stop here.
 
-                # If not found, get all terms for suggestions
-                all_terms_from_sheet = [term for term in sheet.col_values(2)[1:] if term]
-
         except Exception as gsheet_error:
             print(f"⚠️ GSheet Error in /define: {gsheet_error}")
             report_error_to_admin(f"Could not access Google Sheet in /define:\n{gsheet_error}")
-            # If sheet is unavailable, send an error and stop.
             bot.reply_to(msg, "❌ Sorry, I'm having trouble accessing the glossary right now. Please try again later.")
             return
 
-        # --- This part now runs ONLY if the term was not found in the Google Sheet ---
-        suggestions = []
-        if all_terms_from_sheet:
-            suggestions = difflib.get_close_matches(search_term, all_terms_from_sheet, n=3, cutoff=0.6)
-
-        if suggestions:
-            suggestion_text = "\n".join([f"• <code>{escape(s)}</code>" for s in suggestions])
-            not_found_text = (
-                f"😕 I couldn't find a definition for '<b>{escape(search_term)}</b>'.\n\n"
-                f"Did you mean one of these?\n{suggestion_text}\n\n"
-                "If not, you can help our database grow by adding it with the <code>/newdef</code> command! 📝"
-            )
-        else:
-            not_found_text = (
-                f"😕 The term '<b>{escape(search_term)}</b>' is not in our database yet.\n\n"
-                "You can be the first to add it! Use the <code>/newdef</code> command to contribute. 📝"
-            )
-
-        bot.reply_to(msg, not_found_text, parse_mode="HTML")
+        # --- This part runs ONLY if the term was not found ---
+        not_found_text = f"😥 Lo siento, '{escape(search_term)}' ki definition hamare database mein nahi hai."
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("✍️ Add This Definition Now", callback_data=f"start_newdef_{search_term}"))
+        bot.reply_to(msg, not_found_text, parse_mode="HTML", reply_markup=markup)
 
     except Exception as e:
         report_error_to_admin(f"CRITICAL Error in /define command:\n{traceback.format_exc()}")
@@ -5798,14 +5776,13 @@ def handle_define_command(msg: types.Message):
 # 8. TELEGRAM BOT HANDLERS - GENERIC LAW LIBRARY HANDLER
 # =============================================================================
 
-def generate_law_library_response(msg: types.Message, command: str, table_name: str, act_name: str, emoji: str):
+def generate_law_library_response(msg: types.Message, command: str, table_name: str, act_name: str, emoji: str, lib_key: str):
     """
-    A generic master function to handle all law library commands.
+    A generic master function to handle all law library commands, now with a quiz button.
     """
     search_term = ""
     try:
         parts = msg.text.split(' ', 1)
-        # --- Error Handling: No Section Provided ---
         if len(parts) < 2 or not parts[1].strip():
             reply_text = f"Please provide a section/standard number. 😉\n<b>Example:</b> <code>{command} 10</code>"
             bot.reply_to(msg, reply_text, parse_mode="HTML")
@@ -5814,31 +5791,34 @@ def generate_law_library_response(msg: types.Message, command: str, table_name: 
         search_term = parts[1].strip()
         user_name = msg.from_user.first_name
 
-        # --- Database Query ---
         response = supabase.table(table_name).select('*').ilike('section_number', search_term).limit(1).execute()
 
-        # --- On Success: If data is found ---
         if response.data:
             section_data = response.data[0]
             example_text = (section_data.get('example') or "No example available.").replace("{user_name}", user_name)
 
             message_text = (
                 f"{emoji} <b>{escape(act_name)}</b>\n"
-                f"<pre>━━━━━━━━━━━━━━━━━━</pre>\n\n"
+                f"━━━━━━━━━━━━━━━━━━\n\n"
                 f"📖 <b>Section/Standard <code>{escape(section_data.get('section_number', 'N/A'))}</code></b>\n"
                 f"<b>{escape(section_data.get('title', 'No Title'))}</b>\n\n"
-                f"<pre>──────────────────</pre>\n\n"
+                f"──────────────────</pre>\n\n"
                 f"<b>Summary:</b>\n"
                 f"<blockquote>{escape(section_data.get('summary', 'No summary available.'))}</blockquote>\n"
                 f"<b>Practical Example:</b>\n"
                 f"<blockquote>{escape(example_text)}</blockquote>\n"
-                f"<pre>━━━━━━━━━━━━━━━━━━</pre>\n"
+                f"━━━━━━━━━━━━━━━━━━</pre>\n"
                 f"⚠️ <i>This is a simplified summary from ICAI materials for Jan 26 attempt. Always cross-verify with the latest amendments.</i>"
             )
-            bot.reply_to(msg, message_text, parse_mode="HTML")
-            return
 
-        # --- On Failure: If data is NOT found ---
+            # --- THIS IS THE NEW PART ---
+            markup = types.InlineKeyboardMarkup()
+            # We remove the emoji from the button text for a cleaner look
+            clean_act_name = act_name.split(' ', 1)[-1] 
+            markup.add(types.InlineKeyboardButton(f"🧠 Test Your Knowledge on {clean_act_name}", callback_data=f"start_quiz_for_{lib_key}"))
+
+            bot.reply_to(msg, message_text, parse_mode="HTML", reply_markup=markup)
+            return
         else:
             not_found_text = f"Sorry, Section '<code>{escape(search_term)}</code>' {escape(act_name)} ke database mein nahi mila. 😕\nEither it is not in the CA Inter syllabus or we missed adding it."
             bot.reply_to(msg, not_found_text, parse_mode="HTML")
@@ -5861,22 +5841,42 @@ def generate_law_library_response(msg: types.Message, command: str, table_name: 
 @bot.message_handler(commands=['dt'])
 @membership_required
 def handle_dt_command(msg: types.Message):
-    generate_law_library_response(msg, '/dt', 'income_tax_sections', 'Income Tax Act, 1961', '💰')
+    generate_law_library_response(msg, '/dt', 'income_tax_sections', '💰 Income Tax Act, 1961', '💰', 'it_act')
 
 @bot.message_handler(commands=['gst'])
 @membership_required
 def handle_gst_command(msg: types.Message):
-    generate_law_library_response(msg, '/gst', 'gst_sections', 'Goods and Services Tax Act, 2017', '🧾')
+    generate_law_library_response(msg, '/gst', 'gst_sections', '🧾 Goods and Services Tax Act, 2017', '🧾', 'gst_act')
 
 @bot.message_handler(commands=['llp'])
 @membership_required
 def handle_llp_command(msg: types.Message):
-    generate_law_library_response(msg, '/llp', 'llp_sections', 'Limited Liability Partnership Act, 2008', '🤝')
+    generate_law_library_response(msg, '/llp', 'llp_sections', '🤝 Limited Liability Partnership Act, 2008', '🤝', 'llp_act')
 
 @bot.message_handler(commands=['fema'])
 @membership_required
 def handle_fema_command(msg: types.Message):
-    generate_law_library_response(msg, '/fema', 'fema_sections', 'Foreign Exchange Management Act, 1999', '🌍')
+    generate_law_library_response(msg, '/fema', 'fema_sections', '🌍 Foreign Exchange Management Act, 1999', '🌍', 'fema_act')
+
+@bot.message_handler(commands=['gca'])
+@membership_required
+def handle_gca_command(msg: types.Message):
+    generate_law_library_response(msg, '/gca', 'gca_sections', '📜 General Clauses Act, 1897', '📜', 'gca_act')
+
+@bot.message_handler(commands=['caro'])
+@membership_required
+def handle_caro_command(msg: types.Message):
+    generate_law_library_response(msg, '/caro', 'caro_rules', '📋 CARO, 2020', '📋', 'caro')
+
+@bot.message_handler(commands=['sa'])
+@membership_required
+def handle_sa_command(msg: types.Message):
+    generate_law_library_response(msg, '/sa', 'auditing_standards', '🔍 Standards on Auditing', '🔍', 'sa')
+
+@bot.message_handler(commands=['as'])
+@membership_required
+def handle_as_command(msg: types.Message):
+    generate_law_library_response(msg, '/as', 'accounting_standards', '📊 Accounting Standards', '📊', 'as')
 # =============================================================================
 # 8. TELEGRAM BOT HANDLERS - LAW LIBRARY REVISION QUIZ (/testme)
 # =============================================================================
@@ -5936,6 +5936,44 @@ def handle_quiz_library_choice(call: types.CallbackQuery):
 
     except Exception as e:
         report_error_to_admin(f"Error in handle_quiz_library_choice: {traceback.format_exc()}")
+        bot.edit_message_text("Sorry, an unexpected error occurred. Please try again from /testme.", call.message.chat.id, call.message.message_id)
+        if user_id in user_states:
+            del user_states[user_id]
+@bot.callback_query_handler(func=lambda call: call.data.startswith('start_quiz_for_'))
+def handle_start_law_quiz_callback(call: types.CallbackQuery):
+    """Integrates law library with the quiz feature."""
+    user_id = call.from_user.id
+    if user_id in user_states:
+        bot.answer_callback_query(call.id, "You are already in another command. Please use /cancel first.", show_alert=True)
+        return
+
+    try:
+        lib_key = call.data.split('_')[-1]
+        selected_library = LAW_LIBRARIES[lib_key]
+        table_name = selected_library['table']
+
+        # --- Perform the same check as the /testme command ---
+        count_response = supabase.table(table_name).select('id', count='exact').execute()
+        if count_response.count < 4:
+            bot.edit_message_text(f"Sorry, the '{selected_library['name']}' library doesn't have enough entries (at least 4) to create a quiz yet.", call.message.chat.id, call.message.message_id)
+            return
+
+        # --- Pre-fill the user state and jump to the next step ---
+        user_states[user_id] = {
+            'action': 'law_quiz',
+            'step': 'awaiting_question_count',
+            'table_name': table_name,
+            'library_name': selected_library['name'],
+            'timestamp': time.time()
+        }
+
+        prompt_text = "Great choice! How many questions would you like? (Please enter a number between 3 and 10)"
+        # Edit the original message from the law command
+        bot.edit_message_text(prompt_text, call.message.chat.id, call.message.message_id)
+        bot.answer_callback_query(call.id)
+
+    except Exception as e:
+        report_error_to_admin(f"Error in start_law_quiz_callback: {traceback.format_exc()}")
         bot.edit_message_text("Sorry, an unexpected error occurred. Please try again from /testme.", call.message.chat.id, call.message.message_id)
         if user_id in user_states:
             del user_states[user_id]
@@ -6135,14 +6173,14 @@ def display_law_quiz_results(chat_id, session_id):
     # Sort participants by score (highest first)
     sorted_participants = sorted(session['participants'].values(), key=lambda p: p['score'], reverse=True)
 
-    results_text = f"🏁 **Quiz Over!** 🏁\n\n**Subject:** {session['library_name']}\n**Final Results:**\n<pre>━━━━━━━━━━━━━━━━━━</pre>\n"
+    results_text = f"🏁 **Quiz Over!** 🏁\n\n**Subject:** {session['library_name']}\n**Final Results:**\n━━━━━━━━━━━━━━━━━━</pre>\n"
     
     rank_emojis = ["🥇", "🥈", "🥉"]
     for i, participant in enumerate(sorted_participants):
         rank = rank_emojis[i] if i < 3 else f" {i + 1}."
         results_text += f"{rank} {escape(participant['name'])} - **{participant['score']} Points**\n"
 
-    results_text += "<pre>━━━━━━━━━━━━━━━━━━</pre>\nCongratulations to everyone who participated!"
+    results_text += "━━━━━━━━━━━━━━━━━━</pre>\nCongratulations to everyone who participated!"
     
     bot.send_message(chat_id, results_text, parse_mode="HTML")
     
@@ -6496,15 +6534,76 @@ def format_section_message(section_data, user_name):
         f"📖 <b>{chapter_info}</b>\n\n"
         f"<b>Section {section_number}: {it_is_about}</b>\n\n"
         f"<i>It states that:</i>\n"
-        f"<pre>{summary}</pre>\n\n"
+        f"{summary}</pre>\n\n"
         f"<i>Example:</i>\n"
-        f"<pre>{example}</pre>\n\n"
+        f"{example}</pre>\n\n"
         f"<i>Disclaimer: Please cross-check with the latest amendments.</i>")
     return message_text
 # =============================================================================
 # 8. TELEGRAM BOT HANDLERS - ADD SECTION FLOW
 # =============================================================================
+# =============================================================================
+# 8. TELEGRAM BOT HANDLERS - INTERACTIVE CONTRIBUTION FLOW
+# =============================================================================
 
+@bot.callback_query_handler(func=lambda call: call.data.startswith('start_newdef_'))
+def handle_start_newdef_callback(call: types.CallbackQuery):
+    """Starts the /newdef flow from a button, skipping the first step."""
+    user_id = call.from_user.id
+    if user_id in user_states:
+        bot.answer_callback_query(call.id, "You are already in another command. Please use /cancel first.", show_alert=True)
+        return
+
+    try:
+        term = call.data.split('_', 2)[-1]
+        
+        # Pre-fill the user's state and jump to the definition step
+        user_states[user_id] = {
+            'action': 'new_definition', 
+            'step': 'awaiting_definition', 
+            'term': term,
+            'timestamp': time.time()
+        }
+        
+        bot.edit_message_text(f"Great! Let's add a definition for '**{escape(term)}**'.\n\nPlease write a simple, clear definition now.", call.message.chat.id, call.message.message_id, parse_mode="HTML")
+        bot.answer_callback_query(call.id)
+        
+    except Exception as e:
+        report_error_to_admin(f"Error in start_newdef_callback: {traceback.format_exc()}")
+        bot.answer_callback_query(call.id, "An error occurred. Please try again.", show_alert=True)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('start_addsection_'))
+def handle_start_addsection_callback(call: types.CallbackQuery):
+    """Starts the /addsection flow from a button, skipping several steps."""
+    user_id = call.from_user.id
+    if user_id in user_states:
+        bot.answer_callback_query(call.id, "You are already in another command. Please use /cancel first.", show_alert=True)
+        return
+
+    try:
+        _, _, lib_key, search_term = call.data.split('_', 3)
+        selected_library = LAW_LIBRARIES[lib_key]
+
+        # Pre-fill the user's state and jump directly to the title collection step
+        user_states[user_id] = {
+            'action': 'add_section', 
+            'step': 'awaiting_title', 
+            'library_key': lib_key,
+            'library_name': selected_library['name'],
+            'table_name': selected_library['table'],
+            'entry_type': 'Section', # Default to Section
+            'entry_number': search_term,
+            'action_type': 'INSERT',
+            'timestamp': time.time()
+        }
+
+        bot.edit_message_text(f"Great! Let's add the details for **Section {escape(search_term)}** to the **{selected_library['name']}** library.\n\nFirst, please enter the full **Title** for this entry.", call.message.chat.id, call.message.message_id, parse_mode="HTML")
+        bot.answer_callback_query(call.id)
+        
+    except Exception as e:
+        report_error_to_admin(f"Error in start_addsection_callback: {traceback.format_exc()}")
+        bot.answer_callback_query(call.id, "An error occurred. Please try again.", show_alert=True)
 @bot.message_handler(commands=['addsection'])
 @membership_required
 def handle_addsection_command(msg: types.Message):
@@ -6695,9 +6794,8 @@ def handle_reset_confirmation(call: types.CallbackQuery):
 @bot.message_handler(commands=['section'])
 @membership_required
 def handle_section_command(msg: types.Message):
-    """
-    Fetches details for a specific law section from the Supabase database.
-    """
+    """Handles requests for the Companies Act, 2013."""
+    generate_law_library_response(msg, '/section', 'law_sections', 'Companies Act, 2013', '⚖️', 'comp_act')
     if not is_group_message(msg):
         bot.send_message(
             msg.chat.id,
@@ -7308,7 +7406,7 @@ def send_mid_quiz_update(session_id):
 
     # --- Building the Final Message ---
     message = f"🏆 <b>Mid-Marathon Report</b> 🏆\n"
-    message += f"<pre>━━━━━━━━━━━━━━━━━━━━━━</pre>\n"
+    message += f"━━━━━━━━━━━━━━━━━━━━━━</pre>\n"
     message += f"<b>PHASE:</b> {phase} (Q. {current_question}/{total_questions})\n\n"
 
     # Leaderboard part
@@ -7324,7 +7422,7 @@ def send_mid_quiz_update(session_id):
         
         message += f"{rank_emojis[i]} <b>{display_name}</b> {dots} {score} pts\n"
 
-    message += f"<pre>━━━━━━━━━━━━━━━━━━━━━━</pre>\n"
+    message += f"━━━━━━━━━━━━━━━━━━━━━━</pre>\n"
     message += f"⚡ <b>Live Insight:</b>\n<i>{insight}</i>\n\n"
     message += f"🎮 <i>Quiz continues... next question aa raha hai!</i>"
 
