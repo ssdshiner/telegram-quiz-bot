@@ -29,7 +29,7 @@ from html import escape, unescape
 from collections import namedtuple
 from postgrest.exceptions import APIError
 import httpx
-
+from bs4 import BeautifulSoup
 # =============================================================================
 # 2. CONFIGURATION & INITIALIZATION
 # =============================================================================
@@ -966,35 +966,266 @@ def cleanup_stale_user_states():
     except Exception as e:
         print(f"Error during user state cleanup: {e}")
 
+def fetch_icai_announcements():
+    """
+    Scrapes multiple ICAI BoS pages (icai.org & boslive) for new announcements.
+    -- FINAL VERSION with multi-format support --
+    """
+    print("📰 Checking all ICAI announcement pages...")
+    try:
+        # --- FINAL LIST OF ALL URLs TO CHECK ---
+        urls_to_check = [
+            "https://www.icai.org/category/bos-important-announcements",
+            "https://www.icai.org/category/bos-announcements",
+            "https://boslive.icai.org/examination_announcement.php",
+            "https://boslive.icai.org/bos_announcement.php"
+        ]
+        
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+        
+        all_new_announcements = {}
 
+        for url in urls_to_check:
+            try:
+                print(f"   -> Scraping: {url}")
+                response = requests.get(url, headers=headers, timeout=20)
+                response.raise_for_status()
+                soup = BeautifulSoup(response.content, 'html.parser')
+                
+                # --- SMART PARSING LOGIC ---
+                # Logic for the main www.icai.org site format
+                if "www.icai.org" in url:
+                    announcement_list = soup.find_all('li', class_='list-group-item p-3')
+                    for item in announcement_list[:7]:
+                        link_tag = item.find('a')
+                        if link_tag:
+                            title = ' '.join(link_tag.text.split())
+                            full_url = link_tag['href']
+                            if full_url not in all_new_announcements:
+                                all_new_announcements[full_url] = title
+                
+                # Logic for the boslive.icai.org site format
+                elif "boslive.icai.org" in url:
+                    # These sites use tables, so we look for table rows <tr>
+                    for row in soup.find_all('tr')[1:8]: # Check top 7 rows, skip header
+                        cells = row.find_all('td')
+                        if len(cells) > 1:
+                            link_tag = cells[1].find('a')
+                            if link_tag:
+                                title = ' '.join(link_tag.text.split())
+                                # boslive links can be relative, so we need to build the full URL
+                                relative_url = link_tag['href']
+                                full_url = f"https://boslive.icai.org/{relative_url}"
+                                if full_url not in all_new_announcements:
+                                    all_new_announcements[full_url] = title
+
+            except requests.exceptions.RequestException as e:
+                print(f"Could not fetch ICAI page {url}: {e}")
+                continue
+
+        # --- Process all unique announcements found ---
+        if not all_new_announcements:
+            print("No announcements found across all pages.")
+            return
+
+        new_announcements_sent = 0
+        for url, title in all_new_announcements.items():
+            if 'intermediate' in title.lower():
+                existing = supabase.table('sent_announcements').select('id').eq('announcement_url', url).execute()
+                if not existing.data:
+                    new_announcements_sent += 1
+                    print(f"Found new Intermediate announcement: {title}")
+                    
+                    message_text = (
+                        f"📢 **New ICAI Announcement (Intermediate)!**\n\n"
+                        f"<b>Title:</b> {escape(title)}\n\n"
+                        f"🔗 <b>Read More:</b> {url}"
+                    )
+                    
+                    bot.send_message(GROUP_ID, message_text, parse_mode="HTML", message_thread_id=UPDATES_TOPIC_ID, disable_web_page_preview=True)
+                    supabase.table('sent_announcements').insert({'announcement_url': url, 'announcement_title': title}).execute()
+                    time.sleep(5)
+        
+        if new_announcements_sent == 0:
+            print("No new *Intermediate-specific* announcements found.")
+
+    except Exception as e:
+        report_error_to_admin(f"Error in fetch_icai_announcements: {traceback.format_exc()}")
+def fetch_and_send_one_external_news():
+    """
+    Master function to fetch news from multiple sources and send only one.
+    -- FINAL VERSION with all requested sources --
+    """
+    print("📰 Checking for new external news articles from all sources...")
+    
+    # --- Scraper for CAclubindia ---
+    def get_caclubindia_news():
+        try:
+            url = "https://www.caclubindia.com/news/"
+            headers = {'User-Agent': 'Mozilla/5.0'}
+            response = requests.get(url, headers=headers, timeout=20)
+            soup = BeautifulSoup(response.content, 'html.parser')
+            news_item = soup.find('div', class_='item-box')
+            if news_item:
+                link_tag = news_item.find('a')
+                title_tag = news_item.find('h4')
+                news_url = "https://www.caclubindia.com" + link_tag['href']
+                news_title = title_tag.text.strip()
+                existing = supabase.table('sent_announcements').select('id').eq('announcement_url', news_url).execute()
+                if not existing.data:
+                    return {'title': news_title, 'url': news_url, 'source': 'CAclubindia'}
+        except Exception as e:
+            print(f"Could not fetch from CAclubindia: {e}")
+        return None
+
+    # --- Scraper for TaxGuru ---
+    def get_taxguru_news():
+        try:
+            url = "https://taxguru.in/category/chartered-accountant/"
+            headers = {'User-Agent': 'Mozilla/5.0'}
+            response = requests.get(url, headers=headers, timeout=20)
+            soup = BeautifulSoup(response.content, 'html.parser')
+            news_item = soup.find('article')
+            if news_item:
+                link_tag = news_item.find('a')
+                title_tag = news_item.find('h3', class_='entry-title')
+                news_url = link_tag['href']
+                news_title = title_tag.text.strip()
+                existing = supabase.table('sent_announcements').select('id').eq('announcement_url', news_url).execute()
+                if not existing.data:
+                    return {'title': news_title, 'url': news_url, 'source': 'TaxGuru'}
+        except Exception as e:
+            print(f"Could not fetch from TaxGuru: {e}")
+        return None
+
+    # --- Scraper for The Economic Times ---
+    def get_et_news():
+        try:
+            url = "https://economictimes.indiatimes.com/topic/chartered-accountant"
+            headers = {'User-Agent': 'Mozilla/5.0'}
+            response = requests.get(url, headers=headers, timeout=15)
+            soup = BeautifulSoup(response.content, 'html.parser')
+            news_item = soup.find('div', class_='topicstry')
+            if news_item:
+                link_tag = news_item.find('a')
+                title_tag = news_item.find('h2')
+                news_url = "https://economictimes.indiatimes.com" + link_tag['href']
+                news_title = title_tag.text.strip()
+                existing = supabase.table('sent_announcements').select('id').eq('announcement_url', news_url).execute()
+                if not existing.data:
+                    return {'title': news_title, 'url': news_url, 'source': 'The Economic Times'}
+        except Exception as e:
+            print(f"Could not fetch from Economic Times: {e}")
+        return None
+        
+    # --- Scraper for NDTV (ADDED BACK) ---
+    def get_ndtv_news():
+        try:
+            # We will check both URLs you provided
+            urls_to_check = [
+                "https://www.ndtv.com/topic/ca-students",
+                "https://www.ndtv.com/topic/chartered-accountancy-students"
+            ]
+            for url in urls_to_check:
+                headers = {'User-Agent': 'Mozilla/5.0'}
+                response = requests.get(url, headers=headers, timeout=15)
+                soup = BeautifulSoup(response.content, 'html.parser')
+                news_item = soup.find('div', class_='src_lst-li')
+                if news_item:
+                    link_tag = news_item.find('a')
+                    title_tag = news_item.find('div', class_='src_lst-ttl')
+                    news_url = link_tag['href']
+                    news_title = title_tag.text.strip()
+                    existing = supabase.table('sent_announcements').select('id').eq('announcement_url', news_url).execute()
+                    if not existing.data:
+                        return {'title': news_title, 'url': news_url, 'source': 'NDTV'}
+        except Exception as e:
+            print(f"Could not fetch from NDTV: {e}")
+        return None
+
+    # --- Main Logic: Try each source in order ---
+    news_to_send = get_caclubindia_news()
+
+    if not news_to_send:
+        news_to_send = get_taxguru_news()
+        
+    if not news_to_send:
+        news_to_send = get_et_news()
+
+    if not news_to_send:
+        news_to_send = get_ndtv_news()
+
+    if news_to_send:
+        print(f"Found new article from {news_to_send['source']}: {news_to_send['title']}")
+        
+        message_text = (
+            f"🗞️ <b>Today's News Update</b>\n\n"
+            f"<b>Source:</b> <i>{escape(news_to_send['source'])}</i>\n\n"
+            f"<b>Headline:</b> {escape(news_to_send['title'])}\n\n"
+            f"🔗 Read the full story here:\n{news_to_send['url']}"
+        )
+        
+        bot.send_message(GROUP_ID, message_text, parse_mode="HTML", message_thread_id=UPDATES_TOPIC_ID, disable_web_page_preview=False)
+        supabase.table('sent_announcements').insert({'announcement_url': news_to_send['url'], 'announcement_title': news_to_send['title']}).execute()
+        return True
+        
+    print("No new external news found from any source.")
+    return False
 def background_worker():
     """Runs all scheduled tasks in a continuous loop."""
     global last_daily_check_day, last_schedule_announce_day
 
-    # Run the state cleanup once every 5 minutes (300 seconds)
-    cleanup_interval = 300 
+    cleanup_interval = 300
     last_cleanup_time = time.time()
+    
+    news_check_interval = 1800 # For ICAI announcements
+    last_news_check_time = time.time() - news_check_interval
+
+    # NEW: Flags for twice-a-day external news
+    morning_news_sent = False
+    evening_news_sent = False
 
     while True:
         try:
             now = time.time()
-            # --- NEW: Call the janitor function periodically ---
-            if (now - last_cleanup_time) > cleanup_interval:
-                cleanup_stale_user_states()
-                last_cleanup_time = now
-
             ist_tz = timezone(timedelta(hours=5, minutes=30))
             current_time_ist = datetime.datetime.now(ist_tz)
             current_day = current_time_ist.day
             current_hour = current_time_ist.hour
+            
+            # --- Reset daily flags at midnight ---
+            if current_hour == 0:
+                morning_news_sent = False
+                evening_news_sent = False
+
+            # --- Call the janitor function periodically ---
+            if (now - last_cleanup_time) > cleanup_interval:
+                cleanup_stale_user_states()
+                last_cleanup_time = now
+            
+            # --- Call the ICAI announcement checker periodically ---
+            if (now - last_news_check_time) > news_check_interval:
+                fetch_icai_announcements()
+                last_news_check_time = now
+
+            # --- NEW: Call external news checker twice a day ---
+            # Morning News (e.g., at 9 AM)
+            if current_hour == 9 and not morning_news_sent:
+                fetch_and_send_one_external_news()
+                morning_news_sent = True
+
+            # Evening News (e.g., at 7 PM / 19:00)
+            if current_hour == 19 and not evening_news_sent:
+                fetch_and_send_one_external_news()
+                evening_news_sent = True
 
             # --- Daily Inactivity/Appreciation Check (around 10:30 PM) ---
             if current_hour == 22 and current_time_ist.minute >= 30 and last_daily_check_day != current_day:
-                print(f"⏰ It's 10:30 PM, time for daily automated checks...")
                 run_daily_checks()
                 last_daily_check_day = current_day
 
             # --- Process other scheduled tasks ---
+            # (Your existing task processing code remains here)
             for task in scheduled_tasks[:]:
                 if current_time_ist >= task['run_at'].astimezone(ist_tz):
                     try:
