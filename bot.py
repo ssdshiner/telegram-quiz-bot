@@ -7606,6 +7606,7 @@ def send_marathon_question(session_id):
 def send_mid_quiz_update(session_id):
     """
     Sends a beautifully formatted, consistent, and clean mid-quiz update.
+    -- CORRECTED HTML PARSING ERROR --
     """
     session = QUIZ_SESSIONS.get(session_id)
     participants = QUIZ_PARTICIPANTS.get(session_id, {})
@@ -7641,9 +7642,10 @@ def send_mid_quiz_update(session_id):
         else:
             insight = f"<b>{top_user_name}</b> is dominating the field with a significant lead! Incredible performance! 🚀"
 
-    # --- Building the Final Message ---
+    # --- Building the Final Message (with the fix) ---
     message = f"🏆 <b>Mid-Marathon Report</b> 🏆\n"
-    message += f"━━━━━━━━━━━━━━━━━━━━━━</pre>\n"
+    # THE FIX: Removed </pre> from the line below
+    message += f"━━━━━━━━━━━━━━━━━━━━━━\n"
     message += f"<b>PHASE:</b> {phase} (Q. {current_question}/{total_questions})\n\n"
 
     # Leaderboard part
@@ -7652,14 +7654,14 @@ def send_mid_quiz_update(session_id):
         name = escape(data.get('user_name', 'N/A'))
         score = data.get('score', 0)
         
-        # Dynamic dot leader for clean alignment
         max_name_len = 15
         display_name = (name[:max_name_len-3] + '...') if len(name) > max_name_len else name
         dots = "." * (max_name_len - len(display_name))
         
         message += f"{rank_emojis[i]} <b>{display_name}</b> {dots} {score} pts\n"
 
-    message += f"━━━━━━━━━━━━━━━━━━━━━━</pre>\n"
+    # THE FIX: Removed </pre> from the line below
+    message += f"━━━━━━━━━━━━━━━━━━━━━━\n"
     message += f"⚡ <b>Live Insight:</b>\n<i>{insight}</i>\n\n"
     message += f"🎮 <i>Quiz continues... next question aa raha hai!</i>"
 
