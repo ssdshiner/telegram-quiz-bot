@@ -968,21 +968,18 @@ def cleanup_stale_user_states():
 
 def fetch_icai_announcements():
     """
-    Scrapes multiple ICAI BoS pages (icai.org & boslive) for new announcements.
-    -- FINAL VERSION with multi-format support --
+    Scrapes multiple ICAI BoS pages and returns the count of new announcements sent.
+    -- UPDATED to return a value for manual trigger --
     """
     print("📰 Checking all ICAI announcement pages...")
     try:
-        # --- FINAL LIST OF ALL URLs TO CHECK ---
         urls_to_check = [
             "https://www.icai.org/category/bos-important-announcements",
             "https://www.icai.org/category/bos-announcements",
             "https://boslive.icai.org/examination_announcement.php",
             "https://boslive.icai.org/bos_announcement.php"
         ]
-        
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
-        
+        headers = {'User-Agent': 'Mozilla/5.0'}
         all_new_announcements = {}
 
         for url in urls_to_check:
@@ -992,8 +989,6 @@ def fetch_icai_announcements():
                 response.raise_for_status()
                 soup = BeautifulSoup(response.content, 'html.parser')
                 
-                # --- SMART PARSING LOGIC ---
-                # Logic for the main www.icai.org site format
                 if "www.icai.org" in url:
                     announcement_list = soup.find_all('li', class_='list-group-item p-3')
                     for item in announcement_list[:7]:
@@ -1003,30 +998,24 @@ def fetch_icai_announcements():
                             full_url = link_tag['href']
                             if full_url not in all_new_announcements:
                                 all_new_announcements[full_url] = title
-                
-                # Logic for the boslive.icai.org site format
                 elif "boslive.icai.org" in url:
-                    # These sites use tables, so we look for table rows <tr>
-                    for row in soup.find_all('tr')[1:8]: # Check top 7 rows, skip header
+                    for row in soup.find_all('tr')[1:8]:
                         cells = row.find_all('td')
                         if len(cells) > 1:
                             link_tag = cells[1].find('a')
                             if link_tag:
                                 title = ' '.join(link_tag.text.split())
-                                # boslive links can be relative, so we need to build the full URL
                                 relative_url = link_tag['href']
                                 full_url = f"https://boslive.icai.org/{relative_url}"
                                 if full_url not in all_new_announcements:
                                     all_new_announcements[full_url] = title
-
             except requests.exceptions.RequestException as e:
                 print(f"Could not fetch ICAI page {url}: {e}")
                 continue
 
-        # --- Process all unique announcements found ---
         if not all_new_announcements:
             print("No announcements found across all pages.")
-            return
+            return 0
 
         new_announcements_sent = 0
         for url, title in all_new_announcements.items():
@@ -1035,22 +1024,23 @@ def fetch_icai_announcements():
                 if not existing.data:
                     new_announcements_sent += 1
                     print(f"Found new Intermediate announcement: {title}")
-                    
                     message_text = (
                         f"📢 **New ICAI Announcement (Intermediate)!**\n\n"
                         f"<b>Title:</b> {escape(title)}\n\n"
                         f"🔗 <b>Read More:</b> {url}"
                     )
-                    
                     bot.send_message(GROUP_ID, message_text, parse_mode="HTML", message_thread_id=UPDATES_TOPIC_ID, disable_web_page_preview=True)
                     supabase.table('sent_announcements').insert({'announcement_url': url, 'announcement_title': title}).execute()
                     time.sleep(5)
         
         if new_announcements_sent == 0:
             print("No new *Intermediate-specific* announcements found.")
+        
+        return new_announcements_sent # This line is the main change
 
     except Exception as e:
         report_error_to_admin(f"Error in fetch_icai_announcements: {traceback.format_exc()}")
+        return 0 # Return 0 if there was an error
 def fetch_and_send_one_external_news():
     """
     Master function to fetch news from multiple sources and send only one.
@@ -8371,7 +8361,43 @@ def handle_all_time_rankers(msg: types.Message):
 # =============================================================================
 # 8. TELEGRAM BOT HANDLERS - QNA PRACTICE (SETTER'S FLOW)
 # =============================================================================
+@bot.message_handler(commands=['fetchnews'])
+@admin_required
+def handle_fetch_news_command(msg: types.Message):
+    """
+    Manually triggers the ICAI and external news scrapers.
+    """
+    if msg.chat.type != 'private':
+        bot.reply_to(msg, "🤫 Please use this command in a private chat with me.")
+        return
 
+    bot.send_message(msg.chat.id, "⚙️ Manually starting the news and announcement scrapers... Please wait a moment.")
+
+    try:
+        # Run the ICAI scraper and get the result
+        icai_found_count = fetch_icai_announcements()
+        
+        # Run the external news scraper and get the result
+        external_news_found = fetch_and_send_one_external_news()
+
+        # --- Send a summary report back to the admin ---
+        report_text = "✅ **Manual Fetch Complete!**\n\n"
+        
+        if icai_found_count > 0:
+            report_text += f"- Found and posted <b>{icai_found_count}</b> new ICAI announcement(s).\n"
+        else:
+            report_text += "- No new ICAI announcements found.\n"
+            
+        if external_news_found:
+            report_text += "- Found and posted 1 new external news article."
+        else:
+            report_text += "- No new external news articles found."
+            
+        bot.send_message(msg.chat.id, report_text, parse_mode="HTML")
+
+    except Exception as e:
+        report_error_to_admin(f"Error in /fetchnews command: {traceback.format_exc()}")
+        bot.send_message(msg.chat.id, "❌ A critical error occurred during the manual fetch.")
 @bot.message_handler(commands=['questions_posted'])
 def handle_questions_posted(msg: types.Message):
     """
