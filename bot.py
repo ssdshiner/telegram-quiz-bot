@@ -535,67 +535,75 @@ def membership_required(func):
 """
 Creates a visually enhanced, paginated file list with file-type emojis.
 """
-def create_compact_file_list_page(group, subject, resource_type, page=1):
+def create_compact_file_list_page(group, subject, resource_type, page=1, podcast_format=None):
     """
     Creates a visually enhanced, paginated file list with subject-specific emojis.
+    Now handles both regular resource types and the new podcast_format.
     """
     try:
         offset = (page - 1) * FILES_PER_PAGE
 
-        count_res = supabase.table('resources').select('id', count='exact').eq('group_name', group).eq('subject', subject).eq('resource_type', resource_type).execute()
+        # Build the query dynamically
+        count_query = supabase.table('resources').select('id', count='exact').eq('group_name', group).eq('subject', subject)
+        files_query = supabase.table('resources').select('*').eq('group_name', group).eq('subject', subject)
+
+        header_title = resource_type # Default title
+
+        if podcast_format:
+            # If we are looking for podcasts, filter by the new column
+            count_query = count_query.eq('podcast_format', podcast_format)
+            files_query = files_query.eq('podcast_format', podcast_format)
+            header_title = f"Podcasts - {podcast_format.capitalize()}"
+        else:
+            # Otherwise, filter by the old resource_type column
+            count_query = count_query.eq('resource_type', resource_type)
+            files_query = files_query.eq('resource_type', resource_type)
+
+        count_res = count_query.execute()
         total_files = count_res.count
 
         if total_files == 0:
             return "📂 This category is currently empty. Check back later!", None
 
-        files_res = supabase.table('resources').select('*').eq('group_name', group).eq('subject', subject).eq('resource_type', resource_type).order('file_name').range(offset, offset + FILES_PER_PAGE - 1).execute()
+        files_res = files_query.order('file_name').range(offset, offset + FILES_PER_PAGE - 1).execute()
         files_on_page = files_res.data
 
         total_pages = (total_files + FILES_PER_PAGE - 1) // FILES_PER_PAGE
 
-        # --- NEW: Subject to Emoji Mapping ---
-        subject_emojis = {
-            "Law": "⚖️",
-            "Taxation": "💰",
-            "GST": "🧾",
-            "Accounts": "📊",
-            "Auditing": "🔍",
-            "Costing": "🧮",
-            "SM": "📈",
-            "FM & SM": "📈",
-            "Audio Notes": "🎧",
-            "General": "🌟"
-        }
-        header_emoji = subject_emojis.get(subject, "📚") # Default emoji
+        subject_emojis = { "Law": "⚖️", "Taxation": "💰", "GST": "🧾", "Accounts": "📊", "Auditing": "🔍", "Costing": "🧮", "SM": "📈", "FM & SM": "📈", "General": "🌟" }
+        header_emoji = subject_emojis.get(subject, "📚")
 
-        message_text = f"{header_emoji} <b>{escape(subject)} - {escape(resource_type)}</b>\n"
+        message_text = f"{header_emoji} <b>{escape(subject)} - {escape(header_title)}</b>\n"
         message_text += f"📄 Page {page}/{total_pages} ({total_files} total files)\n\n"
 
         buttons = []
         for i, resource in enumerate(files_on_page, 1):
             file_name = resource.get('file_name', '')
-            
-            # Use subject emoji for consistency, fallback to file type for others
-            emoji = subject_emojis.get(resource.get('subject'), "📎")
-            
+            emoji = "🎧" if resource.get('podcast_format') == 'audio' else "🎬" if resource.get('podcast_format') == 'video' else subject_emojis.get(subject, "📎")
             message_text += f"<code>{i}.</code> {emoji} {escape(file_name)}\n"
             buttons.append(types.InlineKeyboardButton(f"{emoji} {i}", callback_data=f"getfile_{resource['id']}"))
 
         markup = types.InlineKeyboardMarkup(row_width=5)
         markup.add(*buttons)
 
-        # --- Navigation Buttons ---
+        # --- Dynamic Navigation Buttons ---
         nav_buttons = []
-        if page > 1:
-            nav_buttons.append(types.InlineKeyboardButton("⬅️ Prev", callback_data=f"v_page_{page-1}_{group}_{subject}_{resource_type}"))
+        page_callback_base = f"v_page_{{page}}_{group}_{subject}_{resource_type}"
+        if podcast_format:
+            page_callback_base += f"_{podcast_format}"
 
-        if subject == "Audio Notes":
-            nav_buttons.append(types.InlineKeyboardButton("↩️ Back", callback_data=f"v_group_{group}"))
+        if page > 1:
+            nav_buttons.append(types.InlineKeyboardButton("⬅️ Prev", callback_data=page_callback_base.format(page=page-1)))
+
+        # Back button logic
+        if podcast_format:
+             # If it's a podcast list, the back button goes to the subject menu
+            nav_buttons.append(types.InlineKeyboardButton("↩️ Back", callback_data=f"v_subj_{group}_{subject}"))
         else:
             nav_buttons.append(types.InlineKeyboardButton("↩️ Back", callback_data=f"v_subj_{group}_{subject}"))
 
         if page < total_pages:
-            nav_buttons.append(types.InlineKeyboardButton("Next ➡️", callback_data=f"v_page_{page+1}_{group}_{subject}_{resource_type}"))
+            nav_buttons.append(types.InlineKeyboardButton("Next ➡️", callback_data=page_callback_base.format(page=page+1)))
 
         markup.row(*nav_buttons)
         return message_text, markup
@@ -613,19 +621,15 @@ def handle_vault_callbacks(call: types.CallbackQuery):
     parts = call.data.split('_')
     action = parts[1]
     
-    # This is a small helper function to prevent the "message not modified" error.
     def edit_if_changed(new_text, new_markup):
-        # Only call the API if the text or buttons are actually different.
         if call.message.text != new_text or call.message.reply_markup != new_markup:
             try:
                 bot.edit_message_text(new_text, call.message.chat.id, call.message.message_id, reply_markup=new_markup, parse_mode="HTML")
             except ApiTelegramException as e:
-                # This is a fallback for other potential edit errors.
                 if "message is not modified" not in e.description:
-                    raise e # Re-raise if it's a different error
-    
+                    raise e
+
     try:
-        # Action: Go back to the main menu (Group selection)
         if action == 'main':
             markup = types.InlineKeyboardMarkup(row_width=2)
             markup.add(
@@ -635,12 +639,11 @@ def handle_vault_callbacks(call: types.CallbackQuery):
             text = "🗂️ Welcome to the CA Vault!\n\nPlease select a Group to begin."
             edit_if_changed(text, markup)
 
-        # Action: A Group was selected
         elif action == 'group':
             group_name = '_'.join(parts[2:])
             subjects = {
-                "Group 1": ["Accounts", "Law", "Income Tax", "GST", "Audio Notes"],
-                "Group 2": ["Costing", "Auditing", "FM", "SM", "Audio Notes"]
+                "Group 1": ["Accounts", "Law", "Income Tax", "GST", "General"],
+                "Group 2": ["Costing", "Auditing", "FM & SM", "General"]
             }
             buttons = [types.InlineKeyboardButton(f"📚 {subj}", callback_data=f"v_subj_{group_name}_{subj}") for subj in subjects[group_name]]
             markup = types.InlineKeyboardMarkup(row_width=2)
@@ -649,32 +652,48 @@ def handle_vault_callbacks(call: types.CallbackQuery):
             text = f"🔵 **{group_name}**\n\nPlease select a subject:"
             edit_if_changed(text, markup)
 
-        # Action: A Subject was selected
         elif action == 'subj':
             group_name, subject = parts[2], '_'.join(parts[3:])
+            resource_types = ["ICAI Module", "Faculty Notes", "QPs & Revision", "Podcasts"]
+            buttons = []
+            buttons.append(types.InlineKeyboardButton(f"📘 ICAI Module", callback_data=f"v_type_{group_name}_{subject}_ICAI Module"))
+            buttons.append(types.InlineKeyboardButton(f"✍️ Faculty Notes", callback_data=f"v_type_{group_name}_{subject}_Faculty Notes"))
+            buttons.append(types.InlineKeyboardButton(f"📝 QPs & Revision", callback_data=f"v_type_{group_name}_{subject}_QPs & Revision"))
+            buttons.append(types.InlineKeyboardButton(f"🎙️ Podcasts", callback_data=f"v_type_{group_name}_{subject}_Podcasts"))
             
-            if subject == 'Audio Notes':
-                text, markup = create_compact_file_list_page(group_name, subject, 'Audio Revision', page=1)
-                edit_if_changed(text, markup)
-            else:
-                resource_types = ["ICAI Module", "Faculty Notes", "QPs & Revision"]
-                buttons = [types.InlineKeyboardButton(f"📘 {rtype}", callback_data=f"v_type_{group_name}_{subject}_{rtype}") for rtype in resource_types]
-                markup = types.InlineKeyboardMarkup(row_width=1)
-                markup.add(*buttons)
-                markup.add(types.InlineKeyboardButton("↩️ Back to Subjects", callback_data=f"v_group_{group_name}"))
-                text = f"📚 **{subject}**\n\nWhat are you looking for?"
-                edit_if_changed(text, markup)
-
-        # Action: A Resource Type was selected
-        elif action == 'type':
-            group, subject, rtype = parts[2], parts[3], '_'.join(parts[4:])
-            text, markup = create_compact_file_list_page(group, subject, rtype, page=1)
+            markup = types.InlineKeyboardMarkup(row_width=2)
+            markup.add(*buttons)
+            markup.add(types.InlineKeyboardButton("↩️ Back to Subjects", callback_data=f"v_group_{group_name}"))
+            text = f"📚 <b>{subject}</b>\n\nWhat are you looking for?"
             edit_if_changed(text, markup)
 
-        # Action: Pagination for the file list
+        elif action == 'type':
+            group, subject, rtype = parts[2], parts[3], '_'.join(parts[4:])
+            if rtype == 'Podcasts':
+                markup = types.InlineKeyboardMarkup(row_width=2)
+                markup.add(
+                    types.InlineKeyboardButton("🎧 Audio", callback_data=f"v_podcast_{group}_{subject}_audio"),
+                    types.InlineKeyboardButton("🎬 Video", callback_data=f"v_podcast_{group}_{subject}_video")
+                )
+                markup.add(types.InlineKeyboardButton("↩️ Back", callback_data=f"v_subj_{group}_{subject}"))
+                text = f"🎙️ <b>{subject} - Podcasts</b>\n\nPlease choose a format:"
+                edit_if_changed(text, markup)
+            else:
+                text, markup = create_compact_file_list_page(group, subject, rtype, page=1)
+                edit_if_changed(text, markup)
+
+        elif action == 'podcast':
+            group, subject, podcast_format = parts[2], parts[3], parts[4]
+            text, markup = create_compact_file_list_page(group, subject, 'Podcasts', page=1, podcast_format=podcast_format)
+            edit_if_changed(text, markup)
+
         elif action == 'page':
-            page, group, subject, rtype = int(parts[2]), parts[3], parts[4], '_'.join(parts[5:])
-            text, markup = create_compact_file_list_page(group, subject, rtype, page=page)
+            page = int(parts[2])
+            group = parts[3]
+            subject = parts[4]
+            rtype = parts[5]
+            podcast_format = parts[6] if len(parts) > 6 and parts[6] != 'None' else None
+            text, markup = create_compact_file_list_page(group, subject, rtype, page=page, podcast_format=podcast_format)
             edit_if_changed(text, markup)
 
     except Exception as e:
