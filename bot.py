@@ -1431,17 +1431,15 @@ def process_resource_file_step_1(msg: types.Message):
 def handle_add_resource_callbacks(call: types.CallbackQuery):
     """
     Handles all button-based steps for the resource addition flow,
-    including the intelligent skip for 'Audio Notes' and robust error handling.
+    now with support for the new Podcast format.
     """
     user_id = call.from_user.id
     message_id = call.message.message_id
     
-    # Security and session check.
     if user_id not in user_states or user_states[user_id].get('action') != 'adding_resource':
         bot.edit_message_text("❌ <b>Action Expired.</b>\n\nThis interactive session has timed out. Please start over with the /add_resource command.", call.message.chat.id, message_id, parse_mode="HTML")
         return
 
-    # Parse the callback data to determine the action and value.
     parts = call.data.split('_', 2)
     step_type = parts[1]
     
@@ -1456,43 +1454,48 @@ def handle_add_resource_callbacks(call: types.CallbackQuery):
             return
             
         value = parts[2]
-        # --- Step 2 -> 3: Group to Subject ---
         if step_type == 'group':
             user_states[user_id]['group_name'] = value
             user_states[user_id]['step'] = 'awaiting_subject'
             
             subjects = {
-                "Group 1": ["Accounts", "Law", "Income Tax", "GST", "Audio Notes"],
-                "Group 2": ["Costing", "Auditing", "FM", "SM", "Audio Notes"]
+                "Group 1": ["Accounts", "Law", "Income Tax", "GST", "General"],
+                "Group 2": ["Costing", "Auditing", "FM & SM", "General"]
             }
             buttons = [types.InlineKeyboardButton(f"📚 {subj}", callback_data=f"add_subject_{subj}") for subj in subjects[value]]
             markup = types.InlineKeyboardMarkup(row_width=2).add(*buttons)
             bot.edit_message_text(f"✅ Group set to <b>{value}</b>.\n\n<b>Step 3 of 7:</b> Now, please select a subject.", call.message.chat.id, message_id, reply_markup=markup, parse_mode="HTML")
 
-        # --- Step 3 -> 4: Subject to Type (or Keywords for Audio) ---
         elif step_type == 'subject':
             user_states[user_id]['subject'] = value
+            user_states[user_id]['step'] = 'awaiting_type'
             
-            # *** AUDIO BUG FIX & LOGIC IMPROVEMENT ***
-            if value == "Audio Notes":
-                user_states[user_id]['resource_type'] = "Audio Revision"
-                user_states[user_id]['step'] = 'awaiting_keywords'
-                
-                prompt_message = bot.edit_message_text(f"✅ Subject set to <b>{value}</b>.\n\n<i>Resource type automatically set to 'Audio Revision'.</i>\n\n<b>Step 5 of 7:</b> Please provide search keywords, separated by commas (e.g., <code>law, section 141, audit report</code>).", call.message.chat.id, message_id, parse_mode="HTML")
-                bot.register_next_step_handler(prompt_message, process_resource_keywords_step_5)
-            else:
-                user_states[user_id]['step'] = 'awaiting_type'
-                resource_types = ["ICAI Module", "Faculty Notes", "QPs & Revision"]
-                buttons = [types.InlineKeyboardButton(f"📘 {rtype}", callback_data=f"add_type_{rtype}") for rtype in resource_types]
-                markup = types.InlineKeyboardMarkup(row_width=1).add(*buttons)
-                bot.edit_message_text(f"✅ Subject set to <b>{value}</b>.\n\n<b>Step 4 of 7:</b> What type of resource is this?", call.message.chat.id, message_id, reply_markup=markup, parse_mode="HTML")
+            resource_types = ["ICAI Module", "Faculty Notes", "QPs & Revision", "Podcasts"]
+            buttons = [types.InlineKeyboardButton(f"📘 {rtype}", callback_data=f"add_type_{rtype}") for rtype in resource_types]
+            markup = types.InlineKeyboardMarkup(row_width=1).add(*buttons)
+            bot.edit_message_text(f"✅ Subject set to <b>{value}</b>.\n\n<b>Step 4 of 7:</b> What type of resource is this?", call.message.chat.id, message_id, reply_markup=markup, parse_mode="HTML")
 
-        # --- Step 4 -> 5: Type to Keywords ---
         elif step_type == 'type':
-            user_states[user_id]['resource_type'] = value
+            if value == "Podcasts":
+                user_states[user_id]['step'] = 'awaiting_podcast_format'
+                markup = types.InlineKeyboardMarkup(row_width=2)
+                markup.add(
+                    types.InlineKeyboardButton("🎧 Audio", callback_data="add_podcast_audio"),
+                    types.InlineKeyboardButton("🎬 Video", callback_data="add_podcast_video")
+                )
+                bot.edit_message_text(f"✅ Resource type set to <b>Podcasts</b>.\n\n<b>Step 4a of 7:</b> Is this an audio or video podcast?", call.message.chat.id, message_id, reply_markup=markup, parse_mode="HTML")
+            else:
+                user_states[user_id]['resource_type'] = value
+                user_states[user_id]['step'] = 'awaiting_keywords'
+                prompt_message = bot.edit_message_text(f"✅ Resource type set to <b>{value}</b>.\n\n<b>Step 5 of 7:</b> Please provide search keywords, separated by commas (e.g., <code>accounts, as19</code>).", call.message.chat.id, message_id, parse_mode="HTML")
+                bot.register_next_step_handler(prompt_message, process_resource_keywords_step_5)
+        
+        elif step_type == 'podcast':
+            user_states[user_id]['podcast_format'] = value
+            user_states[user_id]['resource_type'] = "Podcast" # Set a general type
             user_states[user_id]['step'] = 'awaiting_keywords'
             
-            prompt_message = bot.edit_message_text(f"✅ Resource type set to <b>{value}</b>.\n\n<b>Step 5 of 7:</b> Please provide search keywords, separated by commas (e.g., <code>accounts, as19</code>).", call.message.chat.id, message_id, parse_mode="HTML")
+            prompt_message = bot.edit_message_text(f"✅ Format set to <b>{value.capitalize()}</b>.\n\n<b>Step 5 of 7:</b> Please provide search keywords (e.g., <code>law, section 141, audit report</code>).", call.message.chat.id, message_id, parse_mode="HTML")
             bot.register_next_step_handler(prompt_message, process_resource_keywords_step_5)
     
     except ApiTelegramException as e:
@@ -1502,7 +1505,6 @@ def handle_add_resource_callbacks(call: types.CallbackQuery):
             report_error_to_admin(f"Telegram API Error in add_resource callback: {traceback.format_exc()}")
         if user_id in user_states:
             del user_states[user_id]
-
     except Exception as e:
         report_error_to_admin(f"Generic Error in add_resource callback: {traceback.format_exc()}")
         try:
@@ -1537,13 +1539,16 @@ def process_resource_description_step_6(msg: types.Message):
     user_states[user_id]['description'] = description
     user_states[user_id]['step'] = 'awaiting_confirmation'
 
-    # Prepare confirmation message
     state = user_states[user_id]
     confirmation_text = "<b>Please confirm the details:</b>\n\n"
     confirmation_text += f"<b>File Name:</b> <code>{escape(state['file_name'])}</code>\n"
     confirmation_text += f"<b>Group:</b> {escape(state['group_name'])}\n"
     confirmation_text += f"<b>Subject:</b> {escape(state['subject'])}\n"
     confirmation_text += f"<b>Resource Type:</b> {escape(state['resource_type'])}\n"
+    
+    if 'podcast_format' in state:
+        confirmation_text += f"<b>Podcast Format:</b> {escape(state['podcast_format'].capitalize())}\n"
+
     confirmation_text += f"<b>Keywords:</b> <code>{escape(state['keywords'])}</code>\n"
     confirmation_text += f"<b>Description:</b> {escape(description)}\n"
 
@@ -1563,7 +1568,7 @@ def save_resource_to_db(user_id):
         raw_keywords = state.get('keywords', '')
         keyword_list = [keyword.strip() for keyword in raw_keywords.split(',') if keyword.strip()]
 
-        supabase.table('resources').insert({
+        data_to_insert = {
             'file_id': state['file_id'],
             'file_name': state['file_name'],
             'file_type': state['file_type'],
@@ -1572,8 +1577,12 @@ def save_resource_to_db(user_id):
             'resource_type': state['resource_type'],
             'keywords': keyword_list,
             'description': state['description'],
-            'added_by_id': user_id  # --- THIS IS THE FIX ---
-        }).execute()
+            'added_by_id': user_id,
+            'podcast_format': state.get('podcast_format') # Safely get the new value
+        }
+
+        supabase.table('resources').insert(data_to_insert).execute()
+        
     except Exception as e:
         report_error_to_admin(f"Error saving resource to DB: {traceback.format_exc()}")
         bot.send_message(user_id, "❌ An error occurred while saving the resource to the database.")
@@ -3695,7 +3704,7 @@ def handle_quoted_reply_content(msg: types.Message):
 @membership_required
 def handle_today_quiz(msg: types.Message):
     """
-    Shows a dynamically formatted, mobile-friendly quiz schedule for the day.
+    Shows a "Digital Planner" style quiz schedule for the day with interactive buttons.
     """
     try:
         supabase.rpc('update_chat_activity', {'p_user_id': msg.from_user.id, 'p_user_name': msg.from_user.username or msg.from_user.first_name}).execute()
@@ -3709,27 +3718,13 @@ def handle_today_quiz(msg: types.Message):
     try:
         ist_tz = timezone(timedelta(hours=5, minutes=30))
         now = datetime.datetime.now(ist_tz)
-        current_hour = now.hour
-        
-        if 5 <= current_hour < 12:
-            time_of_day_greeting = "🌅 Good Morning!"
-        elif 12 <= current_hour < 17:
-            time_of_day_greeting = "☀️ Good Afternoon!"
-        else:
-            time_of_day_greeting = "🌆 Good Evening!"
-
         today_date_str = now.strftime('%Y-%m-%d')
+        
         response = supabase.table('quiz_schedule').select('*').eq('quiz_date', today_date_str).order('quiz_time').execute()
-
         user_name = escape(msg.from_user.first_name)
-        
-        reply_params = types.ReplyParameters(
-            message_id=msg.message_id,
-            allow_sending_without_reply=True
-        )
-        
+        reply_params = types.ReplyParameters(message_id=msg.message_id, allow_sending_without_reply=True)
+
         if not response.data:
-            # Smart check: See if there's a schedule for tomorrow
             try:
                 tomorrow_date = now + timedelta(days=1)
                 tomorrow_date_str = tomorrow_date.strftime('%Y-%m-%d')
@@ -3740,59 +3735,50 @@ def handle_today_quiz(msg: types.Message):
                 else:
                     message_text = f"✅ Hey {user_name}, no quizzes are scheduled for today. It might be a rest day! 🧘"
             except Exception:
-                # If the check fails for any reason, send the original message
                 message_text = f"✅ Hey {user_name}, no quizzes are scheduled for today. It might be a rest day! 🧘"
-
+            
             bot.send_message(msg.chat.id, message_text, parse_mode="HTML", reply_parameters=reply_params)
             return
-        
-        # --- NEW: Rhyming Greetings ---
-        all_greetings = [
-            f"Hey {user_name}, don't delay, let's see the quizzes for today! 🎯",
-            f"Success is near, have no fear, {user_name}, today's schedule is here! ✨",
-            f"Ready for the quest? Put your knowledge to the test! {user_name}, here's the schedule, be the best! 🏆",
-            f"Time to prepare, show them you care, {user_name}, the daily schedule is ready to share! 🚀",
-            f"Aaj ka din hai khaas, {user_name}, ho jao taiyaar aur dikhao apni class! ☀️"
+
+        greetings = [
+            f"Here is your daily agenda, {user_name}! The secret to getting ahead is getting started. 🚀",
+            f"Today's mission briefing for {user_name}! Don't watch the clock; do what it does. Keep going. ⏳",
+            f"Your quiz lineup for today, {user_name}! A little progress each day adds up to big results. ✨"
         ]
         
-        message_text = f"<b>{time_of_day_greeting}</b>\n\n{random.choice(all_greetings)}\n"
-        message_text += "━━━━━━━━━━━━\n\n"
+        message_text = f"🗓️ <b>Today's Agenda for {user_name}!</b>\n{random.choice(greetings)}\n━━━━━━━━━━━━━━━━━━━━\n\n"
         
-        # --- NEW: Group quizzes by subject ---
-        quizzes_by_subject = {}
-        for quiz in response.data:
-            subject = escape(str(quiz.get('subject', 'General')))
-            if subject not in quizzes_by_subject:
-                quizzes_by_subject[subject] = []
-            quizzes_by_subject[subject].append(quiz)
+        group1_subjects = ['Advanced Accounting', 'Corporate & Other Laws', 'Taxation (Income Tax)', 'GST']
+        group2_subjects = ['Cost & Mgt. Accounting', 'Auditing and Ethics', 'Financial Management', 'Strategic Management']
 
-        for subject, quizzes in quizzes_by_subject.items():
-            message_text += f"<b>📚 Subject: {subject}</b>\n"
-            for quiz in quizzes:
-                try:
-                    time_obj = datetime.datetime.strptime(quiz['quiz_time'], '%H:%M:%S').time()
-                    formatted_time = time_obj.strftime('%I:%M %p')
-                    
-                    # --- NEW: Live Status Logic ---
-                    quiz_datetime = now.replace(hour=time_obj.hour, minute=time_obj.minute, second=time_obj.second)
-                    if now > quiz_datetime + timedelta(minutes=15): # 15 min grace period
-                        status_emoji = "✅ Completed"
-                    elif quiz_datetime <= now <= quiz_datetime + timedelta(minutes=15):
-                        status_emoji = "🔥 Live Now!"
-                    else:
-                        status_emoji = "⏰ Upcoming"
-                except (ValueError, TypeError):
-                    formatted_time = "N/A"
-                    status_emoji = "❓"
+        group1_quizzes = [q for q in response.data if q.get('subject') in group1_subjects]
+        group2_quizzes = [q for q in response.data if q.get('subject') in group2_subjects]
 
-                chapter = escape(str(quiz.get('chapter_name', 'N/A')))
-                topics = escape(str(quiz.get('topics_covered', 'N/A')))
+        if group1_quizzes:
+            message_text += "🔵 <b>GROUP 1</b>\n──────────────────\n"
+            for quiz in group1_quizzes:
+                time_obj = datetime.datetime.strptime(quiz['quiz_time'], '%H:%M:%S').time()
+                formatted_time = time_obj.strftime('%I:%M %p')
+                subject_emoji = "💰" if "Tax" in quiz['subject'] else "📊" if "Account" in quiz['subject'] else "⚖️"
                 
-                # --- NEW: Mobile-Friendly Format ---
-                message_text += f"└─ <b>{formatted_time}</b> - <u>Quiz {quiz.get('quiz_no', 'N/A')}</u>: {chapter} <i>({topics})</i>  <b>[{status_emoji}]</b>\n"
-            message_text += "\n" # Add a space after each subject block
+                message_text += f"    ⏰ {formatted_time}・Quiz {quiz.get('quiz_no', 'N/A')}\n"
+                message_text += f"    {subject_emoji} <b>Subject:</b> {escape(quiz.get('subject', 'N/A'))}\n"
+                message_text += f"    📖 <b>Chapter:</b> {escape(quiz.get('chapter_name', 'N/A'))}\n"
+                message_text += f"    🎯 <b>Focus:</b> {escape(quiz.get('topics_covered', 'N/A'))}\n\n"
 
-        message_text += "━━━━━━━━━━━━"
+        if group2_quizzes:
+            message_text += "🟢 <b>GROUP 2</b>\n──────────────────\n"
+            for quiz in group2_quizzes:
+                time_obj = datetime.datetime.strptime(quiz['quiz_time'], '%H:%M:%S').time()
+                formatted_time = time_obj.strftime('%I:%M %p')
+                subject_emoji = "🧮" if "Cost" in quiz['subject'] else "🔍" if "Audit" in quiz['subject'] else "📈"
+                
+                message_text += f"    ⏰ {formatted_time}・Quiz {quiz.get('quiz_no', 'N/A')}\n"
+                message_text += f"    {subject_emoji} <b>Subject:</b> {escape(quiz.get('subject', 'N/A'))}\n"
+                message_text += f"    📖 <b>Chapter:</b> {escape(quiz.get('chapter_name', 'N/A'))}\n"
+                message_text += f"    🎯 <b>Focus:</b> {escape(quiz.get('topics_covered', 'N/A'))}\n\n"
+
+        message_text += "━━━━━━━━━━━━━━━━━━━━\nOne quiz at a time. You can do this! 💪"
         
         markup = types.InlineKeyboardMarkup(row_width=2)
         markup.add(
@@ -3803,13 +3789,7 @@ def handle_today_quiz(msg: types.Message):
             types.InlineKeyboardButton("🤖 All Commands", callback_data="show_info")
         )
         
-        bot.send_message(
-            msg.chat.id,
-            message_text,
-            parse_mode="HTML",
-            reply_markup=markup,
-            reply_parameters=reply_params
-        )
+        bot.send_message(msg.chat.id, message_text, parse_mode="HTML", reply_markup=markup, reply_parameters=reply_params)
 
     except Exception as e:
         print(f"CRITICAL Error in /todayquiz: {traceback.format_exc()}")
