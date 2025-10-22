@@ -4650,22 +4650,18 @@ def handle_my_analysis_command(msg: types.Message):
     user_name = escape(msg.from_user.first_name)
     
     try:
-        # --- Fetch all analysis data in one go ---
         marathon_analysis_res = supabase.rpc('get_unified_user_analysis', {'p_user_id': user_id}).execute()
         section_mastery_res = supabase.table('section_mastery').select('*').eq('user_id', user_id).order('quiz_date', desc=True).limit(5).execute()
 
         analysis_data = marathon_analysis_res.data
         mastery_data = section_mastery_res.data
 
-        # --- Check if any data exists at all ---
-        if not analysis_data and not mastery_data:
-            bot.reply_to(msg, f"📊 <b>{user_name}'s Analysis</b>\n\nNo quiz data found yet. Participate in quizzes to generate your report!")
+        if not (analysis_data and (analysis_data.get('marathon_topic_stats') or analysis_data.get('web_quiz_stats'))) and not mastery_data:
+            bot.reply_to(msg, f"📊 <b>{user_name}'s Analysis</b>\n\nNo quiz data found yet. Participate in quizzes to generate your report!", parse_mode="HTML")
             return
 
-        # --- Build the message piece by piece ---
         message_parts = [f"📊 <b>{user_name}'s Performance Snapshot</b>\n━━━━━━━━━━━━━━━━━━\n"]
         
-        # --- PART 1: Marathon, Web Quiz, and Suggestions Analysis ---
         if analysis_data:
             web_stats = analysis_data.get('web_quiz_stats')
             topic_stats = analysis_data.get('marathon_topic_stats')
@@ -4673,9 +4669,9 @@ def handle_my_analysis_command(msg: types.Message):
             weakest_topic_for_suggestion = None
 
             if topic_stats:
-                total_correct = sum(t['total_correct'] for t in topic_stats)
-                total_attempted = sum(t['total_attempted'] for t in topic_stats)
-                total_time = sum(t['total_correct'] * t['avg_time_per_question'] for t in topic_stats if t.get('avg_time_per_question'))
+                total_correct = sum(t.get('total_correct', 0) for t in topic_stats)
+                total_attempted = sum(t.get('total_attempted', 0) for t in topic_stats)
+                total_time = sum(t.get('total_correct', 0) * t.get('avg_time_per_question', 0) for t in topic_stats)
                 
                 overall_accuracy = (total_correct / total_attempted * 100) if total_attempted > 0 else 0
                 overall_avg_time = (total_time / total_correct) if total_correct > 0 else 0
@@ -4683,25 +4679,25 @@ def handle_my_analysis_command(msg: types.Message):
                 message_parts.append(f"🎯 {overall_accuracy:.0f}% Accuracy | 📚 {len(topic_stats)} Topics | ❓ {total_attempted} Ques\n")
                 message_parts.append(f" • <b>Avg. Time / Ques:</b> {overall_avg_time:.1f}s\n\n")
                 
-                message_parts.append("🧠 <b>Theory vs. Practical</b>\n")
                 if type_stats:
+                    message_parts.append("🧠 <b>Theory vs. Practical</b>\n")
                     for q_type in type_stats:
-                        type_accuracy = (q_type['total_correct'] / q_type['total_attempted'] * 100) if q_type['total_attempted'] > 0 else 0
-                        message_parts.append(f" • <b>{q_type['question_type']}:</b> {type_accuracy:.0f}% Accuracy\n")
-                else:
-                    message_parts.append(" • Not enough data yet.\n")
-                message_parts.append("\n")
+                        type_accuracy = (q_type.get('total_correct', 0) / q_type.get('total_attempted', 1) * 100)
+                        message_parts.append(f" • <b>{q_type.get('question_type', 'N/A')}:</b> {type_accuracy:.0f}% Accuracy\n")
+                    message_parts.append("\n")
 
-                strongest = sorted([t for t in topic_stats if (t['total_correct']/t['total_attempted']*100) >= 80], key=lambda x: (x['total_correct']/x['total_attempted']), reverse=True)[:7]
-                weakest = sorted([t for t in topic_stats if (t['total_correct']/t['total_attempted']*100) < 65], key=lambda x: (x['total_correct']/x['total_attempted']))[:7]
+                def safe_accuracy(t):
+                    return (t.get('total_correct', 0) / t.get('total_attempted', 1)) * 100
+
+                strongest = sorted([t for t in topic_stats if safe_accuracy(t) >= 80], key=safe_accuracy, reverse=True)[:7]
+                weakest = sorted([t for t in topic_stats if safe_accuracy(t) < 65], key=safe_accuracy)[:7]
                 if weakest:
                     weakest_topic_for_suggestion = weakest[0]
 
                 message_parts.append("🏆 <b>Top 7 Strongest Topics</b>\n")
                 if strongest:
                     for i, t in enumerate(strongest, 1):
-                        accuracy = (t['total_correct'] / t['total_attempted'] * 100)
-                        message_parts.append(f"  {i}. {escape(t['topic'])} ({accuracy:.0f}%)\n")
+                        message_parts.append(f"  {i}. {escape(t.get('topic','N/A'))} ({safe_accuracy(t):.0f}%)\n")
                 else:
                     message_parts.append("  Keep playing to identify your strengths!\n")
                 message_parts.append("\n")
@@ -4709,32 +4705,26 @@ def handle_my_analysis_command(msg: types.Message):
                 message_parts.append("📚 <b>Top 7 Improvement Areas</b>\n")
                 if weakest:
                     for i, t in enumerate(weakest, 1):
-                        accuracy = (t['total_correct'] / t['total_attempted'] * 100)
                         avg_time = t.get('avg_time_per_question', 0)
-                        message_parts.append(f"  {i}. {escape(t['topic'])} ({accuracy:.0f}% | {avg_time:.1f}s)\n")
+                        message_parts.append(f"  {i}. {escape(t.get('topic','N/A'))} ({safe_accuracy(t):.0f}% | {avg_time:.1f}s)\n")
                 else:
                     message_parts.append("  No specific areas for improvement found yet. Great work!\n")
 
             if web_stats and web_stats.get('top_3_web_scores'):
                 message_parts.append("\n<b>💻 <u>Web Quiz Performance</u></b>\n")
                 message_parts.append("<b>Top 3 Scores:</b>\n")
-                for score in web_stats['top_3_web_scores']:
-                    message_parts.append(f"  • {score['score']}% - <i>({escape(score['quiz_set'])})</i>\n")
+                for score in web_stats.get('top_3_web_scores', []):
+                    message_parts.append(f"  • {score.get('score', 0)}% - <i>({escape(score.get('quiz_set', 'N/A'))})</i>\n")
                 if web_stats.get('latest_strongest_topic'):
-                    message_parts.append(f"<b>Strongest Area:</b> {escape(web_stats['latest_strongest_topic'])}\n")
+                    message_parts.append(f"<b>Strongest Area:</b> {escape(web_stats.get('latest_strongest_topic'))}\n")
                 if web_stats.get('latest_weakest_topic'):
-                    message_parts.append(f"<b>Improvement Area:</b> {escape(web_stats['latest_weakest_topic'])}\n")
+                    message_parts.append(f"<b>Improvement Area:</b> {escape(web_stats.get('latest_weakest_topic'))}\n")
 
             if weakest_topic_for_suggestion:
-                weakest_topic_name = escape(weakest_topic_for_suggestion['topic'])
+                weakest_topic_name = escape(weakest_topic_for_suggestion.get('topic', 'your weakest area'))
                 message_parts.append(f"\n⭐ <u>Smart Suggestion</u>\n")
-                message_parts.append(f"Your theory knowledge is a major strength! Apply that same foundational approach to practical questions in '<b>{weakest_topic_name}</b>' to see a significant score boost.\n")
-                message_parts.append(f"\n⚠️ <u>Your Hidden Challenge</u>\n")
-                message_parts.append(f"Your biggest opportunity for improvement is <b>reducing time on Practical questions</b>. While your accuracy is good, speeding up here will give you a major advantage in exams.\n")
-                message_parts.append(f"\n🎯 <u>Your Next Milestone</u>\n")
-                message_parts.append(f"Aim to increase your accuracy in <b>{weakest_topic_name}</b> to over 60% in your next 5 attempts. You can do it!")
+                message_parts.append(f"Focus on the foundational concepts in '<b>{weakest_topic_name}</b>' to see a significant score boost.\n")
 
-        # --- PART 2: Build the new "Section Mastery" section ---
         if mastery_data:
             message_parts.append("\n\n🧠 **<u>Law Library Quiz Mastery (Last 5)</u>**\n")
             for record in mastery_data:
@@ -4742,16 +4732,10 @@ def handle_my_analysis_command(msg: types.Message):
                 accuracy = record.get('accuracy_percentage', 0)
                 message_parts.append(f"  • {accuracy}% - <i>({escape(library_name)})</i>\n")
         
-        # --- PART 3: Assemble and send the final message ---
         final_message = "".join(message_parts)
-
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("🗑️ Delete This Analysis", callback_data="delete_analysis_msg"))
-        
-        reply_params = types.ReplyParameters(
-            message_id=msg.message_id,
-            allow_sending_without_reply=True
-        )
+        reply_params = types.ReplyParameters(message_id=msg.message_id, allow_sending_without_reply=True)
         bot.send_message(msg.chat.id, final_message, parse_mode="HTML", reply_markup=markup, reply_parameters=reply_params)
 
     except Exception as e:
@@ -4767,22 +4751,24 @@ def handle_mystats_command(msg: types.Message):
     user_id = msg.from_user.id
     user_name = escape(msg.from_user.first_name)
     try:
-        # Call the new, all-powerful unified database function
         response = supabase.rpc('get_unified_user_stats', {'p_user_id': user_id}).execute()
-        data = response.data
-        reply_params = types.ReplyParameters(message_id=msg.message_id, allow_sending_without_reply=True)
+        
+        if not response.data:
+            error_message = f"❌ <b>No Stats Found</b>\n👋 Hi <b>{user_name}</b>!\n🎯 <i>No quiz data found for you yet.</i>\n💡 Participate in quizzes and practice sessions to generate your snapshot!"
+            safe_reply(msg, error_message, parse_mode="HTML")
+            return
 
-        user_stats = data.get('user')
-        group_stats = data.get('group')
+        data = response.data
+        user_stats = data.get('user', {})
+        group_stats = data.get('group', {})
 
         if not user_stats or not user_stats.get('user_name'):
             error_message = f"❌ <b>No Stats Found</b>\n👋 Hi <b>{user_name}</b>!\n🎯 <i>No quiz data found for you yet.</i>\n💡 Participate in quizzes and practice sessions to generate your snapshot!"
-            bot.send_message(msg.chat.id, error_message, parse_mode="HTML", reply_parameters=reply_params)
+            safe_reply(msg, error_message, parse_mode="HTML")
             return
 
-        # --- 1. Define User Title based on COMBINED Quizzes Played ---
-        total_marathons = user_stats.get('total_marathons_played', 0)
-        total_webquizzes = user_stats.get('total_webquizzes_played', 0)
+        total_marathons = user_stats.get('total_marathons_played', 0) or 0
+        total_webquizzes = user_stats.get('total_webquizzes_played', 0) or 0
         quizzes_played = total_marathons + total_webquizzes
         
         if quizzes_played >= 50: user_title = "Quiz Legend 👑"
@@ -4791,12 +4777,10 @@ def handle_mystats_command(msg: types.Message):
         elif quizzes_played >= 1: user_title = "Rising Star ⭐"
         else: user_title = "Newcomer 🌱"
 
-        # --- 2. Build the Full, Combined Stats Message ---
         msg_text = f"📊 <b>{user_name}'s Performance Snapshot</b>\n━━━━━━━━━━━━━━━━━━\n"
         msg_text += f"Your current rank is: <b>{user_title}</b>\n\n"
         msg_text += "Here's how you stack up against the group average:\n\n"
         
-        # --- Core Activity Section (Combined) ---
         msg_text += "📈 <b>Core Activity</b>\n"
         user_qp = quizzes_played
         group_qp_avg = group_stats.get('avg_quizzes_played', 0) or 0
@@ -4815,7 +4799,6 @@ def handle_mystats_command(msg: types.Message):
 
         msg_text += f" • Current Streak: 🔥 <b>{user_stats.get('current_streak', 0)}</b>\n\n"
 
-        # --- Written Practice Section ---
         msg_text += "📝 <b>Written Practice</b>\n"
         user_sub = user_stats.get('total_submissions', 0) or 0
         group_sub_avg = group_stats.get('avg_submissions', 0) or 0
@@ -4827,12 +4810,10 @@ def handle_mystats_command(msg: types.Message):
         perf_emoji = "🔼" if user_perf > group_perf_avg else "🔽" if user_perf < group_perf_avg else "─"
         msg_text += f" • Avg. Performance: <b>{user_perf:.0f}%</b> (Avg: {group_perf_avg:.0f}%) {perf_emoji}\n\n"
 
-        # --- Rankings Section ---
         msg_text += "🏆 <b>Rankings</b>\n"
         msg_text += f" • All-Time Rank: <b>#{user_stats.get('all_time_rank') or 'N/A'}</b>\n"
         msg_text += f" • Weekly Rank: <b>#{user_stats.get('weekly_rank') or 'N/A'}</b>\n\n"
         
-        # --- 3. Dynamic Insight ---
         insight = ""
         if user_perf > (group_perf_avg or 0) and user_perf > 80:
             insight = "Your Written Practice performance is exceptional, putting you well ahead of the curve. Keep submitting those high-quality answers!"
@@ -4847,7 +4828,7 @@ def handle_mystats_command(msg: types.Message):
         
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("🗑️ Delete Stats", callback_data="delete_stats_msg"))
-        bot.send_message(msg.chat.id, msg_text, parse_mode="HTML", reply_markup=markup, reply_parameters=reply_params)
+        safe_reply(msg, msg_text, parse_mode="HTML", reply_markup=markup)
 
     except Exception as e:
         report_error_to_admin(traceback.format_exc())
