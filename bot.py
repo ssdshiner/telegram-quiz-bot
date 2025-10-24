@@ -6913,7 +6913,6 @@ def format_section_message(section_data, user_name):
     """
     Formats the section details into a clean, readable message using safe HTML parsing.
     """
-    # This function is already safe and uses HTML. No changes needed.
     safe_user_name = escape(user_name)
     chapter_info = escape(section_data.get('chapter_info', 'N/A'))
     section_number = escape(section_data.get('section_number', ''))
@@ -6921,13 +6920,14 @@ def format_section_message(section_data, user_name):
     summary = escape(section_data.get('summary_hinglish', 'Summary not available.'))
     example = escape(section_data.get('example_hinglish', 'Example not available.')).replace("{user_name}", safe_user_name)
 
+    # FIX: Removed the invalid closing </pre> tags which would cause future errors.
     message_text = (
         f"📖 <b>{chapter_info}</b>\n\n"
         f"<b>Section {section_number}: {it_is_about}</b>\n\n"
         f"<i>It states that:</i>\n"
-        f"{summary}</pre>\n\n"
+        f"{summary}\n\n"  # Removed </pre>
         f"<i>Example:</i>\n"
-        f"{example}</pre>\n\n"
+        f"{example}\n\n"  # Removed </pre>
         f"<i>Disclaimer: Please cross-check with the latest amendments.</i>")
     return message_text
 # =============================================================================
@@ -9027,11 +9027,11 @@ def handle_report_confirmation(call: types.CallbackQuery):
                  bot.send_message(GROUP_ID, "No practice activity (submissions or reviews) was found for yesterday's session.", message_thread_id=QNA_TOPIC_ID)
                  bot.send_message(admin_chat_id, "✅ Report posted (No Activity). Now starting today's session...")
             else:
-                # THE FIX: Converted the entire report card to safe HTML.
                 report_card_text = f"📋 <b>Written Practice Report Card: {datetime.datetime.now().date() - datetime.timedelta(days=1)}</b> 📋\n"
                 
                 if ranked_performers:
-                    report_card_text += "\n--- <i>🏆 Performance Ranking</i> ---\n"
+                    # FIX: Replaced "---" with a safe Unicode line
+                    report_card_text += "\n━━━━━━━━━━━━━━━━━━\n<i>🏆 Performance Ranking</i>\n━━━━━━━━━━━━━━━━━━\n"
                     rank_emojis = ["🥇", "🥈", "🥉"]
                     for i, performer in enumerate(ranked_performers):
                         emoji = rank_emojis[i] if i < 3 else f"<b>{i+1}.</b>"
@@ -9043,13 +9043,15 @@ def handle_report_confirmation(call: types.CallbackQuery):
                         report_card_text += f"{emoji} <b>{submitter_name}</b> - {marks_awarded}/{total_marks} ({percentage}%)\n  <i>(Checked by: {checker_name})</i>\n"
                 
                 if pending_reviews:
-                    report_card_text += "\n--- <i>⚠️ Submissions Not Checked</i> ---\n"
+                    # FIX: Replaced "---" with a safe Unicode line
+                    report_card_text += "\n━━━━━━━━━━━━━━━━━━\n<i>⚠️ Submissions Not Checked</i>\n━━━━━━━━━━━━━━━━━━\n"
                     for pending in pending_reviews:
                         submitter_name = escape(pending.get('submitter_name', 'N/A'))
                         checker_name = escape(pending.get('checker_name', 'N/A'))
                         report_card_text += f"• <b>{submitter_name}</b>'s answer is pending review by <b>{checker_name}</b>.\n"
-
-                report_card_text += "\n--- \nGreat effort everyone! Keep practicing! ✨"
+                
+                # FIX: Replaced "---" with a safe Unicode line
+                report_card_text += "\n━━━━━━━━━━━━━━━━━━\nGreat effort everyone! Keep practicing! ✨"
                 bot.send_message(GROUP_ID, report_card_text, parse_mode="HTML", message_thread_id=QNA_TOPIC_ID)
                 bot.send_message(admin_chat_id, "✅ Report posted successfully. Now starting today's session...")
         
