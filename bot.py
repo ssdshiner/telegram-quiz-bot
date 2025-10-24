@@ -17,7 +17,6 @@ import random
 import requests
 import uuid
 from flask import Flask, request, json
-from telebot import TeleBot, types
 from collections import defaultdict
 from telebot.apihelper import ApiTelegramException
 from google.oauth2 import service_account
@@ -29,6 +28,42 @@ from collections import namedtuple
 from postgrest.exceptions import APIError
 import httpx
 from bs4 import BeautifulSoup
+from telebot import TeleBot, types
+# ========== START: SAFE TELEGRAM SEND WRAPPERS ==========
+def safe_send_html(bot_instance, chat_id, text, **kwargs):
+    """
+    Wrapper around bot.send_message that sanitizes HTML automatically.
+    """
+    from html import escape as _esc
+    try:
+        if text is None:
+            text = ""
+        # Ensure text is string
+        text = str(text)
+        # Use the same sanitizer from earlier
+        safe_text = sanitize_html(text)
+        return bot_instance.send_message(chat_id, safe_text, parse_mode="HTML", **kwargs)
+    except Exception as e:
+        print(f"[SAFE_SEND_HTML ERROR] {e}")
+        # fallback plain text
+        return bot_instance.send_message(chat_id, f"{text}", **kwargs)
+
+def safe_edit_html(bot_instance, chat_id, message_id, text, **kwargs):
+    """
+    Wrapper around bot.edit_message_text that sanitizes HTML automatically.
+    """
+    try:
+        if text is None:
+            text = ""
+        safe_text = sanitize_html(str(text))
+        return bot_instance.edit_message_text(
+            safe_text, chat_id=chat_id, message_id=message_id, parse_mode="HTML", **kwargs
+        )
+    except Exception as e:
+        print(f"[SAFE_EDIT_HTML ERROR] {e}")
+        # fallback to plain text edit
+        return bot_instance.edit_message_text(str(text), chat_id=chat_id, message_id=message_id, **kwargs)
+# ========== END: SAFE TELEGRAM SEND WRAPPERS ==========
 from html import escape, unescape
 # ================== START: HTML SANITIZER HELPERS (PASTE AFTER `from html import escape, unescape`) ==================
 import re
