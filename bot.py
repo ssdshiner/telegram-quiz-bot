@@ -6749,8 +6749,8 @@ def process_edited_definition(message: types.Message):
 def format_section_message(section_data, user_name):
     """
     Formats the section details into a clean, readable message using safe HTML parsing.
+    Uses blockquote for summary and example.
     """
-    # This function is already safe and uses HTML. No changes needed.
     safe_user_name = escape(user_name)
     chapter_info = escape(section_data.get('chapter_info', 'N/A'))
     section_number = escape(section_data.get('section_number', ''))
@@ -6762,9 +6762,9 @@ def format_section_message(section_data, user_name):
         f"📖 <b>{chapter_info}</b>\n\n"
         f"<b>Section {section_number}: {it_is_about}</b>\n\n"
         f"<i>It states that:</i>\n"
-        f"{summary}</pre>\n\n"
+        f"<blockquote>{summary}</blockquote>\n\n" # <-- FIX: Use blockquote
         f"<i>Example:</i>\n"
-        f"{example}</pre>\n\n"
+        f"<blockquote>{example}</blockquote>\n\n" # <-- FIX: Use blockquote
         f"<i>Disclaimer: Please cross-check with the latest amendments.</i>")
     return message_text
 # =============================================================================
