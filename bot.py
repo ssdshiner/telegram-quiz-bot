@@ -25,11 +25,54 @@ from datetime import timezone, timedelta
 IST = timezone(timedelta(hours=5, minutes=30))
 from supabase import create_client, Client
 from urllib.parse import quote
-from html import escape, unescape
 from collections import namedtuple
 from postgrest.exceptions import APIError
 import httpx
 from bs4 import BeautifulSoup
+from html import escape, unescape
+# ================== START: HTML SANITIZER HELPERS (PASTE AFTER `from html import escape, unescape`) ==================
+import re
+from html import escape as _html_escape
+
+def sanitize_html(text: str) -> str:
+    """
+    Escape user / DB text safely for Telegram parse_mode='HTML', and neutralize stray '<' patterns.
+    - Replaces `<---` (and other '<' followed by hyphens) with '&lt;---' so Telegram doesn't try to parse them as tags.
+    - Escapes all HTML by default.
+    - Re-allows a small set of trusted tags if they were intentionally included (b, i, code, pre, blockquote, hr, a).
+    NOTE: Keep this function small and defensive — it prevents unsupported-start-tag errors.
+    """
+    if text is None:
+        return ""
+
+    # 1) Neutralize patterns that start with '<' followed immediately by hyphen(s) (e.g. "<---")
+    text = re.sub(r'<(?=-{1,})', '&lt;', text)
+
+    # 2) Escape everything to HTML entities (&, <, >, etc.)
+    text = _html_escape(text)
+
+    # 3) Re-allow some safe tags that the bot uses (only if they were intentionally present as escaped forms).
+    #    This will convert things like &lt;b&gt; back to <b>, which is useful if code intentionally included tags.
+    #    We also specially allow a safe <a href="...">pattern that uses http/https.
+    allowed_tags = ['b', 'i', 'code', 'pre', 'blockquote', 'hr']
+    for tag in allowed_tags:
+        text = text.replace(f'&lt;{tag}&gt;', f'<{tag}>').replace(f'&lt;/{tag}&gt;', f'</{tag}>')
+
+    # Allow <hr/> (self-closing)
+    text = text.replace('&lt;hr/&gt;', '<hr/>').replace('&lt;hr /&gt;', '<hr/>')
+
+    # Re-allow simple <a href="...">link text</a> safely if it was present in escaped form.
+    # This only restores if href starts with http:// or https://
+    text = re.sub(
+        r'&lt;a href=&quot;(https?://[^&]+)&quot;&gt;(.*?)&lt;/a&gt;',
+        r'<a href="\1">\2</a>',
+        text,
+        flags=re.IGNORECASE | re.DOTALL
+    )
+
+    return text
+# ================== END: HTML SANITIZER HELPERS ==================
+
 # =============================================================================
 # 2. CONFIGURATION & INITIALIZATION
 # =============================================================================
@@ -276,81 +319,23 @@ def format_duration(seconds: float) -> str:
     minutes = int(seconds // 60)
     remaining_seconds = int(seconds % 60)
     return f"{minutes} min {remaining_seconds} sec"
-# ---------- SAFE SENDER WRAPPER (INSERT HERE) ----------
-import re
-from telebot.apihelper import ApiTelegramException
-
-def _unescape_allowed_html(escaped_text: str) -> str:
-    """
-    Restore a small whitelist of HTML tags after escaping user content.
-    Allowed tags: b, i, u, code, pre, a (with href), blockquote.
-    This prevents arbitrary '<' from breaking Telegram HTML parsing.
-    """
-    # unescape simple tags
-    allowed_simple = ['b','i','u','code','pre','blockquote','strong','em','u']
-    text = escaped_text
-    for tag in allowed_simple:
-        # convert &lt;tag ... &gt; back to <tag ...> safely for simple tags
-        text = re.sub(fr'&lt;{tag}&gt;', fr'<{tag}>', text)
-        text = re.sub(fr'&lt;/{tag}&gt;', fr'</{tag}>', text)
-        # allow attributes: e.g. &lt;code class="x"&gt; -> <code class="x">
-        text = re.sub(fr'&lt;{tag}(\s+[^&]*)&gt;', fr'<{tag}\1>', text)
-
-    # handle <a href="..."> specially (restore href attribute)
-    text = re.sub(r'&lt;a\s+href=&quot;([^&]*)&quot;&gt;', r'<a href="\1">', text)
-    text = re.sub(r'&lt;a\s+href=&#x27;([^&]*)&#x27;&gt;', r"<a href='\1'>", text)
-    text = text.replace('&lt;/a&gt;', '</a>')
-
-    return text
-
-def safe_send(chat_id, text, parse_mode="HTML", **kwargs):
-    """
-    Safely send a message via bot.send_message.
-    - If parse_mode is HTML, it escapes the message, then restores allowed tags.
-    - Keeps same signature as bot.send_message for basic usage.
-    """
-    try:
-        # If parse_mode isn't HTML, just forward (non-HTML text).
-        if parse_mode != "HTML":
-            return bot.send_message(chat_id, text, parse_mode=parse_mode, **kwargs)
-
-        # 1) escape all user content
-        safe_text = escape(str(text))
-
-        # 2) restore allowed HTML tags (whitelist)
-        safe_text = _unescape_allowed_html(safe_text)
-
-        # 3) final send
-        return bot.send_message(chat_id, safe_text, parse_mode="HTML", **kwargs)
-
-    except ApiTelegramException as e:
-        # Log and report to admin safely (avoid infinite recursion)
-        print(f"[safe_send] Telegram API error while sending to {chat_id}: {e}")
-        try:
-            # Use plain send without HTML to notify admin (no parse_mode)
-            bot.send_message(ADMIN_USER_ID, f"[safe_send] Could not send message: {e}")
-        except Exception:
-            print("[safe_send] Failed to notify admin.")
-        return None
-# ---------- END SAFE SENDER WRAPPER ----------
 
 def report_error_to_admin(error_message: str):
-    """
-    Safely send a formatted error message to the admin using safe HTML.
-    Uses safe_send to avoid Telegram HTML parse errors.
-    """
+    """Sends a formatted error message to the admin using safe HTML (sanitized)."""
     try:
-        short_error = str(error_message)[:3000]  # keep message compact
-        # Wrap inside <pre> to preserve formatting. Escape happens in safe_send.
-        admin_text = (
+        # Keep message reasonably short for Telegram; sanitize it to avoid parse errors.
+        short_err = str(error_message)[:3500]
+        safe_payload = sanitize_html(short_err)
+
+        error_text = (
             "🚨 <b>BOT ERROR</b> 🚨\n\n"
-            "<b>Details (truncated):</b>\n"
-            "<pre>{}</pre>"
-        ).format(short_error)
-        # Use safe_send (it will escape and allow only whitelist tags)
-        safe_send(ADMIN_USER_ID, admin_text, parse_mode="HTML")
+            "An error occurred:\n\n"
+            f"<pre>{safe_payload}</pre>"
+        )
+
+        bot.send_message(ADMIN_USER_ID, error_text, parse_mode="HTML")
     except Exception as e:
-        # If even safe_send fails, print to logs. Do not try to call safe_send again.
+        # If reporting to admin fails, print to logs (do not try to re-report recursively).
         print(f"CRITICAL: Failed to report error to admin: {e}")
 
 def is_admin(user_id):
@@ -5786,30 +5771,33 @@ def handle_public_report_confirmation(call: types.CallbackQuery):
 def create_stylish_caption(file_name, description):
     """
     Creates a beautiful, mobile-optimized caption in the 'Elegant & Thematic' style.
+    Returns a sanitized HTML-safe caption string.
     """
-    # --- Logic to extract title and author from the description ---
-    # This makes the caption smarter. It assumes the first line is the title
-    # and the line starting with "by" is the author.
+    # Defensive defaults
+    file_name = file_name or ""
+    description = description or ""
+
     lines = description.split('\n')
-    title = escape(lines[0].strip())
+    title = escape(lines[0].strip()) if lines and lines[0].strip() else escape(file_name)
     author_line = next((line for line in lines if line.strip().lower().startswith("by")), None)
-    
+
     if author_line:
         author = escape(author_line.strip())
     else:
-        # Fallback if no "by" line is found
         author = f"Source: {escape(file_name)}"
 
-    # --- Build the HTML Caption ---
+    # Build the caption (use only escaped title/author here)
     caption = (
-        f"•───≪ ⚜️ ≫───•\n\n"
+        "•───≪ ⚜️ ≫───•\n\n"
         f"<b>{title}</b>\n"
         f"<i>{author}</i>\n\n"
-        f"•───≪ ⚜️ ≫───•\n\n"
-        f"📜 For more notes & discussions, join us:\n"
-        f"➡️ <a href=\"https://t.me/cainterquizhub\">CA INTER QUIZ HUB</a> | @cainterquizhub"
+        "•───≪ ⚜️ ≫───•\n\n"
+        "📜 For more notes & discussions, join us:\n"
+        "➡️ <a href=\"https://t.me/cainterquizhub\">CA INTER QUIZ HUB</a> | @cainterquizhub"
     )
-    return caption
+
+    # Sanitize the final caption to neutralize any stray '<' and ensure HTML is safe.
+    return sanitize_html(caption)
 def parse_time_to_seconds(time_str):
     """Converts time string like '4 min 37 sec' or '56.1 sec' to total seconds."""
     seconds = 0
