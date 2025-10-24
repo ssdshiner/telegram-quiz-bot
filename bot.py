@@ -3838,12 +3838,10 @@ def format_kalkaquiz_message(quizzes):
             quizzes_by_subject[subject] = []
         quizzes_by_subject[subject].append(quiz)
 
-    # --- NEW: Build the "Subject Card" format ---
+# --- NEW: Build the "Subject Card" format ---
     for subject, quiz_list in quizzes_by_subject.items():
         # Add a separator and header for the subject "card"
-        message_parts.append("━━━━━━━━━━━━━━━━━━")
-        message_parts.append(f"<b>📚 {escape(subject.upper())}</b>")
-        message_parts.append("━━━━━━━━━━━━━━━━━━")
+        message_parts.append("\n<b><u>" + escape(subject.upper()) + "</u></b>\n") # Use Bold + Underline
         
         for quiz in quiz_list:
             try:
@@ -4651,7 +4649,7 @@ def handle_my_analysis_command(msg: types.Message):
             bot.reply_to(msg, f"📊 <b>{user_name}'s Analysis</b>\n\nNo quiz data found yet. Participate in quizzes to generate your report!", parse_mode="HTML")
             return
 
-        message_parts = [f"📊 <b>{user_name}'s Performance Snapshot</b>\n━━━━━━━━━━━━━━━━━━\n"]
+        message_parts = [f"📊 <b>{user_name}'s Performance Snapshot</b>\n<hr/>\n"] # Using HTML horizontal rule
         
         if analysis_data:
             web_stats = analysis_data.get('web_quiz_stats')
@@ -4768,7 +4766,7 @@ def handle_mystats_command(msg: types.Message):
         elif quizzes_played >= 1: user_title = "Rising Star ⭐"
         else: user_title = "Newcomer 🌱"
 
-        msg_text = f"📊 <b>{user_name}'s Performance Snapshot</b>\n━━━━━━━━━━━━━━━━━━\n"
+        msg_text = f"📊 <b>{user_name}'s Performance Snapshot</b>\n<hr/>\n" # Using HTML horizontal rule
         msg_text += f"Your current rank is: <b>{user_title}</b>\n\n"
         msg_text += "Here's how you stack up against the group average:\n\n"
         
@@ -5977,9 +5975,9 @@ def handle_define_command(msg: types.Message):
                     }
                     message_text = (
                         f"📖 <b>Term:</b> <code>{escape(term_data['term'])}</code>\n"
-                        f"━━━━━━━━━━━━━━━━━━\n"
+                        f"<hr/>\n" # <-- FIX
                         f"<blockquote>{escape(term_data['definition'])}</blockquote>\n"
-                        f"━━━━━━━━━━━━━━━━━━\n"
+                        f"<hr/>\n" # <-- FIX
                         f"📚 <b>Category:</b> <i>{escape(term_data['category'])}</i>"
                     )
                     bot.reply_to(msg, message_text, parse_mode="HTML")
@@ -6027,15 +6025,15 @@ def generate_law_library_response(msg: types.Message, command: str, table_name: 
 
             message_text = (
                 f"{emoji} <b>{escape(act_name)}</b>\n"
-                f"━━━━━━━━━━━━━━━━━━\n\n"
+                f"<hr/>\n" # <-- FIX
                 f"📖 <b>Section/Standard <code>{escape(section_data.get('section_number', 'N/A'))}</code></b>\n"
                 f"<b>{escape(section_data.get('title', 'No Title'))}</b>\n\n"
-                f"──────────────────</pre>\n\n"
+                # Removed the other separator here for clarity
                 f"<b>Summary:</b>\n"
                 f"<blockquote>{escape(section_data.get('summary', 'No summary available.'))}</blockquote>\n"
                 f"<b>Practical Example:</b>\n"
                 f"<blockquote>{escape(example_text)}</blockquote>\n"
-                f"━━━━━━━━━━━━━━━━━━</pre>\n"
+                f"<hr/>\n" # <-- FIX
                 f"⚠️ <i>This is a simplified summary from ICAI materials for Jan 26 attempt. Always cross-verify with the latest amendments.</i>"
             )
 
