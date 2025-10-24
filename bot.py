@@ -615,29 +615,27 @@ def membership_required(func):
 # =============================================================================
 
 """
-Creates a visually enhanced, paginated file list with file-type emojis.
+Creates a visually enhanced, paginated file list with clickable file names.
 """
 def create_compact_file_list_page(group, subject, resource_type, page=1, podcast_format=None):
     """
-    Creates a visually enhanced, paginated file list with subject-specific emojis.
+    Creates a visually enhanced, paginated file list with clickable file names in the list.
     Now handles both regular resource types and the new podcast_format.
     """
     try:
         offset = (page - 1) * FILES_PER_PAGE
 
-        # Build the query dynamically
+        # Build the query dynamically (same as before)
         count_query = supabase.table('resources').select('id', count='exact').eq('group_name', group).eq('subject', subject)
-        files_query = supabase.table('resources').select('*').eq('group_name', group).eq('subject', subject)
+        files_query = supabase.table('resources').select('id, file_name, file_type, podcast_format').eq('group_name', group).eq('subject', subject) # Select only needed fields
 
         header_title = resource_type # Default title
 
         if podcast_format:
-            # If we are looking for podcasts, filter by the new column
             count_query = count_query.eq('podcast_format', podcast_format)
             files_query = files_query.eq('podcast_format', podcast_format)
             header_title = f"Podcasts - {podcast_format.capitalize()}"
         else:
-            # Otherwise, filter by the old resource_type column
             count_query = count_query.eq('resource_type', resource_type)
             files_query = files_query.eq('resource_type', resource_type)
 
@@ -658,36 +656,48 @@ def create_compact_file_list_page(group, subject, resource_type, page=1, podcast
         message_text = f"{header_emoji} <b>{escape(subject)} - {escape(header_title)}</b>\n"
         message_text += f"📄 Page {page}/{total_pages} ({total_files} total files)\n\n"
 
-        buttons = []
+        # --- MODIFICATION START ---
+        markup = types.InlineKeyboardMarkup() # Start with an empty markup for nav buttons later
+
         for i, resource in enumerate(files_on_page, 1):
             file_name = resource.get('file_name', '')
-            emoji = "🎧" if resource.get('podcast_format') == 'audio' else "🎬" if resource.get('podcast_format') == 'video' else subject_emojis.get(subject, "📎")
-            message_text += f"<code>{i}.</code> {emoji} {escape(file_name)}\n"
-            buttons.append(types.InlineKeyboardButton(f"{emoji} {i}", callback_data=f"getfile_{resource['id']}"))
+            resource_id = resource['id']
+            callback_data = f"getfile_{resource_id}" # Callback data to trigger file fetch
 
-        markup = types.InlineKeyboardMarkup(row_width=5)
-        markup.add(*buttons)
+            # Make the file name clickable using a special Telegram link format
+            # tg://btn/callback?data=... triggers the callback handler directly
+            clickable_link = f'tg://btn/callback?data={callback_data}'
 
-        # --- Dynamic Navigation Buttons ---
+            # Add the numbered, clickable file name to the message text
+            # No emoji here
+            message_text += f"<code>{i}.</code> <a href=\"{clickable_link}\">{escape(file_name)}</a>\n"
+
+        # --- MODIFICATION END ---
+        # Note: No numbered buttons are added here anymore.
+
+        # --- Dynamic Navigation Buttons (Same as before) ---
         nav_buttons = []
-        page_callback_base = f"v_page_{{page}}_{group}_{subject}_{resource_type}"
+        # Construct the base callback data for pagination links
+        page_callback_parts = ["v", "page", "{page}", group, subject, resource_type]
         if podcast_format:
-            page_callback_base += f"_{podcast_format}"
+            page_callback_parts.append(podcast_format)
+        page_callback_base = "_".join(page_callback_parts)
 
         if page > 1:
             nav_buttons.append(types.InlineKeyboardButton("⬅️ Prev", callback_data=page_callback_base.format(page=page-1)))
 
-        # Back button logic
+        # Back button logic (Same as before)
+        back_callback_parts = ["v", "subj", group, subject]
+        # If it's a podcast list, the back button goes to the podcast type selection instead
         if podcast_format:
-             # If it's a podcast list, the back button goes to the subject menu
-            nav_buttons.append(types.InlineKeyboardButton("↩️ Back", callback_data=f"v_subj_{group}_{subject}"))
-        else:
-            nav_buttons.append(types.InlineKeyboardButton("↩️ Back", callback_data=f"v_subj_{group}_{subject}"))
+             back_callback_parts = ["v", "type", group, subject, "Podcasts"]
+        nav_buttons.append(types.InlineKeyboardButton("↩️ Back", callback_data="_".join(back_callback_parts)))
+
 
         if page < total_pages:
             nav_buttons.append(types.InlineKeyboardButton("Next ➡️", callback_data=page_callback_base.format(page=page+1)))
 
-        markup.row(*nav_buttons)
+        markup.row(*nav_buttons) # Add only the navigation buttons
         return message_text, markup
 
     except Exception as e:
@@ -734,19 +744,42 @@ def handle_vault_callbacks(call: types.CallbackQuery):
             text = f"🔵 **{group_name}**\n\nPlease select a subject:"
             edit_if_changed(text, markup)
 
-        elif action == 'subj':
+elif action == 'subj':
             group_name, subject = parts[2], '_'.join(parts[3:])
-            resource_types = ["ICAI Module", "Faculty Notes", "QPs & Revision", "Podcasts"]
-            buttons = []
-            buttons.append(types.InlineKeyboardButton(f"📘 ICAI Module", callback_data=f"v_type_{group_name}_{subject}_ICAI Module"))
-            buttons.append(types.InlineKeyboardButton(f"✍️ Faculty Notes", callback_data=f"v_type_{group_name}_{subject}_Faculty Notes"))
-            buttons.append(types.InlineKeyboardButton(f"📝 QPs & Revision", callback_data=f"v_type_{group_name}_{subject}_QPs & Revision"))
-            buttons.append(types.InlineKeyboardButton(f"🎙️ Podcasts", callback_data=f"v_type_{group_name}_{subject}_Podcasts"))
             
+            # --- MODIFICATION START ---
+            # Define the standard resource types
+            resource_types_to_show = ["ICAI Module", "Faculty Notes", "QPs & Revision"]
+            
+            # Conditionally add "Podcasts" if the subject is NOT "General"
+            if subject != "General":
+                resource_types_to_show.append("Podcasts")
+                
+            # Define corresponding emojis/labels for buttons
+            type_buttons_info = {
+                "ICAI Module": "📘 ICAI Module",
+                "Faculty Notes": "✍️ Faculty Notes",
+                "QPs & Revision": "📝 QPs & Revision",
+                "Podcasts": "🎙️ Podcasts" # Only shown if subject is not General
+            }
+                
+            buttons = []
+            for rtype in resource_types_to_show:
+                 button_label = type_buttons_info.get(rtype, f"📄 {rtype}") # Get label or default
+                 callback_data = f"v_type_{group_name}_{subject}_{rtype}"
+                 buttons.append(types.InlineKeyboardButton(button_label, callback_data=callback_data))
+                 
+            # --- MODIFICATION END ---
+
             markup = types.InlineKeyboardMarkup(row_width=2)
-            markup.add(*buttons)
+            markup.add(*buttons) # Add the dynamically created buttons
             markup.add(types.InlineKeyboardButton("↩️ Back to Subjects", callback_data=f"v_group_{group_name}"))
-            text = f"📚 <b>{subject}</b>\n\nWhat are you looking for?"
+            
+            # Get subject emoji for the header
+            subject_emojis = { "Law": "⚖️", "Taxation": "💰", "GST": "🧾", "Accounts": "📊", "Auditing": "🔍", "Costing": "🧮", "SM": "📈", "FM & SM": "📈", "General": "🌟" }
+            header_emoji = subject_emojis.get(subject, "📚")
+
+            text = f"{header_emoji} <b>{escape(subject)}</b>\n\nWhat are you looking for?"
             edit_if_changed(text, markup)
 
         elif action == 'type':
@@ -4146,7 +4179,144 @@ def handle_interlink_callbacks(call: types.CallbackQuery):
     elif call.data == 'show_info':
         bot.answer_callback_query(call.id)
         handle_info_command(call.message)
+# =============================================================================
+# 8. TELEGRAM BOT HANDLERS - NEW ALLFILES INDEX COMMAND
+# =============================================================================
 
+@bot.message_handler(commands=['allfiles'])
+@membership_required
+def handle_allfiles_command(msg: types.Message):
+    """
+    Generates a clickable index of all files, grouped by Group and Subject.
+    Clicking a file name inserts '/getfile {id}' into the user's input.
+    """
+    try:
+        # Add activity tracking
+        supabase.rpc('update_chat_activity', {'p_user_id': msg.from_user.id, 'p_user_name': msg.from_user.username or msg.from_user.first_name}).execute()
+    except Exception as e:
+        print(f"Activity tracking failed for user {msg.from_user.id} in /allfiles command: {e}")
+
+    try:
+        # Fetch all necessary data from Supabase, ordered correctly
+        response = supabase.table('resources') \
+            .select('id, file_name, subject, group_name, podcast_format, file_type') \
+            .order('group_name') \
+            .order('subject') \
+            .order('file_name') \
+            .execute()
+
+        if not response.data:
+            bot.reply_to(msg, "The resource vault appears to be empty right now.")
+            return
+
+        # Start building the message string with HTML
+        message_text = "<b>📚 Resource Index 📚</b>\n\n"
+        current_group = ""
+        current_subject = ""
+        subject_emojis = { "Law": "⚖️", "Taxation": "💰", "GST": "🧾", "Accounts": "📊", "Auditing": "🔍", "Costing": "🧮", "SM": "📈", "FM & SM": "📈", "General": "🌟" }
+
+        for resource in response.data:
+            res_group = resource.get('group_name', 'Uncategorized')
+            res_subject = resource.get('subject', 'Uncategorized')
+            res_id = resource['id']
+            res_name = escape(resource.get('file_name', 'Unknown File'))
+            podcast_format = resource.get('podcast_format')
+            file_type = resource.get('file_type', '')
+
+            # Add Group Header if it changes
+            if res_group != current_group:
+                current_group = res_group
+                # Add extra space before a new group, except for the first one
+                if current_subject: # Check if we already printed something
+                    message_text += "\n"
+                message_text += f"<b>--- {escape(current_group)} ---</b>\n"
+                current_subject = "" # Reset subject when group changes
+
+            # Add Subject Header if it changes
+            if res_subject != current_subject:
+                current_subject = res_subject
+                subject_emoji = subject_emojis.get(current_subject, "📚")
+                message_text += f"\n<b>{subject_emoji} {escape(current_subject)}:</b>\n"
+
+            # Determine the file emoji
+            if podcast_format == 'audio':
+                file_emoji = "🎧"
+            elif podcast_format == 'video':
+                file_emoji = "🎬"
+            elif file_type.startswith('image/'):
+                file_emoji = "🖼️"
+            elif file_type == 'application/pdf':
+                file_emoji = "📄"
+            else:
+                file_emoji = "📎" # Generic attachment
+
+            # Add the clickable file link
+            # The command is '/getfile' and the data passed is the resource id
+            command_link = f'tg://btn/getfile?data={res_id}'
+            message_text += f' • <a href="{command_link}">{file_emoji} {res_name}</a>\n'
+
+        # Send the complete message
+        # Use reply_parameters for robustness if the original command gets deleted
+        reply_params = types.ReplyParameters(message_id=msg.message_id, allow_sending_without_reply=True)
+        bot.send_message(msg.chat.id, message_text, parse_mode="HTML", reply_parameters=reply_params, disable_web_page_preview=True)
+
+    except Exception as e:
+        report_error_to_admin(f"Error generating /allfiles index: {traceback.format_exc()}")
+        bot.reply_to(msg, "❌ An error occurred while generating the file index.")
+# Ensure this handler exists in your bot.py
+@bot.message_handler(commands=['getfile'])
+@membership_required
+def handle_getfile_command(msg: types.Message):
+    try:
+        parts = msg.text.split(' ', 1)
+        if len(parts) < 2 or not parts[1].strip().isdigit():
+            bot.reply_to(msg, "Invalid command format. Please click a link from the /allfiles index.")
+            return
+
+        resource_id = int(parts[1].strip())
+
+        # Fetch file details from Supabase using the database ID
+        response = supabase.table('resources').select('file_id, file_name, description, file_type, podcast_format').eq('id', resource_id).single().execute()
+
+        if not response.data:
+            bot.reply_to(msg, "❌ File not found. It might have been deleted.")
+            return
+
+        file_info = response.data
+        file_id_to_send = file_info['file_id']
+        file_name_to_send = file_info['file_name']
+        description = file_info.get('description', file_name_to_send)
+        file_type = file_info.get('file_type', '')
+        podcast_format = file_info.get('podcast_format') # Get podcast format
+
+        # Create the caption using your existing function
+        stylish_caption = create_stylish_caption(file_name_to_send, description)
+
+        # Determine how to send the file based on type
+        sender_func = bot.send_document # Default
+        if podcast_format == 'audio' or file_type.startswith('audio/'):
+            sender_func = bot.send_audio
+        elif podcast_format == 'video' or file_type.startswith('video/'):
+            sender_func = bot.send_video
+        elif file_type.startswith('image/'):
+            sender_func = bot.send_photo
+        # Add elif for other specific types if needed
+
+        # Use the chosen sender function
+        sender_func(
+            msg.chat.id,
+            file_id_to_send,
+            caption=stylish_caption,
+            parse_mode="HTML",
+            reply_to_message_id=msg.message_id
+        )
+
+    except ApiTelegramException as telegram_error:
+        report_error_to_admin(f"Failed to send file via /getfile (ID: {parts[1] if len(parts)>1 else 'N/A'}). Error: {telegram_error}")
+        bot.reply_to(msg, "❌ Failed to send the file. It might be expired or inaccessible.")
+    except Exception as e:
+        report_error_to_admin(f"Error in /getfile command: {traceback.format_exc()}")
+        bot.reply_to(msg, "❌ An error occurred while fetching the file.")
 # --- Vault Command: /listfile ---
 
 @bot.message_handler(commands=['listfile'])
