@@ -17,6 +17,7 @@ import random
 import requests
 import uuid
 from flask import Flask, request, json
+from telebot import TeleBot, types
 from collections import defaultdict
 from telebot.apihelper import ApiTelegramException
 from google.oauth2 import service_account
@@ -24,88 +25,14 @@ from datetime import timezone, timedelta
 IST = timezone(timedelta(hours=5, minutes=30))
 from supabase import create_client, Client
 from urllib.parse import quote
+from html import escape, unescape
 from collections import namedtuple
 from postgrest.exceptions import APIError
 import httpx
 from bs4 import BeautifulSoup
-from telebot import TeleBot, types
-# ========== START: SAFE TELEGRAM SEND WRAPPERS ==========
-def safe_send_html(bot_instance, chat_id, text, **kwargs):
-    """
-    Wrapper around bot.send_message that sanitizes HTML automatically.
-    """
-    from html import escape as _esc
-    try:
-        if text is None:
-            text = ""
-        # Ensure text is string
-        text = str(text)
-        # Use the same sanitizer from earlier
-        safe_text = sanitize_html(text)
-        return bot_instance.send_message(chat_id, safe_text, parse_mode="HTML", **kwargs)
-    except Exception as e:
-        print(f"[SAFE_SEND_HTML ERROR] {e}")
-        # fallback plain text
-        return bot_instance.send_message(chat_id, f"{text}", **kwargs)
-
-def safe_edit_html(bot_instance, chat_id, message_id, text, **kwargs):
-    """
-    Wrapper around bot.edit_message_text that sanitizes HTML automatically.
-    """
-    try:
-        if text is None:
-            text = ""
-        safe_text = sanitize_html(str(text))
-        return bot_instance.edit_message_text(
-            safe_text, chat_id=chat_id, message_id=message_id, parse_mode="HTML", **kwargs
-        )
-    except Exception as e:
-        print(f"[SAFE_EDIT_HTML ERROR] {e}")
-        # fallback to plain text edit
-        return bot_instance.edit_message_text(str(text), chat_id=chat_id, message_id=message_id, **kwargs)
-# ========== END: SAFE TELEGRAM SEND WRAPPERS ==========
-from html import escape, unescape
-# ================== START: HTML SANITIZER HELPERS (PASTE AFTER `from html import escape, unescape`) ==================
-import re
-from html import escape as _html_escape
-
-def sanitize_html(text: str) -> str:
-    """
-    Escape user / DB text safely for Telegram parse_mode='HTML', and neutralize stray '<' patterns.
-    - Replaces `<---` (and other '<' followed by hyphens) with '&lt;---' so Telegram doesn't try to parse them as tags.
-    - Escapes all HTML by default.
-    - Re-allows a small set of trusted tags if they were intentionally included (b, i, code, pre, blockquote, hr, a).
-    NOTE: Keep this function small and defensive — it prevents unsupported-start-tag errors.
-    """
-    if text is None:
-        return ""
-
-    # 1) Neutralize patterns that start with '<' followed immediately by hyphen(s) (e.g. "<---")
-    text = re.sub(r'<(?=-{1,})', '&lt;', text)
-
-    # 2) Escape everything to HTML entities (&, <, >, etc.)
-    text = _html_escape(text)
-
-    # 3) Re-allow some safe tags that the bot uses (only if they were intentionally present as escaped forms).
-    #    This will convert things like &lt;b&gt; back to <b>, which is useful if code intentionally included tags.
-    #    We also specially allow a safe <a href="...">pattern that uses http/https.
-    allowed_tags = ['b', 'i', 'code', 'pre', 'blockquote', 'hr']
-    for tag in allowed_tags:
-        text = text.replace(f'&lt;{tag}&gt;', f'<{tag}>').replace(f'&lt;/{tag}&gt;', f'</{tag}>')
-
-    # Allow <hr/> (self-closing)
-    text = text.replace('&lt;hr/&gt;', '<hr/>').replace('&lt;hr /&gt;', '<hr/>')
-
-    # Re-allow simple <a href="...">link text</a> safely if it was present in escaped form.
-    # This only restores if href starts with http:// or https://
-    text = re.sub(
-        r'&lt;a href=&quot;(https?://[^&]+)&quot;&gt;(.*?)&lt;/a&gt;',
-        r'<a href="\1">\2</a>',
-        text,
-        flags=re.IGNORECASE | re.DOTALL
-    )
-
-    return text
+# =============================================================================
+# 2. CONFIGURATION & INITIALIZATION
+# =============================================================================
 
 # --- Configuration ---
 BOT_TOKEN = os.getenv('BOT_TOKEN')
@@ -351,21 +278,12 @@ def format_duration(seconds: float) -> str:
     return f"{minutes} min {remaining_seconds} sec"
 
 def report_error_to_admin(error_message: str):
-    """Sends a formatted error message to the admin using safe HTML (sanitized)."""
+    """Sends a formatted error message to the admin using safe HTML."""
     try:
-        # Keep message reasonably short for Telegram; sanitize it to avoid parse errors.
-        short_err = str(error_message)[:3500]
-        safe_payload = sanitize_html(short_err)
-
-        error_text = (
-            "🚨 <b>BOT ERROR</b> 🚨\n\n"
-            "An error occurred:\n\n"
-            f"<pre>{safe_payload}</pre>"
-        )
-
+        # This function already uses the safe HTML format, which is great.
+        error_text = f"🚨 <b>BOT ERROR</b> 🚨\n\nAn error occurred:\n\n{escape(str(error_message)[:3500])}</pre>"
         bot.send_message(ADMIN_USER_ID, error_text, parse_mode="HTML")
     except Exception as e:
-        # If reporting to admin fails, print to logs (do not try to re-report recursively).
         print(f"CRITICAL: Failed to report error to admin: {e}")
 
 def is_admin(user_id):
@@ -712,14 +630,12 @@ def handle_vault_callbacks(call: types.CallbackQuery):
     bot.answer_callback_query(call.id)
     parts = call.data.split('_')
     action = parts[1]
-
+    
     def edit_if_changed(new_text, new_markup):
-        # Check if message text or markup is different to avoid "message is not modified" error
         if call.message.text != new_text or call.message.reply_markup != new_markup:
             try:
                 bot.edit_message_text(new_text, call.message.chat.id, call.message.message_id, reply_markup=new_markup, parse_mode="HTML")
             except ApiTelegramException as e:
-                # If the error is something other than "not modified", we still want to know.
                 if "message is not modified" not in e.description:
                     raise e
 
@@ -746,30 +662,41 @@ def handle_vault_callbacks(call: types.CallbackQuery):
             text = f"🔵 **{group_name}**\n\nPlease select a subject:"
             edit_if_changed(text, markup)
 
-        elif action == 'subj':
+elif action == 'subj':
             group_name, subject = parts[2], '_'.join(parts[3:])
+            
+            # --- MODIFICATION START ---
+            # Define the standard resource types
             resource_types_to_show = ["ICAI Module", "Faculty Notes", "QPs & Revision"]
+            
+            # Conditionally add "Podcasts" if the subject is NOT "General"
             if subject != "General":
                 resource_types_to_show.append("Podcasts")
-
+                
+            # Define corresponding emojis/labels for buttons
             type_buttons_info = {
                 "ICAI Module": "📘 ICAI Module",
                 "Faculty Notes": "✍️ Faculty Notes",
                 "QPs & Revision": "📝 QPs & Revision",
-                "Podcasts": "🎙️ Podcasts"
+                "Podcasts": "🎙️ Podcasts" # Only shown if subject is not General
             }
+                
             buttons = []
             for rtype in resource_types_to_show:
-                button_label = type_buttons_info.get(rtype, f"📄 {rtype}")
-                callback_data = f"v_type_{group_name}_{subject}_{rtype}"
-                buttons.append(types.InlineKeyboardButton(button_label, callback_data=callback_data))
+                 button_label = type_buttons_info.get(rtype, f"📄 {rtype}") # Get label or default
+                 callback_data = f"v_type_{group_name}_{subject}_{rtype}"
+                 buttons.append(types.InlineKeyboardButton(button_label, callback_data=callback_data))
+                 
+            # --- MODIFICATION END ---
 
             markup = types.InlineKeyboardMarkup(row_width=2)
-            markup.add(*buttons)
+            markup.add(*buttons) # Add the dynamically created buttons
             markup.add(types.InlineKeyboardButton("↩️ Back to Subjects", callback_data=f"v_group_{group_name}"))
-
+            
+            # Get subject emoji for the header
             subject_emojis = { "Law": "⚖️", "Taxation": "💰", "GST": "🧾", "Accounts": "📊", "Auditing": "🔍", "Costing": "🧮", "SM": "📈", "FM & SM": "📈", "General": "🌟" }
             header_emoji = subject_emojis.get(subject, "📚")
+
             text = f"{header_emoji} <b>{escape(subject)}</b>\n\nWhat are you looking for?"
             edit_if_changed(text, markup)
 
@@ -792,7 +719,16 @@ def handle_vault_callbacks(call: types.CallbackQuery):
             group, subject, podcast_format = parts[2], parts[3], parts[4]
             text, markup = create_compact_file_list_page(group, subject, 'Podcasts', page=1, podcast_format=podcast_format)
             edit_if_changed(text, markup)
-
+    except Exception as e:
+        report_error_to_admin(f"Error in vault navigation callback '{call.data}': {traceback.format_exc()}")
+        try:
+            # Try to edit the message to show an error
+            error_text = "❌ An error occurred. Please try again from /listfile."
+            bot.edit_message_text(error_text, call.message.chat.id, call.message.message_id)
+        except Exception as inner_e:
+            # If editing fails (e.g., message deleted), log it but don't crash
+            print(f"Could not edit message to show vault error: {inner_e}")
+            pass # Prevent crashing the bot
         elif action == 'page':
             page = int(parts[2])
             group = parts[3]
@@ -803,12 +739,11 @@ def handle_vault_callbacks(call: types.CallbackQuery):
             edit_if_changed(text, markup)
 
     except Exception as e:
-        report_error_to_admin(f"Error in vault navigation callback '{call.data}': {traceback.format_exc()}")
+        report_error_to_admin(f"Error in vault navigation: {traceback.format_exc()}")
         try:
             error_text = "❌ An error occurred. Please try again from /listfile."
             bot.edit_message_text(error_text, call.message.chat.id, call.message.message_id)
-        except Exception as inner_e:
-            print(f"Could not edit message to show vault error: {inner_e}")
+        except Exception:
             pass
 def create_main_menu_keyboard(message: types.Message):
     """
@@ -3936,10 +3871,12 @@ def format_kalkaquiz_message(quizzes):
             quizzes_by_subject[subject] = []
         quizzes_by_subject[subject].append(quiz)
 
-# --- NEW: Build the "Subject Card" format ---
+    # --- NEW: Build the "Subject Card" format ---
     for subject, quiz_list in quizzes_by_subject.items():
         # Add a separator and header for the subject "card"
-        message_parts.append("\n<b><u>" + escape(subject.upper()) + "</u></b>\n") # Use Bold + Underline
+        message_parts.append("━━━━━━━━━━━━━━━━━━")
+        message_parts.append(f"<b>📚 {escape(subject.upper())}</b>")
+        message_parts.append("━━━━━━━━━━━━━━━━━━")
         
         for quiz in quiz_list:
             try:
@@ -4598,10 +4535,8 @@ def handle_dm_conversation_steps(msg: types.Message):
         
         def send_message_to_user(target_id, name):
             try:
-                # Use HTML hr tag instead of ---
-                header = f"👋 Hello {escape(name)},\n\nYou have a new message from the CA INTER Quiz Hub admin:\n\n<hr/>\n"
-                # Ensure parse_mode is set to HTML for the header
-                bot.send_message(target_id, header, parse_mode="HTML")
+                header = f"👋 Hello {escape(name)},\n\nYou have a new message from the CA INTER Quiz Hub admin:\n\n---\n"
+                bot.send_message(target_id, header)
                 bot.copy_message(chat_id=target_id, from_chat_id=admin_id, message_id=msg.message_id)
                 return True
             except Exception as e:
@@ -4886,7 +4821,7 @@ def handle_my_analysis_command(msg: types.Message):
             bot.reply_to(msg, f"📊 <b>{user_name}'s Analysis</b>\n\nNo quiz data found yet. Participate in quizzes to generate your report!", parse_mode="HTML")
             return
 
-        message_parts = [f"📊 <b>{user_name}'s Performance Snapshot</b>\n<hr/>\n"] # Using HTML horizontal rule
+        message_parts = [f"📊 <b>{user_name}'s Performance Snapshot</b>\n━━━━━━━━━━━━━━━━━━\n"]
         
         if analysis_data:
             web_stats = analysis_data.get('web_quiz_stats')
@@ -5003,7 +4938,7 @@ def handle_mystats_command(msg: types.Message):
         elif quizzes_played >= 1: user_title = "Rising Star ⭐"
         else: user_title = "Newcomer 🌱"
 
-        msg_text = f"📊 <b>{user_name}'s Performance Snapshot</b>\n<hr/>\n" # Using HTML horizontal rule
+        msg_text = f"📊 <b>{user_name}'s Performance Snapshot</b>\n━━━━━━━━━━━━━━━━━━\n"
         msg_text += f"Your current rank is: <b>{user_title}</b>\n\n"
         msg_text += "Here's how you stack up against the group average:\n\n"
         
@@ -5954,33 +5889,30 @@ def handle_public_report_confirmation(call: types.CallbackQuery):
 def create_stylish_caption(file_name, description):
     """
     Creates a beautiful, mobile-optimized caption in the 'Elegant & Thematic' style.
-    Returns a sanitized HTML-safe caption string.
     """
-    # Defensive defaults
-    file_name = file_name or ""
-    description = description or ""
-
+    # --- Logic to extract title and author from the description ---
+    # This makes the caption smarter. It assumes the first line is the title
+    # and the line starting with "by" is the author.
     lines = description.split('\n')
-    title = escape(lines[0].strip()) if lines and lines[0].strip() else escape(file_name)
+    title = escape(lines[0].strip())
     author_line = next((line for line in lines if line.strip().lower().startswith("by")), None)
-
+    
     if author_line:
         author = escape(author_line.strip())
     else:
+        # Fallback if no "by" line is found
         author = f"Source: {escape(file_name)}"
 
-    # Build the caption (use only escaped title/author here)
+    # --- Build the HTML Caption ---
     caption = (
-        "•───≪ ⚜️ ≫───•\n\n"
+        f"•───≪ ⚜️ ≫───•\n\n"
         f"<b>{title}</b>\n"
         f"<i>{author}</i>\n\n"
-        "•───≪ ⚜️ ≫───•\n\n"
-        "📜 For more notes & discussions, join us:\n"
-        "➡️ <a href=\"https://t.me/cainterquizhub\">CA INTER QUIZ HUB</a> | @cainterquizhub"
+        f"•───≪ ⚜️ ≫───•\n\n"
+        f"📜 For more notes & discussions, join us:\n"
+        f"➡️ <a href=\"https://t.me/cainterquizhub\">CA INTER QUIZ HUB</a> | @cainterquizhub"
     )
-
-    # Sanitize the final caption to neutralize any stray '<' and ensure HTML is safe.
-    return sanitize_html(caption)
+    return caption
 def parse_time_to_seconds(time_str):
     """Converts time string like '4 min 37 sec' or '56.1 sec' to total seconds."""
     seconds = 0
@@ -6215,9 +6147,9 @@ def handle_define_command(msg: types.Message):
                     }
                     message_text = (
                         f"📖 <b>Term:</b> <code>{escape(term_data['term'])}</code>\n"
-                        f"<hr/>\n" # <-- FIX
+                        f"━━━━━━━━━━━━━━━━━━\n"
                         f"<blockquote>{escape(term_data['definition'])}</blockquote>\n"
-                        f"<hr/>\n" # <-- FIX
+                        f"━━━━━━━━━━━━━━━━━━\n"
                         f"📚 <b>Category:</b> <i>{escape(term_data['category'])}</i>"
                     )
                     bot.reply_to(msg, message_text, parse_mode="HTML")
@@ -6265,15 +6197,15 @@ def generate_law_library_response(msg: types.Message, command: str, table_name: 
 
             message_text = (
                 f"{emoji} <b>{escape(act_name)}</b>\n"
-                f"<hr/>\n" # <-- FIX
+                f"━━━━━━━━━━━━━━━━━━\n\n"
                 f"📖 <b>Section/Standard <code>{escape(section_data.get('section_number', 'N/A'))}</code></b>\n"
                 f"<b>{escape(section_data.get('title', 'No Title'))}</b>\n\n"
-                # Removed the other separator here for clarity
+                f"──────────────────</pre>\n\n"
                 f"<b>Summary:</b>\n"
                 f"<blockquote>{escape(section_data.get('summary', 'No summary available.'))}</blockquote>\n"
                 f"<b>Practical Example:</b>\n"
                 f"<blockquote>{escape(example_text)}</blockquote>\n"
-                f"<hr/>\n" # <-- FIX
+                f"━━━━━━━━━━━━━━━━━━</pre>\n"
                 f"⚠️ <i>This is a simplified summary from ICAI materials for Jan 26 attempt. Always cross-verify with the latest amendments.</i>"
             )
 
@@ -6987,8 +6919,8 @@ def process_edited_definition(message: types.Message):
 def format_section_message(section_data, user_name):
     """
     Formats the section details into a clean, readable message using safe HTML parsing.
-    Uses blockquote for summary and example.
     """
+    # This function is already safe and uses HTML. No changes needed.
     safe_user_name = escape(user_name)
     chapter_info = escape(section_data.get('chapter_info', 'N/A'))
     section_number = escape(section_data.get('section_number', ''))
@@ -7000,9 +6932,9 @@ def format_section_message(section_data, user_name):
         f"📖 <b>{chapter_info}</b>\n\n"
         f"<b>Section {section_number}: {it_is_about}</b>\n\n"
         f"<i>It states that:</i>\n"
-        f"<blockquote>{summary}</blockquote>\n\n" # <-- FIX: Use blockquote
+        f"{summary}</pre>\n\n"
         f"<i>Example:</i>\n"
-        f"<blockquote>{example}</blockquote>\n\n" # <-- FIX: Use blockquote
+        f"{example}</pre>\n\n"
         f"<i>Disclaimer: Please cross-check with the latest amendments.</i>")
     return message_text
 # =============================================================================
@@ -9106,7 +9038,7 @@ def handle_report_confirmation(call: types.CallbackQuery):
                 report_card_text = f"📋 <b>Written Practice Report Card: {datetime.datetime.now().date() - datetime.timedelta(days=1)}</b> 📋\n"
                 
                 if ranked_performers:
-                    report_card_text += "\n<hr/><i>🏆 Performance Ranking</i><hr/>\n" # <-- FIX
+                    report_card_text += "\n--- <i>🏆 Performance Ranking</i> ---\n"
                     rank_emojis = ["🥇", "🥈", "🥉"]
                     for i, performer in enumerate(ranked_performers):
                         emoji = rank_emojis[i] if i < 3 else f"<b>{i+1}.</b>"
@@ -9118,13 +9050,11 @@ def handle_report_confirmation(call: types.CallbackQuery):
                         report_card_text += f"{emoji} <b>{submitter_name}</b> - {marks_awarded}/{total_marks} ({percentage}%)\n  <i>(Checked by: {checker_name})</i>\n"
                 
                 if pending_reviews:
-                    report_card_text += "\n<hr/><i>⚠️ Submissions Not Checked</i><hr/>\n" # <-- FIX
+                    report_card_text += "\n--- <i>⚠️ Submissions Not Checked</i> ---\n"
                     for pending in pending_reviews:
                         submitter_name = escape(pending.get('submitter_name', 'N/A'))
                         checker_name = escape(pending.get('checker_name', 'N/A'))
                         report_card_text += f"• <b>{submitter_name}</b>'s answer is pending review by <b>{checker_name}</b>.\n"
-
-                report_card_text += "\n<hr/>\nGreat effort everyone! Keep practicing! ✨" # <-- FIX
 
                 report_card_text += "\n--- \nGreat effort everyone! Keep practicing! ✨"
                 bot.send_message(GROUP_ID, report_card_text, parse_mode="HTML", message_thread_id=QNA_TOPIC_ID)
