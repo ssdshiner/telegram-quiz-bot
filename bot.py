@@ -4142,7 +4142,8 @@ def handle_allfiles_command(msg: types.Message):
                 # Add extra space before a new group, except for the first one
                 if current_subject: # Check if we already printed something
                     message_text += "\n"
-                message_text += f"<b>--- {escape(current_group)} ---</b>\n"
+                # FIX: Replaced "---" with a clean, bolded header
+                message_text += f"🔵 <b>{escape(current_group)}</b> 🔵\n"
                 current_subject = "" # Reset subject when group changes
 
             # Add Subject Header if it changes
@@ -5458,10 +5459,8 @@ def handle_announcement_steps(msg: types.Message):
     
     # --- STEP 1: AWAITING TITLE ---
     if current_step == 'awaiting_title':
-        # Store the title provided by the admin
         title = msg.text.strip()
         
-        # Validate title length
         if len(title) > 100:
             bot.send_message(msg.chat.id, """⚠️ <b>Title Too Long</b>
 
@@ -5471,11 +5470,9 @@ def handle_announcement_steps(msg: types.Message):
 ✂️ <i>Please make it shorter and try again...</i>""", parse_mode="HTML")
             return
             
-        # Update user state and proceed to the next step
         user_state['data']['title'] = title
         user_state['step'] = 'awaiting_content'
         
-        # Ask the admin for the announcement content
         content_message = f"""✅ <b>Title Saved!</b>
 
 📝 <b>Your Title:</b> "{escape(title)}"
@@ -5497,10 +5494,8 @@ def handle_announcement_steps(msg: types.Message):
         
     # --- STEP 2: AWAITING CONTENT ---
     elif current_step == 'awaiting_content':
-        # Store the content provided by the admin
         content = msg.text.strip()
         
-        # Validate content length
         if len(content) > 2000:
             bot.send_message(msg.chat.id, f"""⚠️ <b>Content Too Long</b>
 
@@ -5510,11 +5505,9 @@ def handle_announcement_steps(msg: types.Message):
 ✂️ <i>Please shorten your message and try again...</i>""", parse_mode="HTML")
             return
             
-        # Update user state and proceed to the next step
         user_state['data']['content'] = content
         user_state['step'] = 'awaiting_priority'
         
-        # Ask the admin for the priority level
         priority_message = f"""✅ <b>Content Saved!</b>
 
 📄 <b>Preview:</b>
@@ -5539,7 +5532,6 @@ def handle_announcement_steps(msg: types.Message):
         
     # --- STEP 3: AWAITING PRIORITY & FINAL CONFIRMATION ---
     elif current_step == 'awaiting_priority':
-        # Get and validate the admin's priority choice
         priority_input = msg.text.strip()
         if priority_input not in ['1', '2', '3', '4']:
             bot.send_message(msg.chat.id, """❌ <b>Invalid Choice</b>
@@ -5549,14 +5541,12 @@ def handle_announcement_steps(msg: types.Message):
 <i>Type just the number...</i>""", parse_mode="HTML")
             return
             
-        # Assemble all the data for the final announcement
         title = user_state['data']['title']
         content = user_state['data']['content']
         time_now_ist = datetime.datetime.now(IST)
         current_time_str = time_now_ist.strftime("%I:%M %p")
         current_date_str = time_now_ist.strftime("%d %B %Y")
         
-        # Determine the visual style based on priority
         if priority_input == '1':
             priority_tag = "📋 <b>ANNOUNCEMENT</b>"
         elif priority_input == '2':
@@ -5566,9 +5556,9 @@ def handle_announcement_steps(msg: types.Message):
         else: # priority_input == '4'
             priority_tag = "🎉 <b>CELEBRATION</b>"
         
-        border = "---------------------"
+        # FIX: Replaced "---" with a safe Unicode line
+        border = "━━━━━━━━━━━━━━━━━━"
         
-        # Create the final formatted announcement text
         final_announcement = f"""{priority_tag}
 
 {border}
@@ -5584,22 +5574,18 @@ def handle_announcement_steps(msg: types.Message):
 
 <b>C.A.V.Y.A Management Team</b> 💝"""
 
-        # Show a preview to the admin with interactive buttons
         preview_message = f"""🎯 <b>ANNOUNCEMENT PREVIEW</b>\n\n{final_announcement}\n\n✅ <b>Ready to post?</b>\n\nThis will be posted and pinned in the Updates topic."""
     
-        # Update the user's state one last time before confirmation
         user_state['data']['final_announcement'] = final_announcement
         user_state['data']['priority_choice'] = priority_input
-        user_state['step'] = 'awaiting_confirmation' # Next step is handled by the button callback
+        user_state['step'] = 'awaiting_confirmation'
 
-        # Create the confirmation buttons
         markup = types.InlineKeyboardMarkup()
         markup.add(
             types.InlineKeyboardButton("✅ Yes, Post & Pin", callback_data="announce_confirm_yes"),
             types.InlineKeyboardButton("❌ No, Cancel", callback_data="announce_confirm_no")
         )
         
-        # Send the preview message with buttons to the admin
         bot.send_message(msg.chat.id, preview_message, reply_markup=markup, parse_mode="HTML")
         
 @bot.callback_query_handler(func=lambda call: call.data.startswith('announce_confirm_'))
@@ -6166,7 +6152,6 @@ def handle_define_command(msg: types.Message):
 # =============================================================================
 # 8. TELEGRAM BOT HANDLERS - GENERIC LAW LIBRARY HANDLER
 # =============================================================================
-
 def generate_law_library_response(msg: types.Message, command: str, table_name: str, act_name: str, emoji: str, lib_key: str):
     """
     A generic master function to handle all law library commands, now with a quiz button.
@@ -6188,23 +6173,22 @@ def generate_law_library_response(msg: types.Message, command: str, table_name: 
             section_data = response.data[0]
             example_text = (section_data.get('example') or "No example available.").replace("{user_name}", user_name)
 
+            # FIX: Removed the invalid closing </pre> tags
             message_text = (
                 f"{emoji} <b>{escape(act_name)}</b>\n"
                 f"━━━━━━━━━━━━━━━━━━\n\n"
                 f"📖 <b>Section/Standard <code>{escape(section_data.get('section_number', 'N/A'))}</code></b>\n"
                 f"<b>{escape(section_data.get('title', 'No Title'))}</b>\n\n"
-                f"──────────────────</pre>\n\n"
+                f"──────────────────\n\n"
                 f"<b>Summary:</b>\n"
                 f"<blockquote>{escape(section_data.get('summary', 'No summary available.'))}</blockquote>\n"
                 f"<b>Practical Example:</b>\n"
                 f"<blockquote>{escape(example_text)}</blockquote>\n"
-                f"━━━━━━━━━━━━━━━━━━</pre>\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
                 f"⚠️ <i>This is a simplified summary from ICAI materials for Jan 26 attempt. Always cross-verify with the latest amendments.</i>"
             )
 
-            # --- THIS IS THE NEW PART ---
             markup = types.InlineKeyboardMarkup()
-            # We remove the emoji from the button text for a cleaner look
             clean_act_name = act_name.split(' ', 1)[-1] 
             markup.add(types.InlineKeyboardButton(f"🧠 Test Your Knowledge on {clean_act_name}", callback_data=f"start_quiz_for_{lib_key}"))
 
