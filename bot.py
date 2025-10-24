@@ -106,11 +106,6 @@ def sanitize_html(text: str) -> str:
     )
 
     return text
-# ================== END: HTML SANITIZER HELPERS ==================
-
-# =============================================================================
-# 2. CONFIGURATION & INITIALIZATION
-# =============================================================================
 
 # --- Configuration ---
 BOT_TOKEN = os.getenv('BOT_TOKEN')
