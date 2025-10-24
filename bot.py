@@ -712,12 +712,14 @@ def handle_vault_callbacks(call: types.CallbackQuery):
     bot.answer_callback_query(call.id)
     parts = call.data.split('_')
     action = parts[1]
-    
+
     def edit_if_changed(new_text, new_markup):
+        # Check if message text or markup is different to avoid "message is not modified" error
         if call.message.text != new_text or call.message.reply_markup != new_markup:
             try:
                 bot.edit_message_text(new_text, call.message.chat.id, call.message.message_id, reply_markup=new_markup, parse_mode="HTML")
             except ApiTelegramException as e:
+                # If the error is something other than "not modified", we still want to know.
                 if "message is not modified" not in e.description:
                     raise e
 
@@ -744,41 +746,30 @@ def handle_vault_callbacks(call: types.CallbackQuery):
             text = f"🔵 **{group_name}**\n\nPlease select a subject:"
             edit_if_changed(text, markup)
 
-elif action == 'subj':
+        elif action == 'subj':
             group_name, subject = parts[2], '_'.join(parts[3:])
-            
-            # --- MODIFICATION START ---
-            # Define the standard resource types
             resource_types_to_show = ["ICAI Module", "Faculty Notes", "QPs & Revision"]
-            
-            # Conditionally add "Podcasts" if the subject is NOT "General"
             if subject != "General":
                 resource_types_to_show.append("Podcasts")
-                
-            # Define corresponding emojis/labels for buttons
+
             type_buttons_info = {
                 "ICAI Module": "📘 ICAI Module",
                 "Faculty Notes": "✍️ Faculty Notes",
                 "QPs & Revision": "📝 QPs & Revision",
-                "Podcasts": "🎙️ Podcasts" # Only shown if subject is not General
+                "Podcasts": "🎙️ Podcasts"
             }
-                
             buttons = []
             for rtype in resource_types_to_show:
-                 button_label = type_buttons_info.get(rtype, f"📄 {rtype}") # Get label or default
-                 callback_data = f"v_type_{group_name}_{subject}_{rtype}"
-                 buttons.append(types.InlineKeyboardButton(button_label, callback_data=callback_data))
-                 
-            # --- MODIFICATION END ---
+                button_label = type_buttons_info.get(rtype, f"📄 {rtype}")
+                callback_data = f"v_type_{group_name}_{subject}_{rtype}"
+                buttons.append(types.InlineKeyboardButton(button_label, callback_data=callback_data))
 
             markup = types.InlineKeyboardMarkup(row_width=2)
-            markup.add(*buttons) # Add the dynamically created buttons
+            markup.add(*buttons)
             markup.add(types.InlineKeyboardButton("↩️ Back to Subjects", callback_data=f"v_group_{group_name}"))
-            
-            # Get subject emoji for the header
+
             subject_emojis = { "Law": "⚖️", "Taxation": "💰", "GST": "🧾", "Accounts": "📊", "Auditing": "🔍", "Costing": "🧮", "SM": "📈", "FM & SM": "📈", "General": "🌟" }
             header_emoji = subject_emojis.get(subject, "📚")
-
             text = f"{header_emoji} <b>{escape(subject)}</b>\n\nWhat are you looking for?"
             edit_if_changed(text, markup)
 
@@ -801,16 +792,7 @@ elif action == 'subj':
             group, subject, podcast_format = parts[2], parts[3], parts[4]
             text, markup = create_compact_file_list_page(group, subject, 'Podcasts', page=1, podcast_format=podcast_format)
             edit_if_changed(text, markup)
-    except Exception as e:
-        report_error_to_admin(f"Error in vault navigation callback '{call.data}': {traceback.format_exc()}")
-        try:
-            # Try to edit the message to show an error
-            error_text = "❌ An error occurred. Please try again from /listfile."
-            bot.edit_message_text(error_text, call.message.chat.id, call.message.message_id)
-        except Exception as inner_e:
-            # If editing fails (e.g., message deleted), log it but don't crash
-            print(f"Could not edit message to show vault error: {inner_e}")
-            pass # Prevent crashing the bot
+
         elif action == 'page':
             page = int(parts[2])
             group = parts[3]
@@ -821,11 +803,12 @@ elif action == 'subj':
             edit_if_changed(text, markup)
 
     except Exception as e:
-        report_error_to_admin(f"Error in vault navigation: {traceback.format_exc()}")
+        report_error_to_admin(f"Error in vault navigation callback '{call.data}': {traceback.format_exc()}")
         try:
             error_text = "❌ An error occurred. Please try again from /listfile."
             bot.edit_message_text(error_text, call.message.chat.id, call.message.message_id)
-        except Exception:
+        except Exception as inner_e:
+            print(f"Could not edit message to show vault error: {inner_e}")
             pass
 def create_main_menu_keyboard(message: types.Message):
     """
