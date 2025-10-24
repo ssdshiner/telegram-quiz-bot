@@ -4363,8 +4363,10 @@ def handle_dm_conversation_steps(msg: types.Message):
         
         def send_message_to_user(target_id, name):
             try:
-                header = f"👋 Hello {escape(name)},\n\nYou have a new message from the CA INTER Quiz Hub admin:\n\n---\n"
-                bot.send_message(target_id, header)
+                # Use HTML hr tag instead of ---
+                header = f"👋 Hello {escape(name)},\n\nYou have a new message from the CA INTER Quiz Hub admin:\n\n<hr/>\n"
+                # Ensure parse_mode is set to HTML for the header
+                bot.send_message(target_id, header, parse_mode="HTML")
                 bot.copy_message(chat_id=target_id, from_chat_id=admin_id, message_id=msg.message_id)
                 return True
             except Exception as e:
@@ -8866,7 +8868,7 @@ def handle_report_confirmation(call: types.CallbackQuery):
                 report_card_text = f"📋 <b>Written Practice Report Card: {datetime.datetime.now().date() - datetime.timedelta(days=1)}</b> 📋\n"
                 
                 if ranked_performers:
-                    report_card_text += "\n--- <i>🏆 Performance Ranking</i> ---\n"
+                    report_card_text += "\n<hr/><i>🏆 Performance Ranking</i><hr/>\n" # <-- FIX
                     rank_emojis = ["🥇", "🥈", "🥉"]
                     for i, performer in enumerate(ranked_performers):
                         emoji = rank_emojis[i] if i < 3 else f"<b>{i+1}.</b>"
@@ -8878,11 +8880,13 @@ def handle_report_confirmation(call: types.CallbackQuery):
                         report_card_text += f"{emoji} <b>{submitter_name}</b> - {marks_awarded}/{total_marks} ({percentage}%)\n  <i>(Checked by: {checker_name})</i>\n"
                 
                 if pending_reviews:
-                    report_card_text += "\n--- <i>⚠️ Submissions Not Checked</i> ---\n"
+                    report_card_text += "\n<hr/><i>⚠️ Submissions Not Checked</i><hr/>\n" # <-- FIX
                     for pending in pending_reviews:
                         submitter_name = escape(pending.get('submitter_name', 'N/A'))
                         checker_name = escape(pending.get('checker_name', 'N/A'))
                         report_card_text += f"• <b>{submitter_name}</b>'s answer is pending review by <b>{checker_name}</b>.\n"
+
+                report_card_text += "\n<hr/>\nGreat effort everyone! Keep practicing! ✨" # <-- FIX
 
                 report_card_text += "\n--- \nGreat effort everyone! Keep practicing! ✨"
                 bot.send_message(GROUP_ID, report_card_text, parse_mode="HTML", message_thread_id=QNA_TOPIC_ID)
