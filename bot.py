@@ -47,7 +47,7 @@ PUBLIC_GROUP_COMMANDS = [
     'todayquiz', 'kalkaquiz', 'mystats', 'my_analysis', 'webquiz','testme',
 
     # CA Reference, Glossary & Vault
-    'listfile', 'need', 'define', 'newdef','addsection','section',
+    'listfile', 'allfiles', 'need', 'define', 'newdef','addsection','section', # <--- Added 'allfiles' here
     'dt', 'gst', 'llp', 'fema', 'gca', 'caro', 'sa', 'as',
 
     # Written Practice
@@ -686,7 +686,16 @@ def handle_vault_callbacks(call: types.CallbackQuery):
             group, subject, podcast_format = parts[2], parts[3], parts[4]
             text, markup = create_compact_file_list_page(group, subject, 'Podcasts', page=1, podcast_format=podcast_format)
             edit_if_changed(text, markup)
-
+    except Exception as e:
+        report_error_to_admin(f"Error in vault navigation callback '{call.data}': {traceback.format_exc()}")
+        try:
+            # Try to edit the message to show an error
+            error_text = "❌ An error occurred. Please try again from /listfile."
+            bot.edit_message_text(error_text, call.message.chat.id, call.message.message_id)
+        except Exception as inner_e:
+            # If editing fails (e.g., message deleted), log it but don't crash
+            print(f"Could not edit message to show vault error: {inner_e}")
+            pass # Prevent crashing the bot
         elif action == 'page':
             page = int(parts[2])
             group = parts[3]
@@ -3128,6 +3137,7 @@ def handle_info_command(msg: types.Message):
 <code>/mystats</code> - 📊 My Personal Stats
 <code>/my_analysis</code> - 🔍 My Deep Analysis
 <code>/testme</code> - 🧠 Start any Law/AS/SA/CARO Section Quiz
+<code>/webquiz</code> - 🚀 Launch Web Quiz Challenge
 
 ━━ <b>CA Reference Library</b> ━━
 <code>/dt [section]</code> - 💰 Income Tax Act
@@ -3141,7 +3151,8 @@ def handle_info_command(msg: types.Message):
 <code>/as [number]</code> - 📊 Accounting Standards
 
 ━━ <b>Resources & Notes</b> ━━
-<code>/listfile</code> - 🗂️ Browse All Notes
+<code>/listfile</code> - 🗂️ Browse Notes (Menu)
+<code>/allfiles</code> - 📜 Full Index (Clickable)  # <--- Added this line
 <code>/need [keyword]</code> - 🔎 Search for Notes
 <code>/define [term]</code> - 📖 Get Definition
 <code>/newdef</code> - ✍️ Add a New Definition
