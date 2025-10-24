@@ -47,7 +47,7 @@ PUBLIC_GROUP_COMMANDS = [
     'todayquiz', 'kalkaquiz', 'mystats', 'my_analysis', 'webquiz','testme',
 
     # CA Reference, Glossary & Vault
-    'listfile', 'allfiles', 'need', 'define', 'newdef','addsection','section', # <--- Added 'allfiles' here
+    'listfile', 'need', 'define', 'newdef','addsection','section',
     'dt', 'gst', 'llp', 'fema', 'gca', 'caro', 'sa', 'as',
 
     # Written Practice
@@ -533,27 +533,29 @@ def membership_required(func):
 # =============================================================================
 
 """
-Creates a visually enhanced, paginated file list with clickable file names.
+Creates a visually enhanced, paginated file list with file-type emojis.
 """
 def create_compact_file_list_page(group, subject, resource_type, page=1, podcast_format=None):
     """
-    Creates a visually enhanced, paginated file list with clickable file names in the list.
+    Creates a visually enhanced, paginated file list with subject-specific emojis.
     Now handles both regular resource types and the new podcast_format.
     """
     try:
         offset = (page - 1) * FILES_PER_PAGE
 
-        # Build the query dynamically (same as before)
+        # Build the query dynamically
         count_query = supabase.table('resources').select('id', count='exact').eq('group_name', group).eq('subject', subject)
-        files_query = supabase.table('resources').select('id, file_name, file_type, podcast_format').eq('group_name', group).eq('subject', subject) # Select only needed fields
+        files_query = supabase.table('resources').select('*').eq('group_name', group).eq('subject', subject)
 
         header_title = resource_type # Default title
 
         if podcast_format:
+            # If we are looking for podcasts, filter by the new column
             count_query = count_query.eq('podcast_format', podcast_format)
             files_query = files_query.eq('podcast_format', podcast_format)
             header_title = f"Podcasts - {podcast_format.capitalize()}"
         else:
+            # Otherwise, filter by the old resource_type column
             count_query = count_query.eq('resource_type', resource_type)
             files_query = files_query.eq('resource_type', resource_type)
 
@@ -574,48 +576,36 @@ def create_compact_file_list_page(group, subject, resource_type, page=1, podcast
         message_text = f"{header_emoji} <b>{escape(subject)} - {escape(header_title)}</b>\n"
         message_text += f"📄 Page {page}/{total_pages} ({total_files} total files)\n\n"
 
-        # --- MODIFICATION START ---
-        markup = types.InlineKeyboardMarkup() # Start with an empty markup for nav buttons later
-
+        buttons = []
         for i, resource in enumerate(files_on_page, 1):
             file_name = resource.get('file_name', '')
-            resource_id = resource['id']
-            callback_data = f"getfile_{resource_id}" # Callback data to trigger file fetch
+            emoji = "🎧" if resource.get('podcast_format') == 'audio' else "🎬" if resource.get('podcast_format') == 'video' else subject_emojis.get(subject, "📎")
+            message_text += f"<code>{i}.</code> {emoji} {escape(file_name)}\n"
+            buttons.append(types.InlineKeyboardButton(f"{emoji} {i}", callback_data=f"getfile_{resource['id']}"))
 
-            # Make the file name clickable using a special Telegram link format
-            # tg://btn/callback?data=... triggers the callback handler directly
-            clickable_link = f'tg://btn/callback?data={callback_data}'
+        markup = types.InlineKeyboardMarkup(row_width=5)
+        markup.add(*buttons)
 
-            # Add the numbered, clickable file name to the message text
-            # No emoji here
-            message_text += f"<code>{i}.</code> <a href=\"{clickable_link}\">{escape(file_name)}</a>\n"
-
-        # --- MODIFICATION END ---
-        # Note: No numbered buttons are added here anymore.
-
-        # --- Dynamic Navigation Buttons (Same as before) ---
+        # --- Dynamic Navigation Buttons ---
         nav_buttons = []
-        # Construct the base callback data for pagination links
-        page_callback_parts = ["v", "page", "{page}", group, subject, resource_type]
+        page_callback_base = f"v_page_{{page}}_{group}_{subject}_{resource_type}"
         if podcast_format:
-            page_callback_parts.append(podcast_format)
-        page_callback_base = "_".join(page_callback_parts)
+            page_callback_base += f"_{podcast_format}"
 
         if page > 1:
             nav_buttons.append(types.InlineKeyboardButton("⬅️ Prev", callback_data=page_callback_base.format(page=page-1)))
 
-        # Back button logic (Same as before)
-        back_callback_parts = ["v", "subj", group, subject]
-        # If it's a podcast list, the back button goes to the podcast type selection instead
+        # Back button logic
         if podcast_format:
-             back_callback_parts = ["v", "type", group, subject, "Podcasts"]
-        nav_buttons.append(types.InlineKeyboardButton("↩️ Back", callback_data="_".join(back_callback_parts)))
-
+             # If it's a podcast list, the back button goes to the subject menu
+            nav_buttons.append(types.InlineKeyboardButton("↩️ Back", callback_data=f"v_subj_{group}_{subject}"))
+        else:
+            nav_buttons.append(types.InlineKeyboardButton("↩️ Back", callback_data=f"v_subj_{group}_{subject}"))
 
         if page < total_pages:
             nav_buttons.append(types.InlineKeyboardButton("Next ➡️", callback_data=page_callback_base.format(page=page+1)))
 
-        markup.row(*nav_buttons) # Add only the navigation buttons
+        markup.row(*nav_buttons)
         return message_text, markup
 
     except Exception as e:
@@ -632,7 +622,6 @@ def handle_vault_callbacks(call: types.CallbackQuery):
     action = parts[1]
     
     def edit_if_changed(new_text, new_markup):
-        # This check prevents "message is not modified" errors
         if call.message.text != new_text or call.message.reply_markup != new_markup:
             try:
                 bot.edit_message_text(new_text, call.message.chat.id, call.message.message_id, reply_markup=new_markup, parse_mode="HTML")
@@ -641,7 +630,6 @@ def handle_vault_callbacks(call: types.CallbackQuery):
                     raise e
 
     try:
-        # <<< START OF THE MAIN TRY BLOCK >>>
         if action == 'main':
             markup = types.InlineKeyboardMarkup(row_width=2)
             markup.add(
@@ -661,40 +649,22 @@ def handle_vault_callbacks(call: types.CallbackQuery):
             markup = types.InlineKeyboardMarkup(row_width=2)
             markup.add(*buttons)
             markup.add(types.InlineKeyboardButton("↩️ Back to Main Menu", callback_data="v_main"))
-            # Corrected formatting for the text
-            text = f"🔵 **{escape(group_name)}**\n\nPlease select a subject:"
+            text = f"🔵 **{group_name}**\n\nPlease select a subject:"
             edit_if_changed(text, markup)
 
-        # <<< FIX: This entire block was moved inside the try...except structure >>>
         elif action == 'subj':
             group_name, subject = parts[2], '_'.join(parts[3:])
-            
-            resource_types_to_show = ["ICAI Module", "Faculty Notes", "QPs & Revision"]
-            
-            if subject != "General":
-                resource_types_to_show.append("Podcasts")
-                
-            type_buttons_info = {
-                "ICAI Module": "📘 ICAI Module",
-                "Faculty Notes": "✍️ Faculty Notes",
-                "QPs & Revision": "📝 QPs & Revision",
-                "Podcasts": "🎙️ Podcasts"
-            }
-                
+            resource_types = ["ICAI Module", "Faculty Notes", "QPs & Revision", "Podcasts"]
             buttons = []
-            for rtype in resource_types_to_show:
-                 button_label = type_buttons_info.get(rtype, f"📄 {rtype}")
-                 callback_data = f"v_type_{group_name}_{subject}_{rtype}"
-                 buttons.append(types.InlineKeyboardButton(button_label, callback_data=callback_data))
-
+            buttons.append(types.InlineKeyboardButton(f"📘 ICAI Module", callback_data=f"v_type_{group_name}_{subject}_ICAI Module"))
+            buttons.append(types.InlineKeyboardButton(f"✍️ Faculty Notes", callback_data=f"v_type_{group_name}_{subject}_Faculty Notes"))
+            buttons.append(types.InlineKeyboardButton(f"📝 QPs & Revision", callback_data=f"v_type_{group_name}_{subject}_QPs & Revision"))
+            buttons.append(types.InlineKeyboardButton(f"🎙️ Podcasts", callback_data=f"v_type_{group_name}_{subject}_Podcasts"))
+            
             markup = types.InlineKeyboardMarkup(row_width=2)
             markup.add(*buttons)
             markup.add(types.InlineKeyboardButton("↩️ Back to Subjects", callback_data=f"v_group_{group_name}"))
-            
-            subject_emojis = { "Law": "⚖️", "Taxation": "💰", "GST": "🧾", "Accounts": "📊", "Auditing": "🔍", "Costing": "🧮", "SM": "📈", "FM & SM": "📈", "General": "🌟" }
-            header_emoji = subject_emojis.get(subject, "📚")
-
-            text = f"{header_emoji} <b>{escape(subject)}</b>\n\nWhat are you looking for?"
+            text = f"📚 <b>{subject}</b>\n\nWhat are you looking for?"
             edit_if_changed(text, markup)
 
         elif action == 'type':
@@ -706,7 +676,7 @@ def handle_vault_callbacks(call: types.CallbackQuery):
                     types.InlineKeyboardButton("🎬 Video", callback_data=f"v_podcast_{group}_{subject}_video")
                 )
                 markup.add(types.InlineKeyboardButton("↩️ Back", callback_data=f"v_subj_{group}_{subject}"))
-                text = f"🎙️ <b>{escape(subject)} - Podcasts</b>\n\nPlease choose a format:"
+                text = f"🎙️ <b>{subject} - Podcasts</b>\n\nPlease choose a format:"
                 edit_if_changed(text, markup)
             else:
                 text, markup = create_compact_file_list_page(group, subject, rtype, page=1)
@@ -716,7 +686,7 @@ def handle_vault_callbacks(call: types.CallbackQuery):
             group, subject, podcast_format = parts[2], parts[3], parts[4]
             text, markup = create_compact_file_list_page(group, subject, 'Podcasts', page=1, podcast_format=podcast_format)
             edit_if_changed(text, markup)
-            
+
         elif action == 'page':
             page = int(parts[2])
             group = parts[3]
@@ -725,19 +695,14 @@ def handle_vault_callbacks(call: types.CallbackQuery):
             podcast_format = parts[6] if len(parts) > 6 and parts[6] != 'None' else None
             text, markup = create_compact_file_list_page(group, subject, rtype, page=page, podcast_format=podcast_format)
             edit_if_changed(text, markup)
-        # <<< END OF THE MOVED BLOCK >>>
 
     except Exception as e:
-        # <<< This is the correctly placed `except` block >>>
-        report_error_to_admin(f"Error in vault navigation callback '{call.data}': {traceback.format_exc()}")
+        report_error_to_admin(f"Error in vault navigation: {traceback.format_exc()}")
         try:
-            # Try to edit the message to show an error
             error_text = "❌ An error occurred. Please try again from /listfile."
             bot.edit_message_text(error_text, call.message.chat.id, call.message.message_id)
-        except Exception as inner_e:
-            # If editing fails (e.g., message deleted), log it but don't crash
-            print(f"Could not edit message to show vault error: {inner_e}")
-            pass # Prevent crashing the bot
+        except Exception:
+            pass
 def create_main_menu_keyboard(message: types.Message):
     """
     Creates the main menu keyboard.
@@ -3163,7 +3128,6 @@ def handle_info_command(msg: types.Message):
 <code>/mystats</code> - 📊 My Personal Stats
 <code>/my_analysis</code> - 🔍 My Deep Analysis
 <code>/testme</code> - 🧠 Start any Law/AS/SA/CARO Section Quiz
-<code>/webquiz</code> - 🚀 Launch Web Quiz Challenge
 
 ━━ <b>CA Reference Library</b> ━━
 <code>/dt [section]</code> - 💰 Income Tax Act
@@ -3177,8 +3141,7 @@ def handle_info_command(msg: types.Message):
 <code>/as [number]</code> - 📊 Accounting Standards
 
 ━━ <b>Resources & Notes</b> ━━
-<code>/listfile</code> - 🗂️ Browse Notes (Menu)
-<code>/allfiles</code> - 📜 Full Index (Clickable)  # <--- Added this line
+<code>/listfile</code> - 🗂️ Browse All Notes
 <code>/need [keyword]</code> - 🔎 Search for Notes
 <code>/define [term]</code> - 📖 Get Definition
 <code>/newdef</code> - ✍️ Add a New Definition
@@ -4092,145 +4055,7 @@ def handle_interlink_callbacks(call: types.CallbackQuery):
     elif call.data == 'show_info':
         bot.answer_callback_query(call.id)
         handle_info_command(call.message)
-# =============================================================================
-# 8. TELEGRAM BOT HANDLERS - NEW ALLFILES INDEX COMMAND
-# =============================================================================
 
-@bot.message_handler(commands=['allfiles'])
-@membership_required
-def handle_allfiles_command(msg: types.Message):
-    """
-    Generates a clickable index of all files, grouped by Group and Subject.
-    Clicking a file name inserts '/getfile {id}' into the user's input.
-    """
-    try:
-        # Add activity tracking
-        supabase.rpc('update_chat_activity', {'p_user_id': msg.from_user.id, 'p_user_name': msg.from_user.username or msg.from_user.first_name}).execute()
-    except Exception as e:
-        print(f"Activity tracking failed for user {msg.from_user.id} in /allfiles command: {e}")
-
-    try:
-        # Fetch all necessary data from Supabase, ordered correctly
-        response = supabase.table('resources') \
-            .select('id, file_name, subject, group_name, podcast_format, file_type') \
-            .order('group_name') \
-            .order('subject') \
-            .order('file_name') \
-            .execute()
-
-        if not response.data:
-            bot.reply_to(msg, "The resource vault appears to be empty right now.")
-            return
-
-        # Start building the message string with HTML
-        message_text = "<b>📚 Resource Index 📚</b>\n\n"
-        current_group = ""
-        current_subject = ""
-        subject_emojis = { "Law": "⚖️", "Taxation": "💰", "GST": "🧾", "Accounts": "📊", "Auditing": "🔍", "Costing": "🧮", "SM": "📈", "FM & SM": "📈", "General": "🌟" }
-
-        for resource in response.data:
-            res_group = resource.get('group_name', 'Uncategorized')
-            res_subject = resource.get('subject', 'Uncategorized')
-            res_id = resource['id']
-            res_name = escape(resource.get('file_name', 'Unknown File'))
-            podcast_format = resource.get('podcast_format')
-            file_type = resource.get('file_type', '')
-
-            # Add Group Header if it changes
-            if res_group != current_group:
-                current_group = res_group
-                # Add extra space before a new group, except for the first one
-                if current_subject: # Check if we already printed something
-                    message_text += "\n"
-                # FIX: Replaced "---" with a clean, bolded header
-                message_text += f"🔵 <b>{escape(current_group)}</b> 🔵\n"
-                current_subject = "" # Reset subject when group changes
-
-            # Add Subject Header if it changes
-            if res_subject != current_subject:
-                current_subject = res_subject
-                subject_emoji = subject_emojis.get(current_subject, "📚")
-                message_text += f"\n<b>{subject_emoji} {escape(current_subject)}:</b>\n"
-
-            # Determine the file emoji
-            if podcast_format == 'audio':
-                file_emoji = "🎧"
-            elif podcast_format == 'video':
-                file_emoji = "🎬"
-            elif file_type.startswith('image/'):
-                file_emoji = "🖼️"
-            elif file_type == 'application/pdf':
-                file_emoji = "📄"
-            else:
-                file_emoji = "📎" # Generic attachment
-
-            # Add the clickable file link
-            # The command is '/getfile' and the data passed is the resource id
-            command_link = f'tg://btn/getfile?data={res_id}'
-            message_text += f' • <a href="{command_link}">{file_emoji} {res_name}</a>\n'
-
-        # Send the complete message
-        # Use reply_parameters for robustness if the original command gets deleted
-        reply_params = types.ReplyParameters(message_id=msg.message_id, allow_sending_without_reply=True)
-        bot.send_message(msg.chat.id, message_text, parse_mode="HTML", reply_parameters=reply_params, disable_web_page_preview=True)
-
-    except Exception as e:
-        report_error_to_admin(f"Error generating /allfiles index: {traceback.format_exc()}")
-        bot.reply_to(msg, "❌ An error occurred while generating the file index.")
-# Ensure this handler exists in your bot.py
-@bot.message_handler(commands=['getfile'])
-@membership_required
-def handle_getfile_command(msg: types.Message):
-    try:
-        parts = msg.text.split(' ', 1)
-        if len(parts) < 2 or not parts[1].strip().isdigit():
-            bot.reply_to(msg, "Invalid command format. Please click a link from the /allfiles index.")
-            return
-
-        resource_id = int(parts[1].strip())
-
-        # Fetch file details from Supabase using the database ID
-        response = supabase.table('resources').select('file_id, file_name, description, file_type, podcast_format').eq('id', resource_id).single().execute()
-
-        if not response.data:
-            bot.reply_to(msg, "❌ File not found. It might have been deleted.")
-            return
-
-        file_info = response.data
-        file_id_to_send = file_info['file_id']
-        file_name_to_send = file_info['file_name']
-        description = file_info.get('description', file_name_to_send)
-        file_type = file_info.get('file_type', '')
-        podcast_format = file_info.get('podcast_format') # Get podcast format
-
-        # Create the caption using your existing function
-        stylish_caption = create_stylish_caption(file_name_to_send, description)
-
-        # Determine how to send the file based on type
-        sender_func = bot.send_document # Default
-        if podcast_format == 'audio' or file_type.startswith('audio/'):
-            sender_func = bot.send_audio
-        elif podcast_format == 'video' or file_type.startswith('video/'):
-            sender_func = bot.send_video
-        elif file_type.startswith('image/'):
-            sender_func = bot.send_photo
-        # Add elif for other specific types if needed
-
-        # Use the chosen sender function
-        sender_func(
-            msg.chat.id,
-            file_id_to_send,
-            caption=stylish_caption,
-            parse_mode="HTML",
-            reply_to_message_id=msg.message_id
-        )
-
-    except ApiTelegramException as telegram_error:
-        report_error_to_admin(f"Failed to send file via /getfile (ID: {parts[1] if len(parts)>1 else 'N/A'}). Error: {telegram_error}")
-        bot.reply_to(msg, "❌ Failed to send the file. It might be expired or inaccessible.")
-    except Exception as e:
-        report_error_to_admin(f"Error in /getfile command: {traceback.format_exc()}")
-        bot.reply_to(msg, "❌ An error occurred while fetching the file.")
 # --- Vault Command: /listfile ---
 
 @bot.message_handler(commands=['listfile'])
@@ -5459,8 +5284,10 @@ def handle_announcement_steps(msg: types.Message):
     
     # --- STEP 1: AWAITING TITLE ---
     if current_step == 'awaiting_title':
+        # Store the title provided by the admin
         title = msg.text.strip()
         
+        # Validate title length
         if len(title) > 100:
             bot.send_message(msg.chat.id, """⚠️ <b>Title Too Long</b>
 
@@ -5470,9 +5297,11 @@ def handle_announcement_steps(msg: types.Message):
 ✂️ <i>Please make it shorter and try again...</i>""", parse_mode="HTML")
             return
             
+        # Update user state and proceed to the next step
         user_state['data']['title'] = title
         user_state['step'] = 'awaiting_content'
         
+        # Ask the admin for the announcement content
         content_message = f"""✅ <b>Title Saved!</b>
 
 📝 <b>Your Title:</b> "{escape(title)}"
@@ -5494,8 +5323,10 @@ def handle_announcement_steps(msg: types.Message):
         
     # --- STEP 2: AWAITING CONTENT ---
     elif current_step == 'awaiting_content':
+        # Store the content provided by the admin
         content = msg.text.strip()
         
+        # Validate content length
         if len(content) > 2000:
             bot.send_message(msg.chat.id, f"""⚠️ <b>Content Too Long</b>
 
@@ -5505,9 +5336,11 @@ def handle_announcement_steps(msg: types.Message):
 ✂️ <i>Please shorten your message and try again...</i>""", parse_mode="HTML")
             return
             
+        # Update user state and proceed to the next step
         user_state['data']['content'] = content
         user_state['step'] = 'awaiting_priority'
         
+        # Ask the admin for the priority level
         priority_message = f"""✅ <b>Content Saved!</b>
 
 📄 <b>Preview:</b>
@@ -5532,6 +5365,7 @@ def handle_announcement_steps(msg: types.Message):
         
     # --- STEP 3: AWAITING PRIORITY & FINAL CONFIRMATION ---
     elif current_step == 'awaiting_priority':
+        # Get and validate the admin's priority choice
         priority_input = msg.text.strip()
         if priority_input not in ['1', '2', '3', '4']:
             bot.send_message(msg.chat.id, """❌ <b>Invalid Choice</b>
@@ -5541,12 +5375,14 @@ def handle_announcement_steps(msg: types.Message):
 <i>Type just the number...</i>""", parse_mode="HTML")
             return
             
+        # Assemble all the data for the final announcement
         title = user_state['data']['title']
         content = user_state['data']['content']
         time_now_ist = datetime.datetime.now(IST)
         current_time_str = time_now_ist.strftime("%I:%M %p")
         current_date_str = time_now_ist.strftime("%d %B %Y")
         
+        # Determine the visual style based on priority
         if priority_input == '1':
             priority_tag = "📋 <b>ANNOUNCEMENT</b>"
         elif priority_input == '2':
@@ -5556,9 +5392,9 @@ def handle_announcement_steps(msg: types.Message):
         else: # priority_input == '4'
             priority_tag = "🎉 <b>CELEBRATION</b>"
         
-        # FIX: Replaced "---" with a safe Unicode line
-        border = "━━━━━━━━━━━━━━━━━━"
+        border = "---------------------"
         
+        # Create the final formatted announcement text
         final_announcement = f"""{priority_tag}
 
 {border}
@@ -5574,18 +5410,22 @@ def handle_announcement_steps(msg: types.Message):
 
 <b>C.A.V.Y.A Management Team</b> 💝"""
 
+        # Show a preview to the admin with interactive buttons
         preview_message = f"""🎯 <b>ANNOUNCEMENT PREVIEW</b>\n\n{final_announcement}\n\n✅ <b>Ready to post?</b>\n\nThis will be posted and pinned in the Updates topic."""
     
+        # Update the user's state one last time before confirmation
         user_state['data']['final_announcement'] = final_announcement
         user_state['data']['priority_choice'] = priority_input
-        user_state['step'] = 'awaiting_confirmation'
+        user_state['step'] = 'awaiting_confirmation' # Next step is handled by the button callback
 
+        # Create the confirmation buttons
         markup = types.InlineKeyboardMarkup()
         markup.add(
             types.InlineKeyboardButton("✅ Yes, Post & Pin", callback_data="announce_confirm_yes"),
             types.InlineKeyboardButton("❌ No, Cancel", callback_data="announce_confirm_no")
         )
         
+        # Send the preview message with buttons to the admin
         bot.send_message(msg.chat.id, preview_message, reply_markup=markup, parse_mode="HTML")
         
 @bot.callback_query_handler(func=lambda call: call.data.startswith('announce_confirm_'))
@@ -6152,6 +5992,7 @@ def handle_define_command(msg: types.Message):
 # =============================================================================
 # 8. TELEGRAM BOT HANDLERS - GENERIC LAW LIBRARY HANDLER
 # =============================================================================
+
 def generate_law_library_response(msg: types.Message, command: str, table_name: str, act_name: str, emoji: str, lib_key: str):
     """
     A generic master function to handle all law library commands, now with a quiz button.
@@ -6173,22 +6014,23 @@ def generate_law_library_response(msg: types.Message, command: str, table_name: 
             section_data = response.data[0]
             example_text = (section_data.get('example') or "No example available.").replace("{user_name}", user_name)
 
-            # FIX: Removed the invalid closing </pre> tags
             message_text = (
                 f"{emoji} <b>{escape(act_name)}</b>\n"
                 f"━━━━━━━━━━━━━━━━━━\n\n"
                 f"📖 <b>Section/Standard <code>{escape(section_data.get('section_number', 'N/A'))}</code></b>\n"
                 f"<b>{escape(section_data.get('title', 'No Title'))}</b>\n\n"
-                f"──────────────────\n\n"
+                f"──────────────────</pre>\n\n"
                 f"<b>Summary:</b>\n"
                 f"<blockquote>{escape(section_data.get('summary', 'No summary available.'))}</blockquote>\n"
                 f"<b>Practical Example:</b>\n"
                 f"<blockquote>{escape(example_text)}</blockquote>\n"
-                f"━━━━━━━━━━━━━━━━━━\n"
+                f"━━━━━━━━━━━━━━━━━━</pre>\n"
                 f"⚠️ <i>This is a simplified summary from ICAI materials for Jan 26 attempt. Always cross-verify with the latest amendments.</i>"
             )
 
+            # --- THIS IS THE NEW PART ---
             markup = types.InlineKeyboardMarkup()
+            # We remove the emoji from the button text for a cleaner look
             clean_act_name = act_name.split(' ', 1)[-1] 
             markup.add(types.InlineKeyboardButton(f"🧠 Test Your Knowledge on {clean_act_name}", callback_data=f"start_quiz_for_{lib_key}"))
 
@@ -6897,6 +6739,7 @@ def format_section_message(section_data, user_name):
     """
     Formats the section details into a clean, readable message using safe HTML parsing.
     """
+    # This function is already safe and uses HTML. No changes needed.
     safe_user_name = escape(user_name)
     chapter_info = escape(section_data.get('chapter_info', 'N/A'))
     section_number = escape(section_data.get('section_number', ''))
@@ -6904,14 +6747,13 @@ def format_section_message(section_data, user_name):
     summary = escape(section_data.get('summary_hinglish', 'Summary not available.'))
     example = escape(section_data.get('example_hinglish', 'Example not available.')).replace("{user_name}", safe_user_name)
 
-    # FIX: Removed the invalid closing </pre> tags which would cause future errors.
     message_text = (
         f"📖 <b>{chapter_info}</b>\n\n"
         f"<b>Section {section_number}: {it_is_about}</b>\n\n"
         f"<i>It states that:</i>\n"
-        f"{summary}\n\n"  # Removed </pre>
+        f"{summary}</pre>\n\n"
         f"<i>Example:</i>\n"
-        f"{example}\n\n"  # Removed </pre>
+        f"{example}</pre>\n\n"
         f"<i>Disclaimer: Please cross-check with the latest amendments.</i>")
     return message_text
 # =============================================================================
@@ -9011,11 +8853,11 @@ def handle_report_confirmation(call: types.CallbackQuery):
                  bot.send_message(GROUP_ID, "No practice activity (submissions or reviews) was found for yesterday's session.", message_thread_id=QNA_TOPIC_ID)
                  bot.send_message(admin_chat_id, "✅ Report posted (No Activity). Now starting today's session...")
             else:
+                # THE FIX: Converted the entire report card to safe HTML.
                 report_card_text = f"📋 <b>Written Practice Report Card: {datetime.datetime.now().date() - datetime.timedelta(days=1)}</b> 📋\n"
                 
                 if ranked_performers:
-                    # FIX: Replaced "---" with a safe Unicode line
-                    report_card_text += "\n━━━━━━━━━━━━━━━━━━\n<i>🏆 Performance Ranking</i>\n━━━━━━━━━━━━━━━━━━\n"
+                    report_card_text += "\n--- <i>🏆 Performance Ranking</i> ---\n"
                     rank_emojis = ["🥇", "🥈", "🥉"]
                     for i, performer in enumerate(ranked_performers):
                         emoji = rank_emojis[i] if i < 3 else f"<b>{i+1}.</b>"
@@ -9027,15 +8869,13 @@ def handle_report_confirmation(call: types.CallbackQuery):
                         report_card_text += f"{emoji} <b>{submitter_name}</b> - {marks_awarded}/{total_marks} ({percentage}%)\n  <i>(Checked by: {checker_name})</i>\n"
                 
                 if pending_reviews:
-                    # FIX: Replaced "---" with a safe Unicode line
-                    report_card_text += "\n━━━━━━━━━━━━━━━━━━\n<i>⚠️ Submissions Not Checked</i>\n━━━━━━━━━━━━━━━━━━\n"
+                    report_card_text += "\n--- <i>⚠️ Submissions Not Checked</i> ---\n"
                     for pending in pending_reviews:
                         submitter_name = escape(pending.get('submitter_name', 'N/A'))
                         checker_name = escape(pending.get('checker_name', 'N/A'))
                         report_card_text += f"• <b>{submitter_name}</b>'s answer is pending review by <b>{checker_name}</b>.\n"
-                
-                # FIX: Replaced "---" with a safe Unicode line
-                report_card_text += "\n━━━━━━━━━━━━━━━━━━\nGreat effort everyone! Keep practicing! ✨"
+
+                report_card_text += "\n--- \nGreat effort everyone! Keep practicing! ✨"
                 bot.send_message(GROUP_ID, report_card_text, parse_mode="HTML", message_thread_id=QNA_TOPIC_ID)
                 bot.send_message(admin_chat_id, "✅ Report posted successfully. Now starting today's session...")
         
