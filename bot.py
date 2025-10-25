@@ -2653,10 +2653,10 @@ Hello Admin! Here are your available tools.
 def handle_poll_answer(poll_answer: types.PollAnswer):
     """
     This is the single, master handler for all poll answers.
-    It intelligently routes the answer to the correct logic for Team Battles,
+    It intelligently routes the answer to the correct logic for
     Marathons, or Random Quizzes.
     """
-    global team_battle_session
+    # Removed global team_battle_session as the feature is gone
     poll_id_str = poll_answer.poll_id
     user_info = poll_answer.user
     selected_option = poll_answer.option_ids[0] if poll_answer.option_ids else None
@@ -2666,10 +2666,7 @@ def handle_poll_answer(poll_answer: types.PollAnswer):
 
     try:
         with session_lock:
-                
-                return # Stop processing after handling team battle answer
-
-# --- ROUTE 1: Check if it's a Quiz Marathon poll ---
+            # --- ROUTE 1: Check if it's a Quiz Marathon poll ---
             session_id = str(GROUP_ID)
             marathon_session = QUIZ_SESSIONS.get(session_id)
             if marathon_session and marathon_session.get('is_active') and poll_id_str == marathon_session.get('current_poll_id'):
@@ -2681,15 +2678,20 @@ def handle_poll_answer(poll_answer: types.PollAnswer):
                         'topic_scores': {}, 'performance_breakdown': {}
                     }
                 participant = participants[user_info.id]
-                
+
                 time_taken = (datetime.datetime.now(IST) - marathon_session['question_start_time']).total_seconds()
-                
+
                 # Use the index of the question that was just sent, which is now reliable
+                # Safety check for index out of bounds
                 question_idx = marathon_session['current_question_index'] - 1
+                if question_idx < 0 or question_idx >= len(marathon_session['questions']):
+                     print(f"MARATHON LOG: Invalid question index {question_idx} for session {session_id}. Ignoring poll answer.")
+                     return # Ignore if index is invalid
+
                 question_data = marathon_session['questions'][question_idx]
                 correct_option_index = ['A', 'B', 'C', 'D'].index(str(question_data.get('Correct Answer', 'A')).upper())
                 is_correct = (selected_option == correct_option_index)
-                
+
                 participant['questions_answered'] += 1
                 participant['total_time'] += time_taken
                 if is_correct:
@@ -2704,7 +2706,7 @@ def handle_poll_answer(poll_answer: types.PollAnswer):
                 breakdown['time'] += time_taken
                 if is_correct:
                     breakdown['correct'] += 1
-                
+
                 # Add clearer logging for easier debugging
                 print(f"MARATHON LOG | User: {participant.get('name')} | Q_Index: {question_idx} | Correct: {correct_option_index} | Chosen: {selected_option} | Result: {is_correct}")
 
@@ -2716,28 +2718,28 @@ def handle_poll_answer(poll_answer: types.PollAnswer):
                 q_stats['time'] += time_taken
                 if is_correct:
                     q_stats['correct'] += 1
-                return
+                return # End processing for Marathon
 
-# --- ROUTE 2: Check if it's a Random Quiz poll ---
-        active_poll_info = next((poll for poll in active_polls if poll['poll_id'] == poll_id_str), None)
-        if active_poll_info and active_poll_info.get('type') == 'random_quiz':
-            is_correct = (selected_option == active_poll_info['correct_option_id'])
-            score_percentage = 100.0 if is_correct else 0.0
-            time_taken = 0 # Placeholder, as exact time isn't available
+            # --- ROUTE 2: Check if it's a Random Quiz poll ---
+            active_poll_info = next((poll for poll in active_polls if poll['poll_id'] == poll_id_str), None)
+            if active_poll_info and active_poll_info.get('type') == 'random_quiz':
+                is_correct = (selected_option == active_poll_info['correct_option_id'])
+                score_percentage = 100.0 if is_correct else 0.0
+                time_taken = 0 # Placeholder, as exact time isn't available
 
-            try:
-                record_quiz_participation(user_info.id, user_info.first_name, score_percentage, time_taken)
-                print(f"Recorded random quiz participation for {user_info.first_name} (Correct: {is_correct}).")
-                # Optionally, keep the leaderboard update if you want both systems
-                # if is_correct:
-                #     supabase.rpc('increment_score', {
-                #         'user_id_in': user_info.id,
-                #         'user_name_in': user_info.first_name
-                #     }).execute()
-            except Exception as tracking_error:
-                print(f"Error: Failed to record Random Quiz participation for {user_info.first_name}: {tracking_error}")
-                report_error_to_admin(f"Failed core tracking for Random Quiz user {user_info.first_name}:\n{tracking_error}")
-            return # Stop processing after handling random quiz
+                try:
+                    record_quiz_participation(user_info.id, user_info.first_name, score_percentage, time_taken)
+                    print(f"Recorded random quiz participation for {user_info.first_name} (Correct: {is_correct}).")
+                    # Optionally, keep the leaderboard update if you want both systems
+                    # if is_correct:
+                    #     supabase.rpc('increment_score', {
+                    #         'user_id_in': user_info.id,
+                    #         'user_name_in': user_info.first_name
+                    #     }).execute()
+                except Exception as tracking_error:
+                    print(f"Error: Failed to record Random Quiz participation for {user_info.first_name}: {tracking_error}")
+                    report_error_to_admin(f"Failed core tracking for Random Quiz user {user_info.first_name}:\n{tracking_error}")
+                return # Stop processing after handling random quiz
 
     except Exception as e:
         print(f"Error in the master poll answer handler: {traceback.format_exc()}")
