@@ -666,13 +666,13 @@ def handle_vault_callbacks(call: types.CallbackQuery):
             buttons = []
         # Create buttons based on the dynamic list
             if "ICAI Module" in resource_types:
-            buttons.append(types.InlineKeyboardButton(f"📘 ICAI Module", callback_data=f"v_type_{group_name}_{subject}_ICAI Module"))
+                buttons.append(types.InlineKeyboardButton(f"📘 ICAI Module", callback_data=f"v_type_{group_name}_{subject}_ICAI Module"))
             if "Faculty Notes" in resource_types:
-            buttons.append(types.InlineKeyboardButton(f"✍️ Faculty Notes", callback_data=f"v_type_{group_name}_{subject}_Faculty Notes"))
+                buttons.append(types.InlineKeyboardButton(f"✍️ Faculty Notes", callback_data=f"v_type_{group_name}_{subject}_Faculty Notes"))
             if "QPs & Revision" in resource_types:
-            buttons.append(types.InlineKeyboardButton(f"📝 QPs & Revision", callback_data=f"v_type_{group_name}_{subject}_QPs & Revision"))
+                buttons.append(types.InlineKeyboardButton(f"📝 QPs & Revision", callback_data=f"v_type_{group_name}_{subject}_QPs & Revision"))
             if "Podcasts" in resource_types:
-             buttons.append(types.InlineKeyboardButton(f"🎙️ Podcasts", callback_data=f"v_type_{group_name}_{subject}_Podcasts"))
+                buttons.append(types.InlineKeyboardButton(f"🎙️ Podcasts", callback_data=f"v_type_{group_name}_{subject}_Podcasts"))
 
             markup = types.InlineKeyboardMarkup(row_width=2)
             markup.add(*buttons)
