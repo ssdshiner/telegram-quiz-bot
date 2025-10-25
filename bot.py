@@ -2484,8 +2484,7 @@ def update_battle_dashboard(chat_id, session_id, last_event=""):
         if "message is not modified" not in e.description:
             print(f"Could not edit dashboard: {e}")
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith('pwrup_'))
-def handle_powerup_selection(call: types.CallbackQuery):
+
 def send_final_battle_report(chat_id, session):
     """ Sends the final battle report and records participation. """
     global team_battle_session # Ensure we can clear it
