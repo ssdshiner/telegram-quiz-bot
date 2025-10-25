@@ -292,7 +292,8 @@ def report_error_to_admin(error_message: str):
             plain_error = f"🚨 BOT ERROR 🚨\n\n{str(error_message)[:3500]}"
             bot.send_message(ADMIN_USER_ID, plain_error)
         except Exception as final_e:
-            print(f"CRITICAL: Failed even to send plain text error report: {final_e}")min: {e}")
+            # This is the corrected line
+            print(f"CRITICAL: Failed even to send plain text error report: {final_e}")
 
 def is_admin(user_id):
     """Checks if a user is the bot admin."""
