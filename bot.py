@@ -191,6 +191,11 @@ except Exception as e:
 # --- Global In-Memory Storage ---
 active_polls = []
 scheduled_tasks = []
+# --- Global Flags for Scheduled Auto-Posts ---
+last_daily_content_day = -1    # Tracks the day morning content (law/def) was sent
+last_daily_resource_day = -1   # Tracks the day evening resource file was sent
+PAUSE_AUTO_SCHEDULES = False   # Master switch to pause auto-posts for the day
+pause_command_date = None      # Stores the date when the pause command was last used
 # Temporary storage for batch photo uploads
 photo_batches = {} # Stores photos by media_group_id or user_id
 batch_timers = {} # Stores timers to process the batch
@@ -910,7 +915,27 @@ def bot_is_target(message: types.Message):
 # =============================================================================
 # 6. BACKGROUND SCHEDULER & DATA MANAGEMENT
 # =============================================================================
+@bot.message_handler(commands=['pause_schedules'])
+@admin_required
+def handle_pause_schedules(msg: types.Message):
+    """
+    Pauses all automatic scheduled messages (daily content, resources, random quizzes) for the rest of the day.
+    """
+    global PAUSE_AUTO_SCHEDULES, pause_command_date
+    if not msg.chat.type == 'private':
+        bot.reply_to(msg, "🤫 Please use this command in a private chat with me.")
+        return
 
+    # Check if already paused today
+    ist_tz = timezone(timedelta(hours=5, minutes=30))
+    today = datetime.datetime.now(ist_tz).date()
+    if PAUSE_AUTO_SCHEDULES and pause_command_date == today:
+        bot.send_message(msg.chat.id, "⏸️ Automatic messages are already paused for today.")
+        return
+
+    PAUSE_AUTO_SCHEDULES = True
+    pause_command_date = today # Record the date paused
+    bot.send_message(msg.chat.id, "✅ Okay, I have paused all automatic scheduled messages (daily content, resources, random quizzes) for the rest of today. They will resume automatically tomorrow.")
 def record_quiz_participation(user_id, user_name, score_achieved, time_taken_seconds):
     """
     Records a user's participation data into all relevant Supabase tables.
@@ -1375,11 +1400,168 @@ def background_worker():
             current_day = current_time_ist.day
             current_hour = current_time_ist.hour
             
-            # --- Reset daily flags at midnight ---
-            if current_hour == 0:
+# --- Reset daily flags at midnight ---
+            if current_hour == 0 and current_day != last_daily_check_day: # Check against a known daily flag to ensure it runs only once
                 morning_news_sent = False
                 evening_news_sent = False
+                last_daily_content_day = -1 # Reset morning content flag
+                last_daily_resource_day = -1 # Reset evening resource flag
 
+                # Reset pause flag only if the pause was initiated on a previous day
+                ist_tz = timezone(timedelta(hours=5, minutes=30))
+                today = datetime.datetime.now(ist_tz).date()
+                if pause_command_date is not None and pause_command_date < today:
+                    PAUSE_AUTO_SCHEDULES = False
+                    pause_command_date = None
+                    print("🔄 Resetting auto-schedule pause status for the new day.")
+
+                # Keep track of the last day checks were run/reset
+                last_daily_check_day = current_day # Update the day tracker
+                last_schedule_announce_day = current_day # Also update schedule tracker if using it
+
+                print("☀️ Resetting all daily flags for the new day.")
+# --- Daily Law/Definition Content (10:00 AM IST) ---
+            if current_hour == 10 and last_daily_content_day != current_day and not PAUSE_AUTO_SCHEDULES:
+                print("⏰ Time for daily content post...")
+                message_to_send = ""
+                content_type = ""
+                try:
+                    choice = random.choice(['law', 'definition'])
+
+                    if choice == 'law':
+                        content_type = 'Law Section'
+                        lib_key = random.choice(list(LAW_LIBRARIES.keys()))
+                        library = LAW_LIBRARIES[lib_key]
+                        print(f"   Attempting to fetch random entry from: {library['table']}")
+                        # Assuming 'get_random_law_entries' RPC exists and returns section_number, title, summary
+                        response = supabase.rpc('get_random_law_entries', {'table_name_input': library['table'], 'count_input': 1}).execute()
+                        if response.data:
+                            entry = response.data[0]
+                            section_num = escape(entry.get('section_number', 'N/A'))
+                            title = escape(entry.get('title', 'N/A'))
+                            summary = escape(entry.get('summary', 'No summary available.'))
+                            # Find the command associated with this lib_key
+                            command = next((cmd for cmd, details in LAW_LIBRARIES.items() if details['table'] == library['table']), None)
+                            command_hint = f"Tap <code>/{command} {section_num}</code> for more details!" if command else ""
+
+                            message_to_send = (
+                                f"🏛️ **Daily Legal Bite!** 🏛️\n\n"
+                                f"📚 From: **{library['name']}**\n\n"
+                                f"🔑 **{section_num}: {title}**\n\n"
+                                f"<blockquote>{summary}</blockquote>\n\n"
+                                f"{command_hint}"
+                            )
+                        else:
+                             print(f"   No data returned from {library['table']}.")
+
+                    elif choice == 'definition':
+                        content_type = 'Definition'
+                        print("   Attempting to fetch random definition from GSheet...")
+                        workbook = get_gsheet()
+                        if workbook:
+                            try:
+                                sheet = workbook.worksheet('Glossary') # Ensure sheet name is correct
+                                all_values = sheet.get_all_values()
+                                if len(all_values) > 1: # Header row + data
+                                    random_row = random.choice(all_values[1:]) # Skip header
+                                    term = escape(random_row[1]) # Assuming Term is in Col B
+                                    definition = escape(random_row[2]) # Assuming Definition is in Col C
+                                    category = escape(random_row[3] if len(random_row) > 3 else 'General') # Assuming Category is in Col D
+
+                                    message_to_send = (
+                                        f"📖 **Term of the Day!** 📖\n\n"
+                                        f"🔑 **Term:** <code>{term}</code>\n"
+                                        f"📚 **Category:** <i>{category}</i>\n\n"
+                                        f"<blockquote>{definition}</blockquote>"
+                                    )
+                                else:
+                                    print("   Glossary sheet has no definitions.")
+                            except Exception as gsheet_error:
+                                print(f"   Error accessing GSheet 'Glossary': {gsheet_error}")
+                        else:
+                            print("   Could not connect to Google Sheets.")
+
+                    # Send the message if one was successfully created
+                    if message_to_send:
+                        bot.send_message(GROUP_ID, message_to_send, parse_mode="HTML", message_thread_id=CHATTING_TOPIC_ID) # Send to Chatting topic
+                        last_daily_content_day = current_day
+                        print(f"✅ Sent daily scheduled content ({content_type}).")
+                    else:
+                        # Fallback or Skip: If the first choice failed (e.g., no data), maybe try the other?
+                        # For simplicity now, we just log that we couldn't send anything.
+                        print("ℹ️ Could not generate daily content to send after trying chosen type.")
+                        # To prevent retrying immediately, mark as 'sent' anyway for today
+                        last_daily_content_day = current_day
+
+                except Exception as content_error:
+                    print(f"❌ Error during daily scheduled content generation/sending: {content_error}")
+                    report_error_to_admin(f"Failed to send daily content:\n{traceback.format_exc()}")
+                    # Mark as 'sent' to prevent error loop today
+                    last_daily_content_day = current_day
+# --- Daily Resource File (7:00 PM / 19:00 IST) ---
+            if current_hour == 19 and last_daily_resource_day != current_day and not PAUSE_AUTO_SCHEDULES:
+                print("⏰ Time for daily resource post...")
+                try:
+                    # Fetch one random resource from the 'resources' table
+                    response = supabase.table('resources').select('*').limit(1).execute() # Note: Supabase Python client lacks direct random ordering, fetching 1 might not be truly random across large datasets. Consider a VIEW or RPC if needed.
+                                        # A simple workaround for somewhat random: fetch a few and pick one
+                    offset_res = supabase.table('resources').select('id', count='exact').execute()
+                    total_resources = offset_res.count
+                    if total_resources > 0:
+                         random_offset = random.randint(0, max(0, total_resources - 1))
+                         response = supabase.table('resources').select('*').range(random_offset, random_offset).limit(1).execute()
+
+
+                    if response.data:
+                        resource = response.data[0]
+                        file_id = resource['file_id']
+                        file_name = resource.get('file_name', 'Resource File')
+                        description = resource.get('description', f"Check out this resource: {file_name}")
+                        file_type = resource.get('file_type', '').lower() # Get MIME type
+
+                        # Create a base caption
+                        caption = f"🌙 **Evening Resource Drop!** ✨\n\nCheck out this file:\n\n📄 **{escape(file_name)}**\n\n"
+
+                        # Customize caption and send method based on type
+                        send_method = None
+                        if 'pdf' in file_type:
+                            caption += "📖 Happy reading!"
+                            send_method = bot.send_document
+                        elif 'audio' in file_type:
+                            caption += "🎧 Listen and learn!"
+                            send_method = bot.send_audio
+                        elif 'video' in file_type:
+                            caption += "🎬 Watch and understand!"
+                            send_method = bot.send_video
+                        elif 'zip' in file_type or 'archive' in file_type:
+                            caption += "📦 Contains multiple files. Extract to view."
+                            send_method = bot.send_document
+                        elif 'image' in file_type or 'photo' in file_type:
+                             caption += "🖼️ Visual learning aid!"
+                             send_method = bot.send_photo
+                        else: # Default to document for unknown types
+                            caption += "📎 Check out this file."
+                            send_method = bot.send_document
+
+                        try:
+                            send_method(GROUP_ID, file_id, caption=caption, parse_mode="HTML", message_thread_id=UPDATES_TOPIC_ID) # Send to Updates topic
+                            last_daily_resource_day = current_day
+                            print(f"✅ Sent daily scheduled resource file: {file_name}")
+                        except ApiTelegramException as send_error:
+                             print(f"❌ Failed to send resource file '{file_name}' (ID: {file_id}). Error: {send_error}. Likely invalid file_id.")
+                             report_error_to_admin(f"Failed to send scheduled resource '{file_name}' (File ID: {file_id}). Check if file expired.\nError: {send_error}")
+                             # Mark as 'sent' anyway to avoid retrying the same potentially bad file ID today
+                             last_daily_resource_day = current_day
+                    else:
+                        print("ℹ️ No resources found in the database to send.")
+                        # Mark as 'sent' for today if no resources exist
+                        last_daily_resource_day = current_day
+
+                except Exception as resource_error:
+                    print(f"❌ Error during daily scheduled resource sending: {resource_error}")
+                    report_error_to_admin(f"Failed to send daily resource:\n{traceback.format_exc()}")
+                    # Mark as 'sent' to prevent error loop today
+                    last_daily_resource_day = current_day
             # --- Call the janitor function periodically ---
             if (now - last_cleanup_time) > cleanup_interval:
                 cleanup_stale_user_states()
