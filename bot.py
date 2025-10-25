@@ -278,13 +278,21 @@ def format_duration(seconds: float) -> str:
     return f"{minutes} min {remaining_seconds} sec"
 
 def report_error_to_admin(error_message: str):
-    """Sends a formatted error message to the admin using safe HTML."""
+    """Sends a formatted error message to the admin using safer HTML."""
     try:
-        # This function already uses the safe HTML format, which is great.
-        error_text = f"🚨 <b>BOT ERROR</b> 🚨\n\nAn error occurred:\n\n{escape(str(error_message)[:3500])}</pre>"
+        # Use <code> instead of <pre> for better compatibility
+        # Ensure the error message is escaped properly
+        safe_error_details = escape(str(error_message)[:3500])
+        error_text = f"🚨 <b>BOT ERROR</b> 🚨\n\nAn error occurred:\n\n<code>{safe_error_details}</code>"
         bot.send_message(ADMIN_USER_ID, error_text, parse_mode="HTML")
     except Exception as e:
         print(f"CRITICAL: Failed to report error to admin: {e}")
+        # As a fallback, try sending plain text if HTML fails
+        try:
+            plain_error = f"🚨 BOT ERROR 🚨\n\n{str(error_message)[:3500]}"
+            bot.send_message(ADMIN_USER_ID, plain_error)
+        except Exception as final_e:
+            print(f"CRITICAL: Failed even to send plain text error report: {final_e}")min: {e}")
 
 def is_admin(user_id):
     """Checks if a user is the bot admin."""
@@ -833,9 +841,12 @@ def handle_file_id_list_callbacks(call: types.CallbackQuery):
                     reply_to_message_id=call.message.message_id
                 )
 
-                # Create the /need suggestion message
-                # Using the filename (without path/emoji prefix if needed) for accuracy
-                clean_file_name_for_need = file_name_to_send.split(' - ')[-1].split('(')[0].strip() # Example cleaning, adjust if needed
+# Create the /need suggestion message
+                # Use the filename without the emoji prefix and file extension for better specificity
+                name_parts = file_name_to_send.split(' ', 1)
+                base_name_with_ext = name_parts[-1] if len(name_parts) > 1 else file_name_to_send # Get name after emoji
+                base_name_without_ext = base_name_with_ext.rsplit('.', 1)[0] # Remove the last extension (e.g., .pdf)
+                clean_file_name_for_need = base_name_without_ext.strip() # Remove extra spaces just in case
                 need_command = f"/need {clean_file_name_for_need}"
                 suggestion_text = (
                     f"💡 You can find this file anytime using:\n"
@@ -3303,6 +3314,7 @@ def handle_info_command(msg: types.Message):
 <code>/mystats</code> - 📊 My Personal Stats
 <code>/my_analysis</code> - 🔍 My Deep Analysis
 <code>/testme</code> - 🧠 Start any Law/AS/SA/CARO Section Quiz
+<code>/topicrankers [key]</code> - 🏆 See top scores for a Law Library
 
 ━━ <b>CA Reference Library</b> ━━
 <code>/dt [section]</code> - 💰 Income Tax Act
@@ -8220,6 +8232,54 @@ def send_marathon_results(session_id):
 # =============================================================================
 # 8. TELEGRAM BOT HANDLERS - RANKING & ADMIN UTILITIES
 # =============================================================================
+@bot.message_handler(commands=['topicrankers'])
+@membership_required
+def handle_topic_rankers(msg: types.Message):
+    """ Shows the leaderboard for a specific law library based on /testme quiz results. """
+    try:
+        parts = msg.text.split(' ', 1)
+        if len(parts) < 2 or not parts[1].strip():
+            # Build help text dynamically
+            help_msg = "Please specify a law library. Usage: <code>/topicrankers [key]</code>\n\nAvailable keys:\n"
+            for key, lib in LAW_LIBRARIES.items():
+                help_msg += f"• <code>{key}</code> - {lib['name']}\n"
+            safe_reply(msg, help_msg, parse_mode="HTML")
+            return
+
+        topic_key = parts[1].strip().lower()
+
+        # Find the library details from the LAW_LIBRARIES mapping
+        library_info = LAW_LIBRARIES.get(topic_key)
+        if not library_info:
+            safe_reply(msg, f"❌ Invalid library key '<code>{escape(topic_key)}</code>'. Please use one of the available keys shown in the help.", parse_mode="HTML")
+            return
+
+        library_name_db = library_info['name'] # Get the full name used in the DB
+
+        response = supabase.rpc('get_topic_leaderboard', {'p_library_name': library_name_db}).execute()
+
+        if not response.data:
+            safe_reply(msg, f"📊 No rankings available yet for <b>{escape(library_name_db)}</b>.\n\nBe the first to take the quiz at least twice using <code>/testme</code> or the library command!", parse_mode="HTML")
+            return
+
+        leaderboard_text = f"🏆 <b>Top Rankers for {escape(library_name_db)}</b> 🏆\n"
+        leaderboard_text += "<i>Based on average accuracy in revision quizzes (/testme)</i>\n"
+        leaderboard_text += "━━━━━━━━━━━━━━━━━━\n\n"
+
+        rank_emojis = ["🥇", "🥈", "🥉"]
+        for i, ranker in enumerate(response.data):
+            rank = rank_emojis[i] if i < 3 else f"<b>{i + 1}.</b>"
+            user_name = escape(ranker.get('user_name', 'Unknown'))
+            avg_accuracy = ranker.get('average_accuracy', 0)
+            quiz_count = ranker.get('quiz_count', 0)
+            leaderboard_text += f"{rank} {user_name} - <b>{avg_accuracy:.1f}%</b> avg ({quiz_count} attempts)\n"
+
+        leaderboard_text += "\n━━━━━━━━━━━━━━━━━━\nKeep practicing to improve your rank! 💪"
+        safe_reply(msg, leaderboard_text, parse_mode="HTML")
+
+    except Exception as e:
+        report_error_to_admin(f"Error in /topicrankers: {traceback.format_exc()}")
+        safe_reply(msg, "❌ An error occurred while fetching the topic leaderboard.")
 
 @bot.message_handler(commands=['rankers'])
 @admin_required
