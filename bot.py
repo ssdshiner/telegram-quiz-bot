@@ -1492,7 +1492,23 @@ def save_quiz_result():
         
         new_result_id = response.data[0]['id']
         print(f"API: Successfully saved web quiz result (ID: {new_result_id}) for {data['userName']}.")
+# --- NEW: Call central tracking function ---
+        try:
+            user_id = data['userId']
+            user_name = data['userName']
+            # Score percentage is already provided
+            score_percentage = data['scorePercentage']
+            # Convert percentage back to score ratio (e.g., 80% -> 0.8) for the function if needed,
+            # or adjust the function. Assuming the function expects a percentage 0-100.
+            score_for_tracking = score_percentage
+            time_taken = data.get('timeTakenSeconds', 0)
 
+            record_quiz_participation(user_id, user_name, score_for_tracking, time_taken)
+            print(f"API: Also recorded participation in core tables for {user_name}.")
+        except Exception as tracking_error:
+            print(f"API Error: Failed to call record_quiz_participation for {data['userName']}: {tracking_error}")
+            report_error_to_admin(f"Failed core tracking for Web Quiz user {data['userName']}:\n{tracking_error}")
+        # --- END NEW ---
         # --- HANDLE ADMIN NOTIFICATION or GROUP POST ---
         if data.get('postToGroup'):
             # This block runs if the "Post Score to Group" button was clicked
@@ -2470,6 +2486,77 @@ def update_battle_dashboard(chat_id, session_id, last_event=""):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('pwrup_'))
 def handle_powerup_selection(call: types.CallbackQuery):
+def send_final_battle_report(chat_id, session):
+    """ Sends the final battle report and records participation. """
+    global team_battle_session # Ensure we can clear it
+    try:
+        team1 = session['team1']
+        team2 = session['team2']
+
+        winner = team1 if team1['score'] > team2['score'] else team2 if team2['score'] > team1['score'] else None
+        loser = team2 if winner == team1 else team1 if winner == team2 else None
+
+        report = f"⚔️ **Team Battle Over!** ⚔️\n\n"
+        report += f"**FINAL SCORE:**\n"
+        report += f"🔵 {escape(team1['name'])}: <b>{team1['score']} Points</b>\n"
+        report += f"🔴 {escape(team2['name'])}: <b>{team2['score']} Points</b>\n\n"
+
+        if winner:
+            report += f"🎉 Congratulations to the winners, **{escape(winner['name'])}**! 🎉\n"
+            if loser:
+                 report += f"Great effort, **{escape(loser['name'])}**! Better luck next time!\n"
+        else:
+            report += "🤝 It's a TIE! What an intense battle!\n"
+
+        # Add Top Player Stats
+        all_players = []
+        for team_key in ['team1', 'team2']:
+            for p_id, p_data in session.get(team_key, {}).get('player_stats', {}).items():
+                 all_players.append({'id': p_id, **p_data}) # Add id for tracking
+
+        if all_players:
+            all_players.sort(key=lambda x: x.get('score', 0), reverse=True)
+            top_player = all_players[0]
+            report += f"\n🏆 MVP: <b>{escape(top_player['name'])}</b> with {top_player['score']} points!"
+
+        bot.send_message(chat_id, report, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
+
+        # --- NEW: Record participation in core tables ---
+        try:
+            total_questions_battle = len(session.get('questions', []))
+            if total_questions_battle > 0:
+                for player in all_players:
+                    user_id = player['id']
+                    user_name = player.get('name', 'Unknown')
+                    # Score is points (e.g., 10 per correct + bonus). Need a reasonable way to convert to %
+                    # Let's estimate % based on correct answers vs total questions
+                    # Assume max possible score per question is ~15 (10 base + 5 speed) * 2 powerup = 30?
+                    # Or simpler: use number of correct answers if tracked. Let's assume player_stats has 'correct_answers'
+                    correct_answers = player.get('correct_answers', 0) # Assumes you track this in handle_poll_answer
+                    score_percentage = (correct_answers / total_questions_battle) * 100 if correct_answers is not None else 0
+
+                    time_taken = player.get('total_time', 0) # Total time spent answering
+                    record_quiz_participation(user_id, user_name, score_percentage, time_taken)
+                print(f"Recorded participation for {len(all_players)} users from Team Battle {session.get('session_id')}.")
+
+        except Exception as tracking_error:
+            print(f"Error: Failed to record Team Battle participation: {tracking_error}")
+            report_error_to_admin(f"Failed core tracking for Team Battle:\n{tracking_error}")
+        # --- END NEW ---
+
+    except Exception as report_error:
+         print(f"Error sending final battle report: {report_error}")
+         report_error_to_admin(f"Failed to send final battle report: {report_error}")
+    finally:
+        team_battle_session = {} # Clear the session data
+
+
+# Also Modify `handle_poll_answer` for Team Battles
+# Find the part within `handle_poll_answer` inside the `if team_battle_session ...` block
+# Locate the line: `if session['current_question_index'] < len(session['questions']):`
+# Find the `else:` block associated with it (this runs when the quiz ends)
+# REPLACE the line `team_battle_session = {}` inside that `else:` block with:
+# send_final_battle_report(chat_id, session) # Call the new function
     global team_battle_session
     try:
         session = team_battle_session
@@ -3039,15 +3126,26 @@ def handle_poll_answer(poll_answer: types.PollAnswer):
                     q_stats['correct'] += 1
                 return
 
-        # --- ROUTE 3: Check if it's a Random Quiz poll ---
+# --- ROUTE 3: Check if it's a Random Quiz poll ---
         active_poll_info = next((poll for poll in active_polls if poll['poll_id'] == poll_id_str), None)
         if active_poll_info and active_poll_info.get('type') == 'random_quiz':
-            if selected_option == active_poll_info['correct_option_id']:
-                supabase.rpc('increment_score', {
-                    'user_id_in': user_info.id,
-                    'user_name_in': user_info.first_name
-                }).execute()
-            return
+            is_correct = (selected_option == active_poll_info['correct_option_id'])
+            score_percentage = 100.0 if is_correct else 0.0
+            time_taken = 0 # Placeholder, as exact time isn't available
+
+            try:
+                record_quiz_participation(user_info.id, user_info.first_name, score_percentage, time_taken)
+                print(f"Recorded random quiz participation for {user_info.first_name} (Correct: {is_correct}).")
+                # Optionally, keep the leaderboard update if you want both systems
+                # if is_correct:
+                #     supabase.rpc('increment_score', {
+                #         'user_id_in': user_info.id,
+                #         'user_name_in': user_info.first_name
+                #     }).execute()
+            except Exception as tracking_error:
+                print(f"Error: Failed to record Random Quiz participation for {user_info.first_name}: {tracking_error}")
+                report_error_to_admin(f"Failed core tracking for Random Quiz user {user_info.first_name}:\n{tracking_error}")
+            return # Stop processing after handling random quiz
 
     except Exception as e:
         print(f"Error in the master poll answer handler: {traceback.format_exc()}")
@@ -6683,7 +6781,23 @@ def display_law_quiz_results(chat_id, session_id):
     results_text += "━━━━━━━━━━━━━━━━━━</pre>\nCongratulations to everyone who participated!"
     
     bot.send_message(chat_id, results_text, parse_mode="HTML")
-    
+# --- NEW: Record participation in core tables ---
+    try:
+        num_questions = session.get('num_questions', 1) # Avoid division by zero
+        if num_questions > 0:
+            for user_id, data in session.get('participants', {}).items():
+                user_name = data.get('name', 'Unknown')
+                score = data.get('score', 0)
+                # Calculate percentage (assuming 10 points per question)
+                score_percentage = (score / (num_questions * 10)) * 100
+                # We don't have precise time per user here, use 0 as a placeholder
+                time_taken = 0
+                record_quiz_participation(user_id, user_name, score_percentage, time_taken)
+            print(f"Recorded participation for {len(session.get('participants', {}))} users from Law Quiz {session_id}.")
+    except Exception as tracking_error:
+        print(f"Error: Failed to record Law Quiz participation for session {session_id}: {tracking_error}")
+        report_error_to_admin(f"Failed core tracking for Law Quiz session {session_id}:\n{tracking_error}")
+    # --- END NEW ---    
     # --- NEW: Save results to the section_mastery table ---
     try:
         records_to_insert = []
@@ -8119,6 +8233,25 @@ def send_marathon_results(session_id):
             no_participants_message = f"🏁 <b>MARATHON COMPLETED</b>\n\n🎯 <b>Quiz:</b> '{safe_quiz_title}'\n📊 <b>Questions:</b> {total_questions_asked} asked\n\n😅 No warriors joined this battle! Better luck next time."
             bot.send_message(GROUP_ID, no_participants_message, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
             # Send admin summary even if no one played
+# --- NEW: Record participation in core tables ---
+        try:
+            if total_questions_asked > 0:
+                for user_id_str, p_data in participants.items():
+                    try:
+                       user_id = int(user_id_str) # Ensure user_id is integer
+                       user_name = p_data.get('name', 'Unknown')
+                       # Score is number correct, convert to percentage
+                       score_percentage = (p_data.get('score', 0) / total_questions_asked) * 100
+                       # Approximate time: total time spent / questions answered (or 0 if none)
+                       time_taken = p_data.get('total_time', 0)
+                       record_quiz_participation(user_id, user_name, score_percentage, time_taken)
+                    except (ValueError, TypeError) as inner_e:
+                         print(f"Marathon Tracking Error: Skipping user {user_id_str}. Invalid data: {inner_e}")
+                print(f"Recorded participation for {len(participants)} users from Marathon {session_id}.")
+        except Exception as tracking_error:
+            print(f"Error: Failed to record Marathon participation for session {session_id}: {tracking_error}")
+            report_error_to_admin(f"Failed core tracking for Marathon session {session_id}:\n{tracking_error}")
+        # --- END NEW ---
             _send_admin_marathon_summary(session, participants, update_response)
             return
         
