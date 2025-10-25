@@ -36,7 +36,7 @@ from bs4 import BeautifulSoup
 
 # --- Configuration ---
 BOT_TOKEN = os.getenv('BOT_TOKEN')
-FILES_PER_PAGE = 10
+FILES_PER_PAGE = 15
 SERVER_URL = os.getenv('SERVER_URL')
 GROUP_ID_STR = os.getenv('GROUP_ID')
 WEBAPP_URL = os.getenv('WEBAPP_URL')
@@ -719,7 +719,7 @@ def handle_vault_callbacks(call: types.CallbackQuery):
 def create_file_id_list_page(page=1):
     """
     Creates a paginated list of all resources for the /allfiles command.
-    Clicking a button pastes the file_id into the user's chat box.
+    Clicking a button now triggers sending the file and suggesting the /need command.
     """
     try:
         offset = (page - 1) * FILES_PER_PAGE
@@ -730,27 +730,30 @@ def create_file_id_list_page(page=1):
         if total_files == 0:
             return "📂 The 'resources' table is currently empty.", None
 
+        # Fetch id as well for the callback
         files_res = supabase.table('resources').select('id, file_name, file_id').order('created_at', desc=True).range(offset, offset + FILES_PER_PAGE - 1).execute()
         files_on_page = files_res.data
         total_pages = (total_files + FILES_PER_PAGE - 1) // FILES_PER_PAGE
 
-        message_text = f"🗂️ <b>Master File ID List</b>\n"
+        message_text = f"🗂️ <b>Master File List</b>\n"
         message_text += f"📄 Page {page}/{total_pages} ({total_files} total files)\n"
-        message_text += "<i>Click any file to paste its file_id.</i>\n"
+        message_text += "<i>Click any file to receive it.</i>\n" # Updated instruction
 
         markup = types.InlineKeyboardMarkup(row_width=1)
         buttons = []
         for i, resource in enumerate(files_on_page, 1):
             file_name = resource.get('file_name', 'N/A')
-            file_id = resource.get('file_id', 'N/A')
+            resource_id = resource.get('id', 0) # Get the resource ID
 
-            # This button uses switch_inline_query_current_chat to paste the file_id
+            # --- THIS IS THE CHANGE ---
+            # Use callback_data instead of switch_inline_query
             buttons.append(
                 types.InlineKeyboardButton(
-                    f"📄 {escape(file_name)}",
-                    switch_inline_query_current_chat=file_id
+                    f"{escape(file_name)}", # Display filename (includes emoji)
+                    callback_data=f"fid_get_{resource_id}" # New callback prefix
                 )
             )
+        # --- END OF CHANGE ---
 
         markup.add(*buttons)
 
@@ -774,7 +777,7 @@ def create_file_id_list_page(page=1):
 @bot.callback_query_handler(func=lambda call: call.data.startswith('fid_'))
 def handle_file_id_list_callbacks(call: types.CallbackQuery):
     """
-    Handles pagination for the /allfiles file_id list.
+    Handles pagination and file fetching for the /allfiles list.
     """
     bot.answer_callback_query(call.id)
     parts = call.data.split('_')
@@ -796,12 +799,71 @@ def handle_file_id_list_callbacks(call: types.CallbackQuery):
                     if "message is not modified" not in e.description:
                         raise e # Re-raise if it's a different error
 
+        # --- NEW LOGIC TO HANDLE FILE REQUEST ---
+        elif action == 'get':
+            resource_id_str = parts[2]
+            if not resource_id_str.isdigit():
+                bot.answer_callback_query(call.id, text="❌ Error: Invalid file reference.", show_alert=True)
+                return
+
+            resource_id = int(resource_id_str)
+            bot.answer_callback_query(call.id, text="✅ Fetching file...")
+
+            # Fetch file details from Supabase
+            response = supabase.table('resources').select('file_id, file_name, description').eq('id', resource_id).single().execute()
+
+            if not response.data:
+                bot.answer_callback_query(call.id, text="❌ File not found.", show_alert=True)
+                bot.edit_message_text("❌ Sorry, this file seems to have been deleted.", call.message.chat.id, call.message.message_id, reply_markup=None)
+                return
+
+            file_id_to_send = response.data['file_id']
+            file_name_to_send = response.data['file_name']
+            description = response.data.get('description', file_name_to_send)
+
+            # Generate caption and send document
+            stylish_caption = create_stylish_caption(file_name_to_send, description)
+            try:
+                sent_doc = bot.send_document(
+                    chat_id=call.message.chat.id,
+                    document=file_id_to_send,
+                    caption=stylish_caption,
+                    parse_mode="HTML",
+                    # Reply to the message where the button was clicked
+                    reply_to_message_id=call.message.message_id
+                )
+
+                # Create the /need suggestion message
+                # Using the filename (without path/emoji prefix if needed) for accuracy
+                clean_file_name_for_need = file_name_to_send.split(' - ')[-1].split('(')[0].strip() # Example cleaning, adjust if needed
+                need_command = f"/need {clean_file_name_for_need}"
+                suggestion_text = (
+                    f"💡 You can find this file anytime using:\n"
+                    f"<code>{escape(need_command)}</code>"
+                )
+                # Send the suggestion as a reply to the sent document
+                bot.send_message(
+                    chat_id=call.message.chat.id,
+                    text=suggestion_text,
+                    reply_to_message_id=sent_doc.message_id,
+                    parse_mode="HTML"
+                )
+
+            except ApiTelegramException as telegram_error:
+                report_error_to_admin(f"Failed to send document from /allfiles (ID: {resource_id}, FileID: {file_id_to_send}). Error: {telegram_error}")
+                error_message = f"❌ Failed to send '<code>{escape(file_name_to_send)}</code>'. The file may be expired or inaccessible."
+                # Edit the original list message to show the error
+                bot.edit_message_text(error_message, call.message.chat.id, call.message.message_id, parse_mode="HTML")
+        # --- END OF NEW LOGIC ---
+
     except Exception as e:
-        report_error_to_admin(f"Error in /allfiles pagination: {traceback.format_exc()}")
+        report_error_to_admin(f"Error in /allfiles callback handler: {traceback.format_exc()}")
         try:
-            bot.edit_message_text("❌ An error occurred. Please try again from /allfiles.", call.message.chat.id, call.message.message_id)
+            # Try to edit the original list message
+            bot.edit_message_text("❌ An unexpected error occurred.", call.message.chat.id, call.message.message_id)
         except Exception:
-            pass
+             # If editing fails, send a new message
+             bot.send_message(call.message.chat.id, "❌ An unexpected error occurred processing your request.")
 def create_main_menu_keyboard(message: types.Message):
     """
     Creates the main menu keyboard.
