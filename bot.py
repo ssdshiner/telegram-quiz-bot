@@ -6824,38 +6824,6 @@ def display_law_quiz_results(chat_id, session_id):
         del QUIZ_SESSIONS[session_id]
 
 
-
-@bot.poll_answer_handler()
-def handle_law_quiz_answer(poll_answer: types.PollAnswer):
-    """Handles answers for the law library quiz."""
-    user_id = poll_answer.user.id
-    poll_id = poll_answer.poll_id
-    
-    # Find the active quiz session this poll belongs to
-    active_session_id = None
-    for session_id, session in QUIZ_SESSIONS.items():
-        if session.get('is_active'):
-            for q in session['questions']:
-                if q['poll_id'] == poll_id:
-                    active_session_id = session_id
-                    break
-        if active_session_id:
-            break
-            
-    if not active_session_id:
-        return # Not a law quiz poll answer, so ignore it
-
-    session = QUIZ_SESSIONS[active_session_id]
-    
-    # Find the question corresponding to the poll
-    question = next((q for q in session['questions'] if q['poll_id'] == poll_id), None)
-    poll_obj = next((p for p in bot.get_updates() if p.poll and p.poll.id == poll_id), None)
-    
-    if question and poll_obj:
-        # Check if the user's selected option is the correct one
-        if poll_obj.poll.options[poll_answer.option_ids[0]].text == question['correct_section']:
-            if user_id in session['participants']:
-                session['participants'][user_id]['score'] += 10 # Award 10 points
 @bot.message_handler(commands=['gca'])
 @membership_required
 def handle_gca_command(msg: types.Message):
