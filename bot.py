@@ -952,11 +952,12 @@ def record_quiz_participation(user_id, user_name, score_achieved, time_taken_sec
         comparable_score = (score_achieved * 1000) - int(time_taken_seconds)
 
         # 2. Record in weekly_quiz_scores table
+# 2. Record in weekly_quiz_scores table
         supabase.table('weekly_quiz_scores').insert({
             'user_id': user_id,
             'user_name': user_name,
-            'score_achieved': score_achieved,
-            'time_taken_seconds': time_taken_seconds
+            'score_achieved': int(score_achieved), # Convert score to integer
+            'time_taken_seconds': int(time_taken_seconds) # Convert time to integer
         }).execute()
 
         # 3. Update all_time_scores using the RPC function
