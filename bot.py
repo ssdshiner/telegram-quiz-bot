@@ -658,9 +658,9 @@ def handle_vault_callbacks(call: types.CallbackQuery):
 
         # --- THIS IS THE NEW LOGIC ---
             if subject == "General":
-            resource_types = ["ICAI Module", "Faculty Notes", "QPs & Revision"]
+                resource_types = ["ICAI Module", "Faculty Notes", "QPs & Revision"]
             else:
-            resource_types = ["ICAI Module", "Faculty Notes", "QPs & Revision", "Podcasts"]
+                resource_types = ["ICAI Module", "Faculty Notes", "QPs & Revision", "Podcasts"]
         # --- END OF NEW LOGIC ---
 
             buttons = []
@@ -5821,29 +5821,123 @@ def handle_public_report_confirmation(call: types.CallbackQuery):
 # --- Helper functions for parsing text ---
 def create_stylish_caption(file_name, description):
     """
-    Creates a beautiful, mobile-optimized caption in the 'Elegant & Thematic' style.
+    Creates a beautiful, mobile-optimized caption with a chosen separator
+    and random emoji in the footer. Handles potential extra lines in the description.
     """
-    # --- Logic to extract title and author from the description ---
-    # This makes the caption smarter. It assumes the first line is the title
-    # and the line starting with "by" is the author.
-    lines = description.split('\n')
-    title = escape(lines[0].strip())
-    author_line = next((line for line in lines if line.strip().lower().startswith("by")), None)
-    
+    # --- Clean the description first ---
+    # Remove the standard footer part if it exists
+    cleaned_description = description.replace('\n---\n✨ CA Inter Quiz Hub', '').strip()
+    # Also handle the older format you showed in the first SQL dump
+    cleaned_description = cleaned_description.replace('|| ✨ CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| 💡 CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| 📚 CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| 📖 CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| 🧠 CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| 🚀 CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| 🎯 CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| ⚙️ CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| 💲 CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| 📄 CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| 🧱 CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| 🏭 CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| 🔄 CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| 🔁 CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| 🛎️ CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| 📏 CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| 📊 CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| 🧑‍🏫 CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| ✨ CA Inter Quiz Hub ||', '').strip() # Duplicate but safe
+    cleaned_description = cleaned_description.replace('|| 📝 CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| 🎧 CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| 🎶 CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| 🎙️ CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| 📻 CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| 🛡️ CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| 💡 CA Inter Quiz Hub ||', '').strip() # Duplicate but safe
+    cleaned_description = cleaned_description.replace('|| 📚 CA Inter Quiz Hub ||', '').strip() # Duplicate but safe
+    cleaned_description = cleaned_description.replace('|| 📖 CA Inter Quiz Hub ||', '').strip() # Duplicate but safe
+    cleaned_description = cleaned_description.replace('|| ✨ CA Inter Quiz Hub ||', '').strip() # Duplicate but safe
+    cleaned_description = cleaned_description.replace('|| 📝 CA Inter Quiz Hub ||', '').strip() # Duplicate but safe
+    cleaned_description = cleaned_description.replace('|| 🤔 CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| 🌊 CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| 🎯 CA Inter Quiz Hub ||', '').strip() # Duplicate but safe
+    cleaned_description = cleaned_description.replace('|| ✨ CA Inter Quiz Hub ||', '').strip() # Duplicate but safe
+    cleaned_description = cleaned_description.replace('|| 🗓️ CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| 🌍 CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| 🏛️ CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| 💰 CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| 🤝 CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| 🧑‍💼 CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| 💸 CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| 📈 CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| 🔗 CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| 📄 CA Inter Quiz Hub ||', '').strip() # Duplicate but safe
+    cleaned_description = cleaned_description.replace('|| 📦 CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| 💲 CA Inter Quiz Hub ||', '').strip() # Duplicate but safe
+    cleaned_description = cleaned_description.replace('|| 📑 CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| 🧾 CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| 🌱 CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| 🛑 CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| ⏳ CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| ✨ CA Inter Quiz Hub ||', '').strip() # Duplicate but safe
+    cleaned_description = cleaned_description.replace('|| 🤝 CA Inter Quiz Hub ||', '').strip() # Duplicate but safe
+    cleaned_description = cleaned_description.replace('|| 📉 CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| ❓ CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| 🌊 CA Inter Quiz Hub ||', '').strip() # Duplicate but safe
+    cleaned_description = cleaned_description.replace('|| ⚖️ CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| 🏷️ CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| 🔊 CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| 📢 CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| 🖼️ CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| 🏗️ CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| 🏁 CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| 🚩 CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| 🛡️ CA Inter Quiz Hub ||', '').strip() # Duplicate but safe
+    cleaned_description = cleaned_description.replace('|| ⏳ CA Inter Quiz Hub ||', '').strip() # Duplicate but safe
+    cleaned_description = cleaned_description.replace('|| 📅 CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| 🗓️ CA Inter Quiz Hub ||', '').strip() # Duplicate but safe
+    cleaned_description = cleaned_description.replace('|| 📆 CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| ✨ CA Inter Quiz Hub ||', '').strip() # Duplicate but safe
+    cleaned_description = cleaned_description.replace('|| 🤔 CA Inter Quiz Hub ||', '').strip() # Duplicate but safe
+    cleaned_description = cleaned_description.replace('|| 🌊 CA Inter Quiz Hub ||', '').strip() # Duplicate but safe
+    cleaned_description = cleaned_description.replace('|| 🎯 CA Inter Quiz Hub ||', '').strip() # Duplicate but safe
+    cleaned_description = cleaned_description.replace('|| ✨ CA Inter Quiz Hub ||', '').strip() # Duplicate but safe
+    cleaned_description = cleaned_description.replace('|| 🗂️ CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| 📚 CA Inter Quiz Hub ||', '').strip() # Duplicate but safe
+    cleaned_description = cleaned_description.replace('|| 🎯 CA Inter Quiz Hub ||', '').strip() # Duplicate but safe
+    cleaned_description = cleaned_description.replace('|| 📖 CA Inter Quiz Hub ||', '').strip() # Duplicate but safe
+    cleaned_description = cleaned_description.replace('|| ✨ CA Inter Quiz Hub ||', '').strip() # Duplicate but safe
+    cleaned_description = cleaned_description.replace('|| 🤔 CA Inter Quiz Hub ||', '').strip() # Duplicate but safe
+    cleaned_description = cleaned_description.replace('|| ✅ CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| 🔄 CA Inter Quiz Hub ||', '').strip()
+    cleaned_description = cleaned_description.replace('|| 🛡️ CA Inter Quiz Hub ||', '').strip() # Duplicate but safe
+    # Add any other variations if you find them
+
+    # --- Logic to extract title and author from the CLEANED description ---
+    lines = cleaned_description.split('\n')
+    title = escape(lines[0].strip()) if lines else escape(cleaned_description) # Fallback if no lines
+
+    author_line = next((line for line in lines[1:] if line.strip().lower().startswith("by ")), None)
+
     if author_line:
         author = escape(author_line.strip())
     else:
-        # Fallback if no "by" line is found
-        author = f"Source: {escape(file_name)}"
+        clean_file_name = file_name.split(' ', 1)[-1] if ' ' in file_name else file_name
+        author = f"Source: {escape(clean_file_name)}"
 
-    # --- Build the HTML Caption ---
+    # --- Choose a random emoji ---
+    footer_emojis = ["✨", "📚", "🚀", "💡", "🎯", "🎓"]
+    random_emoji = random.choice(footer_emojis)
+
+    # --- Build the final HTML Caption ---
     caption = (
         f"•───≪ ⚜️ ≫───•\n\n"
         f"<b>{title}</b>\n"
         f"<i>{author}</i>\n\n"
         f"•───≪ ⚜️ ≫───•\n\n"
-        f"📜 For more notes & discussions, join us:\n"
-        f"➡️ <a href=\"https://t.me/cainterquizhub\">CA INTER QUIZ HUB</a> | @cainterquizhub"
+        f"Presented by :- <a href=\"https://t.me/cainterquizhub\">CA Inter Quiz Hub</a> {random_emoji}\n"
+        f"⚜︎────⚜︎────⚜︎\n" # Your chosen separator
+        f"📜 For more notes & discussions, join us: | @cainterquizhub"
     )
     return caption
 def parse_time_to_seconds(time_str):
