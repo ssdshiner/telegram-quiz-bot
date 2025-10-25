@@ -2486,7 +2486,6 @@ def update_battle_dashboard(chat_id, session_id, last_event=""):
 
 
 def send_final_battle_report(chat_id, session):
-    """ Sends the final battle report and records participation. """
     global team_battle_session # Ensure we can clear it
     try:
         team1 = session['team1']
@@ -3072,7 +3071,7 @@ def handle_poll_answer(poll_answer: types.PollAnswer):
                     send_next_battle_question(chat_id, session['session_id'])
                 else:
                     send_final_battle_report(chat_id, session)
-                    team_battle_session = {} 
+                    
                 
                 return # Stop processing after handling team battle answer
 
