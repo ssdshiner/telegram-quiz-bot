@@ -48,7 +48,7 @@ PUBLIC_GROUP_COMMANDS = [
 
     # CA Reference, Glossary & Vault
     'listfile', 'need', 'define', 'newdef','addsection','section',
-    'dt', 'gst', 'llp', 'fema', 'gca', 'caro', 'sa', 'as',
+    'dt', 'gst', 'llp', 'fema', 'gca', 'caro', 'sa', 'as', 'allfiles', # Added allfiles here
 
     # Written Practice
     'submit', 'review_done', 'questions_posted',
@@ -570,20 +570,21 @@ def create_compact_file_list_page(group, subject, resource_type, page=1, podcast
 
         total_pages = (total_files + FILES_PER_PAGE - 1) // FILES_PER_PAGE
 
+        # We keep the header emoji for a nice title
         subject_emojis = { "Law": "⚖️", "Taxation": "💰", "GST": "🧾", "Accounts": "📊", "Auditing": "🔍", "Costing": "🧮", "SM": "📈", "FM & SM": "📈", "General": "🌟" }
         header_emoji = subject_emojis.get(subject, "📚")
 
         message_text = f"{header_emoji} <b>{escape(subject)} - {escape(header_title)}</b>\n"
-        message_text += f"📄 Page {page}/{total_pages} ({total_files} total files)\n\n"
+        message_text += f"📄 Page {page}/{total_pages} ({total_files} total files)\n"
 
         buttons = []
-        for i, resource in enumerate(files_on_page, 1):
+        for i, resource in enumerate(files_on_page, (page - 1) * FILES_PER_PAGE + 1):
             file_name = resource.get('file_name', '')
-            emoji = "🎧" if resource.get('podcast_format') == 'audio' else "🎬" if resource.get('podcast_format') == 'video' else subject_emojis.get(subject, "📎")
-            message_text += f"<code>{i}.</code> {emoji} {escape(file_name)}\n"
-            buttons.append(types.InlineKeyboardButton(f"{emoji} {i}", callback_data=f"getfile_{resource['id']}"))
+            # Create the button with the file name itself
+            buttons.append(types.InlineKeyboardButton(f"{i}. {escape(file_name)}", callback_data=f"getfile_{resource['id']}"))
 
-        markup = types.InlineKeyboardMarkup(row_width=5)
+        # Set row_width=1 to make the buttons stack vertically
+        markup = types.InlineKeyboardMarkup(row_width=1)
         markup.add(*buttons)
 
         # --- Dynamic Navigation Buttons ---
@@ -654,13 +655,25 @@ def handle_vault_callbacks(call: types.CallbackQuery):
 
         elif action == 'subj':
             group_name, subject = parts[2], '_'.join(parts[3:])
+
+        # --- THIS IS THE NEW LOGIC ---
+            if subject == "General":
+            resource_types = ["ICAI Module", "Faculty Notes", "QPs & Revision"]
+            else:
             resource_types = ["ICAI Module", "Faculty Notes", "QPs & Revision", "Podcasts"]
+        # --- END OF NEW LOGIC ---
+
             buttons = []
+        # Create buttons based on the dynamic list
+            if "ICAI Module" in resource_types:
             buttons.append(types.InlineKeyboardButton(f"📘 ICAI Module", callback_data=f"v_type_{group_name}_{subject}_ICAI Module"))
+            if "Faculty Notes" in resource_types:
             buttons.append(types.InlineKeyboardButton(f"✍️ Faculty Notes", callback_data=f"v_type_{group_name}_{subject}_Faculty Notes"))
+            if "QPs & Revision" in resource_types:
             buttons.append(types.InlineKeyboardButton(f"📝 QPs & Revision", callback_data=f"v_type_{group_name}_{subject}_QPs & Revision"))
-            buttons.append(types.InlineKeyboardButton(f"🎙️ Podcasts", callback_data=f"v_type_{group_name}_{subject}_Podcasts"))
-            
+            if "Podcasts" in resource_types:
+             buttons.append(types.InlineKeyboardButton(f"🎙️ Podcasts", callback_data=f"v_type_{group_name}_{subject}_Podcasts"))
+
             markup = types.InlineKeyboardMarkup(row_width=2)
             markup.add(*buttons)
             markup.add(types.InlineKeyboardButton("↩️ Back to Subjects", callback_data=f"v_group_{group_name}"))
@@ -701,6 +714,92 @@ def handle_vault_callbacks(call: types.CallbackQuery):
         try:
             error_text = "❌ An error occurred. Please try again from /listfile."
             bot.edit_message_text(error_text, call.message.chat.id, call.message.message_id)
+        except Exception:
+            pass
+def create_file_id_list_page(page=1):
+    """
+    Creates a paginated list of all resources for the /allfiles command.
+    Clicking a button pastes the file_id into the user's chat box.
+    """
+    try:
+        offset = (page - 1) * FILES_PER_PAGE
+
+        count_res = supabase.table('resources').select('id', count='exact').execute()
+        total_files = count_res.count
+
+        if total_files == 0:
+            return "📂 The 'resources' table is currently empty.", None
+
+        files_res = supabase.table('resources').select('id, file_name, file_id').order('created_at', desc=True).range(offset, offset + FILES_PER_PAGE - 1).execute()
+        files_on_page = files_res.data
+        total_pages = (total_files + FILES_PER_PAGE - 1) // FILES_PER_PAGE
+
+        message_text = f"🗂️ <b>Master File ID List</b>\n"
+        message_text += f"📄 Page {page}/{total_pages} ({total_files} total files)\n"
+        message_text += "<i>Click any file to paste its file_id.</i>\n"
+
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        buttons = []
+        for i, resource in enumerate(files_on_page, 1):
+            file_name = resource.get('file_name', 'N/A')
+            file_id = resource.get('file_id', 'N/A')
+
+            # This button uses switch_inline_query_current_chat to paste the file_id
+            buttons.append(
+                types.InlineKeyboardButton(
+                    f"📄 {escape(file_name)}",
+                    switch_inline_query_current_chat=file_id
+                )
+            )
+
+        markup.add(*buttons)
+
+        # --- Navigation Buttons ---
+        nav_buttons = []
+        page_callback_base = "fid_page_{page}"
+        if page > 1:
+            nav_buttons.append(types.InlineKeyboardButton("⬅️ Prev", callback_data=page_callback_base.format(page=page-1)))
+
+        nav_buttons.append(types.InlineKeyboardButton(f"Page {page}/{total_pages}", callback_data="fid_nop")) # A non-clickable page number
+
+        if page < total_pages:
+            nav_buttons.append(types.InlineKeyboardButton("Next ➡️", callback_data=page_callback_base.format(page=page+1)))
+
+        markup.row(*nav_buttons)
+        return message_text, markup
+
+    except Exception as e:
+        report_error_to_admin(f"Error in create_file_id_list_page: {traceback.format_exc()}")
+        return "❌ An error occurred while fetching files.", None
+@bot.callback_query_handler(func=lambda call: call.data.startswith('fid_'))
+def handle_file_id_list_callbacks(call: types.CallbackQuery):
+    """
+    Handles pagination for the /allfiles file_id list.
+    """
+    bot.answer_callback_query(call.id)
+    parts = call.data.split('_')
+    action = parts[1]
+
+    if action == "nop":
+        return # Do nothing if they click the page number
+
+    try:
+        if action == 'page':
+            page = int(parts[2])
+            text, markup = create_file_id_list_page(page=page)
+
+            # Edit the message only if the content has changed
+            if call.message.text != text or call.message.reply_markup != markup:
+                try:
+                    bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
+                except ApiTelegramException as e:
+                    if "message is not modified" not in e.description:
+                        raise e # Re-raise if it's a different error
+
+    except Exception as e:
+        report_error_to_admin(f"Error in /allfiles pagination: {traceback.format_exc()}")
+        try:
+            bot.edit_message_text("❌ An error occurred. Please try again from /allfiles.", call.message.chat.id, call.message.message_id)
         except Exception:
             pass
 def create_main_menu_keyboard(message: types.Message):
@@ -2639,7 +2738,21 @@ def handle_quiz_start_button(msg: types.Message):
 # =============================================================================
 # 8. TELEGRAM BOT HANDLERS - CORE COMMANDS (Continued)
 # =============================================================================
-
+@bot.message_handler(commands=['allfiles'])
+@membership_required # Changed from admin_required
+def handle_allfiles_command(msg: types.Message):
+    """
+    Shows a paginated list of all files with clickable file_ids.
+    Available to all members.
+    """
+    # Removed the private chat check
+    try:
+        text, markup = create_file_id_list_page(page=1)
+        # Use safe_reply for robustness in group chats
+        safe_reply(msg, text, reply_markup=markup, parse_mode="HTML")
+    except Exception as e:
+        report_error_to_admin(f"Error in /allfiles command: {traceback.format_exc()}")
+        safe_reply(msg, "❌ An error occurred while fetching the file list.")
 @bot.message_handler(commands=['adminhelp'])
 @admin_required
 def handle_help_command(msg: types.Message):
@@ -3142,6 +3255,7 @@ def handle_info_command(msg: types.Message):
 
 ━━ <b>Resources & Notes</b> ━━
 <code>/listfile</code> - 🗂️ Browse All Notes
+<code>/allfiles</code> - 🆔 List all files & get IDs
 <code>/need [keyword]</code> - 🔎 Search for Notes
 <code>/define [term]</code> - 📖 Get Definition
 <code>/newdef</code> - ✍️ Add a New Definition
@@ -9350,7 +9464,7 @@ try:
 except Exception as e:
     print(f"⚠️ WARNING: Could not load persistent data from Supabase. Bot will start with a fresh state. Error: {e}")
 
-
+    
 # --- STEP 5: STARTING BACKGROUND SCHEDULER ---
 print("\n--- STEP 5: Starting Background Scheduler Thread ---")
 try:
