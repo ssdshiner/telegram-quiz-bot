@@ -1627,12 +1627,12 @@ def background_worker():
                                 safe_explanation = escape(unescape(explanation_text)) if explanation_text else None
                                 open_period_seconds = 600 # 10 minutes
 
-                                safe_question = formatted_question.replace("'", "&#39;")
                                 safe_options = [escape(opt) for opt in formatted_options]
 
                                 sent_poll = bot.send_poll(
                                     chat_id=GROUP_ID,
                                     message_thread_id=QUIZ_TOPIC_ID,
+                                    question=formatted_question,
                                     question=safe_question,
                                     options=safe_options,
                                     type='quiz',
@@ -5183,12 +5183,12 @@ def handle_random_quiz(msg: types.Message):
         safe_explanation = escape(unescape(explanation_text)) if explanation_text else None
         open_period_seconds = 600
         # Make the poll data safe for the API
-        safe_question = formatted_question.replace("'", "&#39;")
         safe_options = [escape(opt) for opt in formatted_options]
         # Send the quiz poll
         sent_poll = bot.send_poll(
             chat_id=GROUP_ID,
             message_thread_id=QUIZ_TOPIC_ID,
+            question=formatted_question,
             question=safe_question,
             options=safe_options,
             type='quiz',
@@ -5339,12 +5339,12 @@ def handle_randomquizvisual(msg: types.Message):
         safe_explanation = escape(unescape(explanation_text)) if explanation_text else None
         open_period_seconds = 600
         # Make the poll data safe for the API
-        safe_question = formatted_question.replace("'", "&#39;")
         safe_options = [escape(opt) for opt in formatted_options]
         # Send the quiz poll
         sent_poll = bot.send_poll(
             chat_id=GROUP_ID,
             message_thread_id=QUIZ_TOPIC_ID,
+            question=formatted_question,
             question=safe_question,
             options=safe_options,
             type='quiz',
@@ -7825,7 +7825,7 @@ def send_marathon_question(session_id):
     poll_message = bot.send_poll(
         chat_id=GROUP_ID, 
         message_thread_id=QUIZ_TOPIC_ID, 
-        question=question_text.replace("'", "&#39;"), # Apostrophe fix with the correct variable
+        question=question_text,
         options=options, 
         type='quiz', 
         correct_option_id=correct_option_index, 
