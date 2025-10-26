@@ -964,7 +964,7 @@ def record_quiz_participation(user_id, user_name, score_achieved, time_taken_sec
         supabase.rpc('update_all_time_score', {
             'p_user_id': user_id,
             'p_user_name': user_name,
-            'p_comparable_score': comparable_score
+            'p_comparable_score': int(comparable_score)
         }).execute()
         
         # 4. Update quiz_activity using the RPC function
@@ -1384,11 +1384,14 @@ def fetch_and_send_one_external_news():
     return False
 def background_worker():
     """Runs all scheduled tasks in a continuous loop."""
+    # --- GLOBAL DECLARATIONS ---
     global PAUSE_AUTO_SCHEDULES, pause_command_date
-    global last_daily_content_day, last_daily_resource_day
     global last_daily_check_day, last_schedule_announce_day
+    global last_daily_content_day, last_daily_resource_day
     global last_auto_quiz_time
+    # --- END GLOBALS ---
 
+    # Initialize local loop variables AFTER the global declaration
     cleanup_interval = 300
     last_cleanup_time = time.time()
     
@@ -1442,7 +1445,7 @@ def background_worker():
                         lib_key = random.choice(list(LAW_LIBRARIES.keys()))
                         library = LAW_LIBRARIES[lib_key]
                         print(f"   - Attempting to fetch random entry from: {library['table']}")
-                        response = supabase.rpc('get_random_law_entries', {'table_name_input': library['table'], 'count_input': 1}).execute()
+                        response = supabase.rpc('get_random_law_entries', {'table_name_input': library['table']}).execute()
                         if response.data:
                             entry = response.data[0]
                             section_num = escape(entry.get('section_number', 'N/A'))
