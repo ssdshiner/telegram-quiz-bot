@@ -1384,7 +1384,10 @@ def fetch_and_send_one_external_news():
     return False
 def background_worker():
     """Runs all scheduled tasks in a continuous loop."""
+    global PAUSE_AUTO_SCHEDULES, pause_command_date
+    global last_daily_content_day, last_daily_resource_day
     global last_daily_check_day, last_schedule_announce_day
+    global last_auto_quiz_time
 
     cleanup_interval = 300
     last_cleanup_time = time.time()
