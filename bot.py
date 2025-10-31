@@ -3935,8 +3935,9 @@ def handle_today_quiz(msg: types.Message):
         
         message_text = f"🗓️ <b>Today's Agenda for {user_name}!</b>\n{random.choice(greetings)}\n━━━━━━━━━━━━━━━━━━━━\n\n"
         
-        group1_subjects = ['Advanced Accounting', 'Corporate & Other Laws', 'Taxation (Income Tax)', 'GST']
-        group2_subjects = ['Cost & Mgt. Accounting', 'Auditing and Ethics', 'Financial Management', 'Strategic Management']
+# --- FIX: Match subject names exactly as they are in the database ---
+        group1_subjects = ['Advanced Accounting', 'Law', 'Taxation (Income Tax)', 'Taxation (GST)']
+        group2_subjects = ['Cost', 'Audit', 'Financial Management', 'Strategic Management']
 
         group1_quizzes = [q for q in response.data if q.get('subject') in group1_subjects]
         group2_quizzes = [q for q in response.data if q.get('subject') in group2_subjects]
