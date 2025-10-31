@@ -1240,7 +1240,8 @@ def fetch_icai_announcements():
 
         new_announcements_sent = 0
         for url, title in all_new_announcements.items():
-            if 'intermediate' in title.lower():
+            title_lower = title.lower()
+            if 'intermediate' in title_lower or 'inter' in title_lower or 'result' in title_lower:
                 existing = supabase.table('sent_announcements').select('id').eq('announcement_url', url).execute()
                 if not existing.data:
                     new_announcements_sent += 1
