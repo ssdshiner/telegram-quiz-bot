@@ -6675,7 +6675,7 @@ def send_law_quiz_question(chat_id, session_id):
 
         session['questions'].append({
             'poll_id': poll_message.poll.id,
-            'correct_section': correct_entry['section_number']
+            'correct_section': correct_entry['section_number'],
             'correct_option_index': correct_option_index
         })
         session['current_question'] += 1
@@ -8224,23 +8224,43 @@ def send_marathon_results(session_id):
             card2_text += "\n"
 
         if question_stats:
-            hardest_q = min(question_stats.items(), key=lambda i: (i[1]['correct'] / i[1]['total']) if i[1].get('total', 0) > 0 else 1)
-            slowest_q = max(question_stats.items(), key=lambda i: (i[1]['time'] / i[1]['total']) if i[1].get('total', 0) > 0 else 0)
-            hardest_q_data = questions[int(hardest_q[0])]
-            slowest_q_data = questions[int(slowest_q[0])]
-            
             card2_text += "<b>⚠️ Most Challenging Questions:</b>\n"
-            card2_text += f" • <u>Highest Errors:</u> <b>Question #{int(hardest_q[0])+1}</b> ({escape(hardest_q_data.get('topic'))})\n"
-            card2_text += f" • <u>Slowest Response:</u> <b>Question #{int(slowest_q[0])+1}</b> ({escape(slowest_q_data.get('topic'))})\n\n"
+            
+            # Find Hardest Question (most errors)
+            hardest_q_item = min(question_stats.items(), key=lambda i: (i[1]['correct'] / i[1]['total']) if i[1].get('total', 0) > 0 else 1)
+            hardest_q_index_str = hardest_q_item[0]
+            hardest_q_data = questions[int(hardest_q_index_str)]
+            card2_text += f" • <u>Highest Errors:</u> <b>Question #{int(hardest_q_index_str)+1}</b> ({escape(hardest_q_data.get('topic'))})\n"
+
+            # Find Slowest Question (that isn't the hardest one)
+            stats_for_slowest = {k: v for k, v in question_stats.items() if k != hardest_q_index_str}
+            
+            if stats_for_slowest: # Only proceed if there are other questions to analyze
+                slowest_q_item = max(stats_for_slowest.items(), key=lambda i: (i[1]['time'] / i[1]['total']) if i[1].get('total', 0) > 0 else 0)
+                slowest_q_index_str = slowest_q_item[0]
+                slowest_q_data = questions[int(slowest_q_index_str)]
+                card2_text += f" • <u>Slowest Response:</u> <b>Question #{int(slowest_q_index_str)+1}</b> ({escape(slowest_q_data.get('topic'))})\n\n"
+            else:
+                card2_text += "\n" # Just add a newline if no slowest question to show
         
         if topic_stats:
-            sorted_topics_error = sorted(topic_stats.items(), key=lambda i: (i[1]['correct']/i[1]['total']) if i[1].get('total',0)>0 else 1)
-            sorted_topics_time = sorted(topic_stats.items(), key=lambda i: (i[1]['time']/i[1]['total']) if i[1].get('total',0)>0 else 0, reverse=True)
             card2_text += "<b>🎯 Most Challenging Topics:</b>\n"
+            
+            # Find Hardest Topic (most errors)
+            sorted_topics_error = sorted(topic_stats.items(), key=lambda i: (i[1]['correct']/i[1]['total']) if i[1].get('total',0)>0 else 1)
+            hardest_topic_name = None
             if sorted_topics_error:
-                card2_text += f" • <u>Highest Errors:</u> <b>{escape(sorted_topics_error[0][0])}</b>\n"
-            if sorted_topics_time:
-                card2_text += f" • <u>Slowest Response:</u> <b>{escape(sorted_topics_time[0][0])}</b>\n"
+                hardest_topic_name = sorted_topics_error[0][0]
+                card2_text += f" • <u>Highest Errors:</u> <b>{escape(hardest_topic_name)}</b>\n"
+
+            # Find Slowest Topic (that isn't the hardest one)
+            topics_for_slowest = {k: v for k, v in topic_stats.items() if k != hardest_topic_name}
+            
+            if topics_for_slowest:
+                sorted_topics_time = sorted(topics_for_slowest.items(), key=lambda i: (i[1]['time']/i[1]['total']) if i[1].get('total',0)>0 else 0, reverse=True)
+                if sorted_topics_time:
+                    slowest_topic_name = sorted_topics_time[0][0]
+                    card2_text += f" • <u>Slowest Response:</u> <b>{escape(slowest_topic_name)}</b>\n"
         
         bot.send_message(GROUP_ID, card2_text, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
 
