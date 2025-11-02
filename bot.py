@@ -6413,7 +6413,7 @@ def handle_quiz_library_choice(call: types.CallbackQuery):
         return
 
     try:
-        lib_key = call.data.split('_')[-1]
+        lib_key = call.data.split('_', 2)[-1]
         selected_library = LAW_LIBRARIES[lib_key]
         table_name = selected_library['table']
 
