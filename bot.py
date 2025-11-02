@@ -6448,7 +6448,7 @@ def handle_start_law_quiz_callback(call: types.CallbackQuery):
         return
 
     try:
-        lib_key = call.data.split('_')[-1]
+        lib_key = call.data.replace('quiz_lib_', '')
         selected_library = LAW_LIBRARIES[lib_key]
         table_name = selected_library['table']
 
