@@ -29,6 +29,7 @@ from html import escape, unescape
 from collections import namedtuple
 from postgrest.exceptions import APIError
 import httpx
+from httpcore import RemoteProtocolError
 from bs4 import BeautifulSoup
 # =============================================================================
 # 2. CONFIGURATION & INITIALIZATION
@@ -960,11 +961,12 @@ def record_quiz_participation(user_id, user_name, score_achieved, time_taken_sec
             'time_taken_seconds': int(time_taken_seconds) # Convert time to integer
         }).execute()
 
-        # 3. Update all_time_scores using the RPC function
+# 3. Update all_time_scores using the RPC function
+        # --- FIX: Explicitly cast p_comparable_score to bigint to resolve function ambiguity ---
         supabase.rpc('update_all_time_score', {
             'p_user_id': user_id,
             'p_user_name': user_name,
-            'p_comparable_score': int(comparable_score)
+            'p_comparable_score::bigint': int(comparable_score)
         }).execute()
         
         # 4. Update quiz_activity using the RPC function
@@ -1455,9 +1457,9 @@ def background_worker():
                             command = next((cmd_key for cmd_key, details in LAW_LIBRARIES.items() if details['table'] == library['table']), None)
                             command_hint = f"Tap <code>/{command} {section_num}</code> for more details!" if command else ""
                             message_to_send = (
-                                f"🏛️ **Daily Legal Bite!** 🏛️\n\n"
-                                f"📚 From: **{library['name']}**\n\n"
-                                f"🔑 **{section_num}: {title}**\n\n"
+                                f"🏛️ <b>Daily Legal Bite!</b> 🏛️\n\n"
+                                f"📚 From: <b>{library['name']}</b>\n\n"
+                                f"🔑 <b>{section_num}: {title}</b>\n\n"
                                 f"<blockquote>{summary}</blockquote>\n\n"
                                 f"{command_hint}"
                             )
@@ -1479,9 +1481,9 @@ def background_worker():
                                     definition = escape(random_row[2])
                                     category = escape(random_row[3] if len(random_row) > 3 else 'General')
                                     message_to_send = (
-                                        f"📖 **Term of the Day!** 📖\n\n"
-                                        f"🔑 **Term:** <code>{term}</code>\n"
-                                        f"📚 **Category:** <i>{category}</i>\n\n"
+                                        f"📖 <b>Term of the Day!</b> 📖\n\n"
+                                        f"🔑 <b>Term:</b> <code>{term}</code>\n"
+                                        f"📚 <b>Category:</b> <i>{category}</i>\n\n"
                                         f"<blockquote>{definition}</blockquote>"
                                     )
                                     print(f"   - Prepared message for definition: {term}.")
@@ -1513,8 +1515,8 @@ def background_worker():
                     report_error_to_admin(f"CRITICAL ERROR: Daily scheduled content job failed unexpectedly.\n{traceback.format_exc()}")
                     # Mark as 'sent' to prevent error loop today
                     last_daily_content_day = current_day
-# --- Daily Resource File (7:00 PM / 19:00 IST) ---
-            if current_hour == 19 and last_daily_resource_day != current_day and not PAUSE_AUTO_SCHEDULES:
+# --- Daily Resource File (8:00 PM / 20:00 IST) ---
+            if current_hour == 20 and last_daily_resource_day != current_day and not PAUSE_AUTO_SCHEDULES:
                 print(f"[{current_time_ist.strftime('%H:%M:%S')}] INFO: Starting daily resource job...")
                 resource_sent = False
                 try:
@@ -1547,7 +1549,7 @@ def background_worker():
                         description = resource.get('description', f"Check out this resource: {file_name}")
                         file_type = resource.get('file_type', '').lower()
 
-                        caption = f"🌙 **Evening Resource Drop!** ✨\n\nCheck out this file:\n\n📄 **{escape(file_name)}**\n\n"
+                        caption = f"🌙 <b>Evening Resource Drop!</b> ✨\n\nCheck out this file:\n\n📄 <b>{escape(file_name)}</b>\n\n"
                         send_method = None
 
                         if 'pdf' in file_type: caption += "📖 Happy reading!"; send_method = bot.send_document
@@ -3273,10 +3275,10 @@ def save_data():
 
         supabase.table('bot_state').upsert(data_to_save).execute()
 
-    except httpx.ConnectError as e:
+    except (httpx.ConnectError, RemoteProtocolError) as e:
         # --- THE FIX IS HERE ---
-        # This new block specifically catches the "Connection reset by peer" error.
-        print(f"⚠️ Supabase connection reset. This is a temporary network issue. Skipping this state save. Error: {e}")
+        # This block catches multiple types of temporary network errors and skips the save.
+        print(f"⚠️ Network error ({type(e).__name__}). This is a temporary issue. Skipping this state save. Error: {e}")
 
     except APIError as e:
         # This block specifically catches Supabase/Postgrest errors.
