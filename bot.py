@@ -3029,7 +3029,35 @@ def handle_poll_answer(poll_answer: types.PollAnswer):
                     q_stats['correct'] += 1
                 return # End processing for Marathon
 
-            # --- ROUTE 2: Check if it's a Random Quiz poll ---
+            # --- ROUTE 2: Check if it's a Law Quiz (/testme) poll ---
+            law_session_id, law_session, question_info = (None, None, None)
+            for s_id, s_data in QUIZ_SESSIONS.items():
+                # Check for a session that is active AND has a 'questions' list
+                if s_data.get('is_active') and s_data.get('questions') is not None:
+                    q_info = next((q for q in s_data.get('questions', []) if q['poll_id'] == poll_id_str), None)
+                    if q_info:
+                        law_session_id, law_session, question_info = s_id, s_data, q_info
+                        break
+            
+            if law_session and question_info:
+                participant = law_session['participants'].get(user_info.id)
+                
+                # Check if this poll has already been answered by this user
+                answered_polls_key = 'answered_polls'
+                if participant:
+                    if answered_polls_key not in participant:
+                        participant[answered_polls_key] = set()
+                    
+                    if poll_id_str not in participant[answered_polls_key]:
+                        is_correct = (selected_option == question_info['correct_option_index'])
+                        if is_correct:
+                            participant['score'] += 10 # Add 10 points for a correct answer
+                        
+                        participant[answered_polls_key].add(poll_id_str)
+                        print(f"LAW QUIZ LOG | User: {participant.get('name')} | Correct: {is_correct} | New Score: {participant.get('score', 0)}")
+                return # End processing for Law Quiz
+
+            # --- ROUTE 3: Check if it's a Random Quiz poll ---
             active_poll_info = next((poll for poll in active_polls if poll['poll_id'] == poll_id_str), None)
             if active_poll_info and active_poll_info.get('type') == 'random_quiz':
                 is_correct = (selected_option == active_poll_info['correct_option_id'])
@@ -6519,7 +6547,7 @@ def process_quiz_question_count(msg: types.Message):
 
         # --- Create the "Waiting Room" message ---
         markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("✅ Join Quiz!", callback_data=f"quiz_join_{session_id}"))
+        markup.add(types.InlineKeyboardButton("✅ Join this Quiz!", callback_data=f"quiz_join_{session_id}"))
         markup.add(types.InlineKeyboardButton("▶️ Start Quiz (Creator Only)", callback_data=f"quiz_start_{session_id}"))
 
         waiting_text = (
@@ -6574,7 +6602,7 @@ def handle_quiz_join(call: types.CallbackQuery):
     
     # Use the same markup as before
     markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("✅ Join Quiz!", callback_data=f"quiz_join_{session_id}"))
+    markup.add(types.InlineKeyboardButton("✅ Join this Quiz!", callback_data=f"quiz_join_{session_id}"))
     markup.add(types.InlineKeyboardButton("▶️ Start Quiz (Creator Only)", callback_data=f"quiz_start_{session_id}"))
     
     try:
@@ -6597,10 +6625,6 @@ def handle_quiz_start(call: types.CallbackQuery):
     # --- Security and Rules Check ---
     if user_id != session['creator_id']:
         bot.answer_callback_query(call.id, "Only the person who started the quiz can begin it.", show_alert=True)
-        return
-        
-    if len(session['participants']) < 2:
-        bot.answer_callback_query(call.id, "You need at least 2 players to start the quiz.", show_alert=True)
         return
         
     session['is_active'] = True
@@ -6644,7 +6668,7 @@ def send_law_quiz_question(chat_id, session_id):
             type='quiz',
             correct_option_id=correct_option_index,
             is_anonymous=False,
-            open_period=45, # 45 seconds per question
+            open_period=28, # 28 seconds per question
             explanation=f"Correct Answer: {correct_entry['section_number']}\nTitle: {correct_entry['title']}",
             explanation_parse_mode="HTML"
         )
@@ -6652,11 +6676,12 @@ def send_law_quiz_question(chat_id, session_id):
         session['questions'].append({
             'poll_id': poll_message.poll.id,
             'correct_section': correct_entry['section_number']
+            'correct_option_index': correct_option_index
         })
         session['current_question'] += 1
         
         # Schedule the next question
-        time.sleep(50) # 45s for poll + 5s buffer
+        time.sleep(33) # 28s for poll + 5s buffer
         send_law_quiz_question(chat_id, session_id)
 
     except Exception as e:
