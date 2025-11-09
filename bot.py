@@ -219,6 +219,11 @@ LEGEND_TIERS = {
     'BRONZE': 40      # Top 60%
 }
 APPRECIATION_STREAK = 3 # Days of consecutive quizzes for a shout-out
+# Global tracker for chat activity
+chat_activity_tracker = {'recent_senders': set(), 'first_message_time': 0, 'last_reminder_time': 0}
+CHAT_ACTIVITY_WINDOW = 300 # 5 minutes in seconds
+CHAT_REMINDER_COOLDOWN = 1800 # 30 minutes in seconds
+last_exam_reminder_time = 0
 
 # =============================================================================
 # 4. GOOGLE SHEETS INTEGRATION
@@ -966,7 +971,7 @@ def record_quiz_participation(user_id, user_name, score_achieved, time_taken_sec
         supabase.rpc('update_all_time_score', {
             'p_user_id': user_id,
             'p_user_name': user_name,
-            'p_comparable_score::bigint': int(comparable_score)
+            'p_comparable_score': int(comparable_score)
         }).execute()
         
         # 4. Update quiz_activity using the RPC function
@@ -1734,7 +1739,41 @@ def background_worker():
             tb_string = traceback.format_exc()
             print(f"❌ Error in background_worker loop:\n{tb_string}")
             report_error_to_admin(f"An error occurred in the background worker: {tb_string}")
+        # --- 4. Smart Exam Countdown Reminder ---
+            global last_exam_reminder_time
+            now = time.time()
+            
+            # Check if 30-min cooldown is active
+            if (now - last_exam_reminder_time) > CHAT_REMINDER_COOLDOWN:
+                try:
+                    # Check how many distinct users have chatted in the last 5 mins
+                    five_mins_ago = (datetime.datetime.now(IST) - timedelta(minutes=5)).isoformat()
+                    
+                    response = supabase.table('quiz_activity').select('user_id', count='exact').gt('last_chat_timestamp', five_mins_ago).execute()
+                    
+                    active_chatters = response.count
 
+                    if active_chatters > 2:
+                        # More than 2 people are chatting! Send the reminder.
+                        exam_date = datetime.date(2026, 1, 3)
+                        today = datetime.datetime.now(IST).date()
+                        days_left = (exam_date - today).days
+
+                        if days_left > 0:
+                            reminder_messages = [
+                                f"Just a friendly study reminder! ⏰ Keep the discussion going, and also remember there are just <b>{days_left} days</b> left until the exams on January 3, 2026!",
+                                f"Loving the active chat! Just a quick heads-up: <b>{days_left} days</b> until the exam on Jan 3, 2026. Let's make every day count!"
+                            ]
+                            reminder_text = f"💡 {random.choice(reminder_messages)} You've got this! 💪"
+                            
+                            bot.send_message(GROUP_ID, reminder_text, parse_mode="HTML", message_thread_id=CHATTING_TOPIC_ID)
+                        
+                        # Reset the cooldown
+                        last_exam_reminder_time = now
+
+                except Exception as e:
+                    print(f"Error in Smart Exam Reminder: {e}")
+                    report_error_to_admin(f"Error in Smart Exam Reminder logic: {e}")
         finally:
             save_data()
             time.sleep(30)
@@ -7702,7 +7741,9 @@ def _launch_marathon_session(user_id, chat_id, message_id, questions_to_run):
             'is_active': True,
             'stats': {'start_time': datetime.datetime.now(), 'total_questions': actual_count},
             'leaderboard_updates': [], 
-            'performance_tracker': {}
+            'performance_tracker': {},
+            'is_chat_locked': True,
+            'last_chat_lock_reminder_time': 0
         }
         QUIZ_PARTICIPANTS[session_id] = {}
 
@@ -8100,6 +8141,7 @@ def send_marathon_results(session_id):
 
     try:
         session['is_active'] = False 
+        session['is_chat_locked'] = False
         participants = QUIZ_PARTICIPANTS.get(session_id, {})
         questions = session.get('questions', [])
         total_questions_asked = len(questions)
@@ -9503,25 +9545,63 @@ def handle_new_member(msg: types.Message):
 # 8. TELEGRAM BOT HANDLERS - BACKGROUND & FALLBACK
 # =============================================================================
 
-@bot.message_handler(func=lambda msg: is_group_message(msg))
+@bot.message_handler(
+    func=lambda msg: is_group_message(msg) and (not msg.text or not msg.text.startswith('/')),
+    content_types=['text', 'photo', 'video', 'document', 'audio', 'sticker', 'animation', 'voice', 'video_note', 'poll']
+)
 def track_users(msg: types.Message):
     """
-    A background handler that captures HUMAN user info from any message sent
-    in the group and updates both their member info and chat activity timestamp.
+    A background handler that captures HUMAN user info AND:
+    1. Deletes messages if a marathon is locked.
+    2. Triggers an exam countdown if chat is too active.
+    3. Updates user activity timestamps in Supabase.
     """
-    try:
-        user = msg.from_user
-        if user.is_bot:
-            return
+    global chat_activity_tracker
+    session_id = str(GROUP_ID)
+    session = QUIZ_SESSIONS.get(session_id)
+    user = msg.from_user
+    
+    if user.is_bot:
+        return
 
-        # --- THE FIX: Call the new RPC to update last_chat_timestamp ---
+    # --- 1. Marathon Chat Lock Logic ---
+    if session and session.get('is_active') and session.get('is_chat_locked'):
+        # Check if the sender is the Bot Owner (you)
+        if user.id == ADMIN_USER_ID:
+            # Allow your message, but still track it below
+            pass
+        else:
+            # It's someone else. Delete their message.
+            try:
+                bot.delete_message(msg.chat.id, msg.message_id)
+                
+                # Send a timed reminder to the chat topic
+                current_time = time.time()
+                last_reminder = session.get('last_chat_lock_reminder_time', 0)
+                
+                # Send reminder only if 60 seconds have passed
+                if (current_time - last_reminder) > 60:
+                    reminder_text = (
+                        "🤫 <b>Shhh... A Quiz Marathon is in progress!</b> 🤫\n\n"
+                        "Your message was held to keep the chat clear for participants.\n\n"
+                        "Please feel free to chat again after the quiz. Good luck to the players! 🚀"
+                    )
+                    bot.send_message(GROUP_ID, reminder_text, parse_mode="HTML", message_thread_id=CHATTING_TOPIC_ID)
+                    session['last_chat_lock_reminder_time'] = current_time # Update the timestamp
+                    
+            except Exception as e:
+                print(f"Could not delete message during marathon: {e}")
+            
+            return # Stop processing this message
+
+    # --- 2. Standard Activity Tracking ---
+    # (This will run for your messages during a lock, or for everyone's messages when unlocked)
+    try:
         supabase.rpc('update_chat_activity', {
             'p_user_id': user.id,
             'p_user_name': user.username or user.first_name
         }).execute()
-        # -----------------------------------------------------------
         
-        # This part is for general member info, it can remain.
         supabase.rpc('upsert_group_member', {
             'p_user_id': user.id,
             'p_username': user.username,
@@ -9529,7 +9609,12 @@ def track_users(msg: types.Message):
             'p_last_name': user.last_name
         }).execute()
     except Exception as e:
-        print(f"[User Tracking Error]: Could not update user {msg.from_user.id}. Reason: {e}")
+        print(f"[User Tracking Error]: Could not update user {user.id}. Reason: {e}")
+
+
+# --- 3. Exam Countdown Reminder Logic ---
+    # (This logic has been moved to the single-instance background_worker.py
+    # to prevent race conditions and duplicate messages from Gunicorn workers)
 
 
 # --- Fallback Handler (Must be the VERY LAST message handler) ---
@@ -9730,29 +9815,14 @@ except Exception as e:
     print(f"⚠️ WARNING: Could not load persistent data from Supabase. Bot will start with a fresh state. Error: {e}")
 
     
-# --- STEP 5: STARTING BACKGROUND SCHEDULER ---
-print("\n--- STEP 5: Starting Background Scheduler Thread ---")
-try:
-    scheduler_thread = threading.Thread(target=background_worker, daemon=True)
-    scheduler_thread.start()
-    print("✅ Background scheduler is now running.")
-except Exception as e:
-    print(f"❌ FATAL: Failed to start the background scheduler. Error: {e}")
-    report_error_to_admin(f"FATAL ERROR: The background worker thread could not be started:\n{e}")
-    exit()
-
-# --- STEP 6: SETTING TELEGRAM WEBHOOK ---
-print("\n--- STEP 6: Setting Telegram Webhook ---")
-try:
-    bot.remove_webhook()
-    time.sleep(1)
-    webhook_url = f"{SERVER_URL.rstrip('/')}/{BOT_TOKEN}"
-    bot.set_webhook(url=webhook_url)
-    print(f"✅ Webhook is set successfully to: {webhook_url}")
-except Exception as e:
-    print(f"❌ FATAL: Could not set the webhook. Telegram updates will not be received. Error: {e}")
-    report_error_to_admin(f"FATAL ERROR: Failed to set webhook. The bot will not work:\n{e}")
-    exit()
+# --- STEPS 5 & 6: (SKIPPED) ---
+# Background thread and Webhook are now managed by Render's service types.
+# Gunicorn (in start.sh) runs the web service.
+# The Background Worker service runs background_worker.py.
+print("\n--- STEPS 5 & 6: SKIPPED (Managed by Render Services) ---")
+print("\n" + "="*50)
+print("🚀 GUNICORN WEB WORKERS ARE INITIALIZING 🚀")
+print("="*50 + "\n")
 
 # --- FINAL STATUS ---
 print("\n" + "="*50)
