@@ -1749,7 +1749,7 @@ def background_worker():
                     # Check how many distinct users have chatted in the last 5 mins
                     five_mins_ago = (datetime.datetime.now(IST) - timedelta(minutes=5)).isoformat()
                     
-                    response = supabase.table('quiz_activity').select('user_id', count='exact').gt('last_chat_timestamp', five_mins_ago).execute()
+                    response = supabase.table('quiz_activity').select('user_id', count='exact').gt('last_quiz_timestamp', five_mins_ago).execute()
                     
                     active_chatters = response.count
 
