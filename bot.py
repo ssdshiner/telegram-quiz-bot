@@ -562,11 +562,11 @@ def create_compact_file_list_page(group, subject, resource_type, page=1, podcast
     """
     Creates a visually enhanced, paginated file list with subject-specific emojis.
     Now handles both regular resource types and the new podcast_format.
+    Uses '::' separator for callbacks to handle spaces in names.
     """
     try:
         offset = (page - 1) * FILES_PER_PAGE
 
-        # Build the query dynamically
         # Build the query dynamically
         count_query = supabase.table('resources').select('id', count='exact').eq('subject', subject)
         files_query = supabase.table('resources').select('*').eq('subject', subject)
@@ -616,26 +616,20 @@ def create_compact_file_list_page(group, subject, resource_type, page=1, podcast
         markup = types.InlineKeyboardMarkup(row_width=1)
         markup.add(*buttons)
 
-        # --- Dynamic Navigation Buttons ---
-        # --- Dynamic Navigation Buttons ---
+        # --- Dynamic Navigation Buttons (CORRECTED) ---
         nav_buttons = []
-        # We use '::' as a separator to handle spaces in names
-        page_callback_base = f"v_page::{page}::{group}::{subject}::{resource_type}"
         
-        # Add podcast_format or a 'None' placeholder for consistent callback structure
+        # Base callback for next/prev pages. Uses '::' to handle spaces.
+        base_callback_str = f"::{group}::{subject}::{resource_type}"
         if podcast_format:
-            page_callback_base += f"::{podcast_format}"
+            base_callback_str += f"::{podcast_format}"
         else:
-            page_callback_base += "::None"
+            base_callback_str += "::None" # Add placeholder for consistent structure
 
         if page > 1:
             # Manually format the 'page' part for the "Prev" button
-            prev_page_callback = f"v_page::{page-1}::{group}::{subject}::{resource_type}"
-            if podcast_format:
-                prev_page_callback += f"::{podcast_format}"
-            else:
-                prev_page_callback += "::None"
-            nav_buttons.append(types.InlineKeyboardButton("⬅️ Prev", callback_data=prev_page_callback))
+            prev_callback = f"v_page::{page-1}{base_callback_str}"
+            nav_buttons.append(types.InlineKeyboardButton("⬅️ Prev", callback_data=prev_callback))
 
         # Back button logic
         if podcast_format:
@@ -646,7 +640,9 @@ def create_compact_file_list_page(group, subject, resource_type, page=1, podcast
             nav_buttons.append(types.InlineKeyboardButton("↩️ Back", callback_data=f"v_subj::{group}::{subject}"))
 
         if page < total_pages:
-            nav_buttons.append(types.InlineKeyboardButton("Next ➡️", callback_data=page_callback_base.format(page=page+1)))
+            # Manually format the 'page' part for the "Next" button
+            next_callback = f"v_page::{page+1}{base_callback_str}"
+            nav_buttons.append(types.InlineKeyboardButton("Next ➡️", callback_data=next_callback))
 
         markup.row(*nav_buttons)
         return message_text, markup
@@ -659,28 +655,15 @@ def create_compact_file_list_page(group, subject, resource_type, page=1, podcast
 def handle_vault_callbacks(call: types.CallbackQuery):
     """
     Master handler for all vault navigation with proactive error prevention.
+    Uses '::' as a separator to handle spaces in names.
     """
     bot.answer_callback_query(call.id)
-    parts = call.data.split('_')
-    action = parts[1]
-# New handler for the "Back" button from the subject categories
-    if action == 'main' and len(parts) > 2 and parts[2] == 'listfile':
-        try:
-            subjects = [
-                "Advanced Accnt", "Law", "Direct Tax", "Indirect Tax",
-                "Costing", "Auditing", "FM", "SM"
-            ]
-            markup = types.InlineKeyboardMarkup(row_width=2)
-            buttons = [
-                types.InlineKeyboardButton(f"📚 {subj}", callback_data=f"v_subj_None_{subj}") 
-                for subj in subjects
-            ]
-            markup.add(*buttons)
-            text = "🗂️ Welcome to the CA Vault!\n\nPlease select a Subject to begin."
-            edit_if_changed(text, markup)
-        except Exception as e:
-            print(f"Error in v_main_listfile callback: {e}")
-        return # Stop processing here    
+    
+    # Use '::' as a separator to handle spaces in names
+    parts = call.data.split('::')
+    action_full = parts[0] # This will be 'v_subj', 'v_type', 'v_page', 'v_main', etc.
+    action = action_full.replace('v_', '') # Gets the 'subj', 'type', 'page' part
+    
     def edit_if_changed(new_text, new_markup):
         if call.message.text != new_text or call.message.reply_markup != new_markup:
             try:
@@ -691,21 +674,41 @@ def handle_vault_callbacks(call: types.CallbackQuery):
 
     try:
         if action == 'main':
+            # This handles the "Back to Subjects" button (callback="v_main::listfile")
+            if len(parts) > 1 and parts[1] == 'listfile':
+                try:
+                    subjects = [
+                        "Advanced Accnt", "Law", "Direct Tax", "Indirect Tax",
+                        "Costing", "Auditing", "FM", "SM"
+                    ]
+                    markup = types.InlineKeyboardMarkup(row_width=2)
+                    buttons = [
+                        types.InlineKeyboardButton(f"📚 {subj}", callback_data=f"v_subj::None::{subj}") 
+                        for subj in subjects
+                    ]
+                    markup.add(*buttons)
+                    text = "🗂️ Welcome to the CA Vault!\n\nPlease select a Subject to begin."
+                    edit_if_changed(text, markup)
+                except Exception as e:
+                    print(f"Error in v_main::listfile callback: {e}")
+                return # Stop processing
+            
+            # This is the original main menu (for the old G1/G2 flow), just in case
             markup = types.InlineKeyboardMarkup(row_width=2)
             markup.add(
-                types.InlineKeyboardButton("🔵 Group 1", callback_data="v_group_Group 1"),
-                types.InlineKeyboardButton("🟢 Group 2", callback_data="v_group_Group 2")
+                types.InlineKeyboardButton("🔵 Group 1", callback_data="v_group::Group 1"),
+                types.InlineKeyboardButton("🟢 Group 2", callback_data="v_group::Group 2")
             )
             text = "🗂️ Welcome to the CA Vault!\n\nPlease select a Group to begin."
             edit_if_changed(text, markup)
 
         elif action == 'group':
-            group_name = '_'.join(parts[2:])
+            group_name = parts[1]
             subjects = {
                 "Group 1": ["Accounts", "Law", "Income Tax", "GST", "General"],
                 "Group 2": ["Costing", "Auditing", "FM & SM", "General"]
             }
-            buttons = [types.InlineKeyboardButton(f"📚 {subj}", callback_data=f"v_subj_{group_name}_{subj}") for subj in subjects[group_name]]
+            buttons = [types.InlineKeyboardButton(f"📚 {subj}", callback_data=f"v_subj::{group_name}::{subj}") for subj in subjects[group_name]]
             markup = types.InlineKeyboardMarkup(row_width=2)
             markup.add(*buttons)
             markup.add(types.InlineKeyboardButton("↩️ Back to Main Menu", callback_data="v_main"))
@@ -713,7 +716,7 @@ def handle_vault_callbacks(call: types.CallbackQuery):
             edit_if_changed(text, markup)
 
         elif action == 'subj':
-            group_name, subject = parts[2], '_'.join(parts[3:])
+            group_name, subject = parts[1], parts[2]
 
             # This is the new list of resource types based on our DB schema
             resource_types = [
@@ -731,44 +734,59 @@ def handle_vault_callbacks(call: types.CallbackQuery):
             buttons = []
             # Create buttons dynamically from the list
             for emoji, rtype in resource_types:
-                # Note: 'ICAI Module' becomes 'ICAI_Module' in the callback data
-                callback_rtype = rtype.replace(" ", "_")
                 buttons.append(types.InlineKeyboardButton(
                     f"{emoji} {rtype}", 
-                    callback_data=f"v_type_{group_name}_{subject}_{callback_rtype}"
+                    callback_data=f"v_type::{group_name}::{subject}::{rtype}" # Use ::
                 ))
 
             markup = types.InlineKeyboardMarkup(row_width=2)
             markup.add(*buttons)
             
             # This is the new "Back" button logic
-            markup.add(types.InlineKeyboardButton("↩️ Back to Subjects", callback_data="v_main_listfile"))
-            
+            # It goes back to the main subject list if group is "None"
+            # or back to the group list if a group was selected.
+            if group_name == "None":
+                markup.add(types.InlineKeyboardButton("↩️ Back to Subjects", callback_data="v_main::listfile"))
+            else:
+                markup.add(types.InlineKeyboardButton("↩️ Back to Subjects", callback_data=f"v_group::{group_name}"))
+
             text = f"📚 <b>{subject}</b>\n\nWhat are you looking for?"
             edit_if_changed(text, markup)
 
         elif action == 'type':
-            group, subject, rtype_callback = parts[2], parts[3], '_'.join(parts[4:])
-            
-            # Convert the callback-safe name (e.g., "ICAI_Module") back to a display name
-            rtype_display = rtype_callback.replace("_", " ")
+            group, subject, rtype = parts[1], parts[2], parts[3]
 
             # Our new special case: Only 'Podcast' has a sub-menu
-            if rtype_callback == 'Podcast':
+            if rtype == 'Podcast':
                 markup = types.InlineKeyboardMarkup(row_width=2)
                 markup.add(
-                    types.InlineKeyboardButton("🎧 Audio", callback_data=f"v_podcast_{group}_{subject}_audio"),
-                    types.InlineKeyboardButton("🎬 Video", callback_data=f"v_podcast_{group}_{subject}_video")
+                    types.InlineKeyboardButton("🎧 Audio", callback_data=f"v_podcast::{group}::{subject}::audio"),
+                    types.InlineKeyboardButton("🎬 Video", callback_data=f"v_podcast::{group}::{subject}::video")
                 )
                 # The "Back" button goes to the subject's resource type list
-                markup.add(types.InlineKeyboardButton("↩️ Back", callback_data=f"v_subj_{group}_{subject}"))
+                markup.add(types.InlineKeyboardButton("↩️ Back", callback_data=f"v_subj::{group}::{subject}"))
                 text = f"🎙️ <b>{subject} - Podcasts</b>\n\nPlease choose a format:"
                 edit_if_changed(text, markup)
             
             # All other types (RTP, MTP, Video Explainer, etc.) go directly to the file list
             else:
-                text, markup = create_compact_file_list_page(group, subject, rtype_display, page=1)
+                text, markup = create_compact_file_list_page(group, subject, rtype, page=1)
                 edit_if_changed(text, markup)
+
+        elif action == 'podcast':
+            group, subject, podcast_format = parts[1], parts[2], parts[3]
+            text, markup = create_compact_file_list_page(group, subject, 'Podcast', page=1, podcast_format=podcast_format)
+            edit_if_changed(text, markup)
+
+        elif action == 'page':
+            page = int(parts[1])
+            group = parts[2]
+            subject = parts[3]
+            rtype = parts[4]
+            # Handle the 'None' placeholder for podcast_format
+            podcast_format = parts[5] if len(parts) > 5 and parts[5] != 'None' else None
+            text, markup = create_compact_file_list_page(group, subject, rtype, page=page, podcast_format=podcast_format)
+            edit_if_changed(text, markup)
 
     except Exception as e:
         report_error_to_admin(f"Error in vault navigation: {traceback.format_exc()}")
