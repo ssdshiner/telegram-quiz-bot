@@ -644,7 +644,24 @@ def handle_vault_callbacks(call: types.CallbackQuery):
     bot.answer_callback_query(call.id)
     parts = call.data.split('_')
     action = parts[1]
-    
+# New handler for the "Back" button from the subject categories
+    if action == 'main' and len(parts) > 2 and parts[2] == 'listfile':
+        try:
+            subjects = [
+                "Advanced Accnt", "Law", "Direct Tax", "Indirect Tax",
+                "Costing", "Auditing", "FM", "SM"
+            ]
+            markup = types.InlineKeyboardMarkup(row_width=2)
+            buttons = [
+                types.InlineKeyboardButton(f"📚 {subj}", callback_data=f"v_subj_None_{subj}") 
+                for subj in subjects
+            ]
+            markup.add(*buttons)
+            text = "🗂️ Welcome to the CA Vault!\n\nPlease select a Subject to begin."
+            edit_if_changed(text, markup)
+        except Exception as e:
+            print(f"Error in v_main_listfile callback: {e}")
+        return # Stop processing here    
     def edit_if_changed(new_text, new_markup):
         if call.message.text != new_text or call.message.reply_markup != new_markup:
             try:
@@ -679,58 +696,60 @@ def handle_vault_callbacks(call: types.CallbackQuery):
         elif action == 'subj':
             group_name, subject = parts[2], '_'.join(parts[3:])
 
-        # --- THIS IS THE NEW LOGIC ---
-            if subject == "General":
-                resource_types = ["ICAI Module", "Faculty Notes", "QPs & Revision"]
-            else:
-                resource_types = ["ICAI Module", "Faculty Notes", "QPs & Revision", "Podcasts"]
-        # --- END OF NEW LOGIC ---
+            # This is the new list of resource types based on our DB schema
+            resource_types = [
+                ("📘", "ICAI Module"),
+                ("✍️", "Faculty Notes"),
+                ("🚀", "RTP"),
+                ("📊", "MTP"),
+                ("📜", "PYQ"),
+                ("📝", "Model Paper"),
+                ("🧑‍🏫", "Faculty QP"),
+                ("🎧", "Podcast"),
+                ("🎬", "Video Explainer")
+            ]
 
             buttons = []
-        # Create buttons based on the dynamic list
-            if "ICAI Module" in resource_types:
-                buttons.append(types.InlineKeyboardButton(f"📘 ICAI Module", callback_data=f"v_type_{group_name}_{subject}_ICAI Module"))
-            if "Faculty Notes" in resource_types:
-                buttons.append(types.InlineKeyboardButton(f"✍️ Faculty Notes", callback_data=f"v_type_{group_name}_{subject}_Faculty Notes"))
-            if "QPs & Revision" in resource_types:
-                buttons.append(types.InlineKeyboardButton(f"📝 QPs & Revision", callback_data=f"v_type_{group_name}_{subject}_QPs & Revision"))
-            if "Podcasts" in resource_types:
-                buttons.append(types.InlineKeyboardButton(f"🎙️ Podcasts", callback_data=f"v_type_{group_name}_{subject}_Podcasts"))
+            # Create buttons dynamically from the list
+            for emoji, rtype in resource_types:
+                # Note: 'ICAI Module' becomes 'ICAI_Module' in the callback data
+                callback_rtype = rtype.replace(" ", "_")
+                buttons.append(types.InlineKeyboardButton(
+                    f"{emoji} {rtype}", 
+                    callback_data=f"v_type_{group_name}_{subject}_{callback_rtype}"
+                ))
 
             markup = types.InlineKeyboardMarkup(row_width=2)
             markup.add(*buttons)
-            markup.add(types.InlineKeyboardButton("↩️ Back to Subjects", callback_data=f"v_group_{group_name}"))
+            
+            # This is the new "Back" button logic
+            markup.add(types.InlineKeyboardButton("↩️ Back to Subjects", callback_data="v_main_listfile"))
+            
             text = f"📚 <b>{subject}</b>\n\nWhat are you looking for?"
             edit_if_changed(text, markup)
 
         elif action == 'type':
-            group, subject, rtype = parts[2], parts[3], '_'.join(parts[4:])
-            if rtype == 'Podcasts':
+            group, subject, rtype_callback = parts[2], parts[3], '_'.join(parts[4:])
+            
+            # Convert the callback-safe name (e.g., "ICAI_Module") back to a display name
+            rtype_display = rtype_callback.replace("_", " ")
+
+            # Our new special case: Only 'Podcast' has a sub-menu
+            if rtype_callback == 'Podcast':
                 markup = types.InlineKeyboardMarkup(row_width=2)
                 markup.add(
                     types.InlineKeyboardButton("🎧 Audio", callback_data=f"v_podcast_{group}_{subject}_audio"),
                     types.InlineKeyboardButton("🎬 Video", callback_data=f"v_podcast_{group}_{subject}_video")
                 )
+                # The "Back" button goes to the subject's resource type list
                 markup.add(types.InlineKeyboardButton("↩️ Back", callback_data=f"v_subj_{group}_{subject}"))
                 text = f"🎙️ <b>{subject} - Podcasts</b>\n\nPlease choose a format:"
                 edit_if_changed(text, markup)
+            
+            # All other types (RTP, MTP, Video Explainer, etc.) go directly to the file list
             else:
-                text, markup = create_compact_file_list_page(group, subject, rtype, page=1)
+                text, markup = create_compact_file_list_page(group, subject, rtype_display, page=1)
                 edit_if_changed(text, markup)
-
-        elif action == 'podcast':
-            group, subject, podcast_format = parts[2], parts[3], parts[4]
-            text, markup = create_compact_file_list_page(group, subject, 'Podcasts', page=1, podcast_format=podcast_format)
-            edit_if_changed(text, markup)
-
-        elif action == 'page':
-            page = int(parts[2])
-            group = parts[3]
-            subject = parts[4]
-            rtype = parts[5]
-            podcast_format = parts[6] if len(parts) > 6 and parts[6] != 'None' else None
-            text, markup = create_compact_file_list_page(group, subject, rtype, page=page, podcast_format=podcast_format)
-            edit_if_changed(text, markup)
 
     except Exception as e:
         report_error_to_admin(f"Error in vault navigation: {traceback.format_exc()}")
@@ -4320,7 +4339,7 @@ def handle_interlink_callbacks(call: types.CallbackQuery):
 @membership_required
 def handle_listfile_command(msg: types.Message):
     """
-    Shows the main menu for the new Advanced Vault Browser using the robust send_message method.
+    Shows the new "Subject-First" menu for the Advanced Vault Browser.
     """
     try:
         supabase.rpc('update_chat_activity', {'p_user_id': msg.from_user.id, 'p_user_name': msg.from_user.username or msg.from_user.first_name}).execute()
@@ -4328,13 +4347,19 @@ def handle_listfile_command(msg: types.Message):
         print(f"Activity tracking failed for user {msg.from_user.id} in command: {e}")
     
     try:
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton("🔵 Group 1", callback_data="v_group_Group 1"),
-            types.InlineKeyboardButton("🟢 Group 2", callback_data="v_group_Group 2")
-        )
+        # This is the new layout for Draft 3
+        subjects = [
+            "Advanced Accnt", "Law", "Direct Tax", "Indirect Tax",
+            "Costing", "Auditing", "FM", "SM"
+        ]
         
-        # Using the more robust send_message with reply_parameters
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        buttons = [
+            types.InlineKeyboardButton(f"📚 {subj}", callback_data=f"v_subj_None_{subj}") 
+            for subj in subjects
+        ]
+        markup.add(*buttons)
+        
         reply_params = types.ReplyParameters(
             message_id=msg.message_id,
             allow_sending_without_reply=True
@@ -4342,14 +4367,13 @@ def handle_listfile_command(msg: types.Message):
         
         bot.send_message(
             msg.chat.id, 
-            "🗂️ Welcome to the CA Vault!\n\nPlease select a Group to begin.", 
+            "🗂️ Welcome to the CA Vault!\n\nPlease select a Subject to begin.", 
             reply_markup=markup,
             reply_parameters=reply_params
         )
         
     except Exception as e:
         report_error_to_admin(f"Error in /listfile: {traceback.format_exc()}")
-        # The universal safe reply patch will handle this automatically
         bot.send_message(msg.chat.id, "❌ An error occurred while opening the Vault.")
 # =============================================================================
 # 8. TELEGRAM BOT HANDLERS - VAULT & DM
