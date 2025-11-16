@@ -567,8 +567,14 @@ def create_compact_file_list_page(group, subject, resource_type, page=1, podcast
         offset = (page - 1) * FILES_PER_PAGE
 
         # Build the query dynamically
-        count_query = supabase.table('resources').select('id', count='exact').eq('group_name', group).eq('subject', subject)
-        files_query = supabase.table('resources').select('*').eq('group_name', group).eq('subject', subject)
+        # Build the query dynamically
+        count_query = supabase.table('resources').select('id', count='exact').eq('subject', subject)
+        files_query = supabase.table('resources').select('*').eq('subject', subject)
+
+        # Only filter by group_name if it's not "None"
+        if group and group != "None":
+            count_query = count_query.eq('group_name', group)
+            files_query = files_query.eq('group_name', group)
 
         header_title = resource_type # Default title
 
