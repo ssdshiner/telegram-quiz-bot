@@ -617,20 +617,33 @@ def create_compact_file_list_page(group, subject, resource_type, page=1, podcast
         markup.add(*buttons)
 
         # --- Dynamic Navigation Buttons ---
+        # --- Dynamic Navigation Buttons ---
         nav_buttons = []
-        page_callback_base = f"v_page_{{page}}_{group}_{subject}_{resource_type}"
+        # We use '::' as a separator to handle spaces in names
+        page_callback_base = f"v_page::{page}::{group}::{subject}::{resource_type}"
+        
+        # Add podcast_format or a 'None' placeholder for consistent callback structure
         if podcast_format:
-            page_callback_base += f"_{podcast_format}"
+            page_callback_base += f"::{podcast_format}"
+        else:
+            page_callback_base += "::None"
 
         if page > 1:
-            nav_buttons.append(types.InlineKeyboardButton("⬅️ Prev", callback_data=page_callback_base.format(page=page-1)))
+            # Manually format the 'page' part for the "Prev" button
+            prev_page_callback = f"v_page::{page-1}::{group}::{subject}::{resource_type}"
+            if podcast_format:
+                prev_page_callback += f"::{podcast_format}"
+            else:
+                prev_page_callback += "::None"
+            nav_buttons.append(types.InlineKeyboardButton("⬅️ Prev", callback_data=prev_page_callback))
 
         # Back button logic
         if podcast_format:
-             # If it's a podcast list, the back button goes to the subject menu
-            nav_buttons.append(types.InlineKeyboardButton("↩️ Back", callback_data=f"v_subj_{group}_{subject}"))
+             # If it's a podcast list, the back button goes to the podcast type choice
+            nav_buttons.append(types.InlineKeyboardButton("↩️ Back", callback_data=f"v_type::{group}::{subject}::Podcast"))
         else:
-            nav_buttons.append(types.InlineKeyboardButton("↩️ Back", callback_data=f"v_subj_{group}_{subject}"))
+            # If it's a normal list, the back button goes to the subject's resource type list
+            nav_buttons.append(types.InlineKeyboardButton("↩️ Back", callback_data=f"v_subj::{group}::{subject}"))
 
         if page < total_pages:
             nav_buttons.append(types.InlineKeyboardButton("Next ➡️", callback_data=page_callback_base.format(page=page+1)))
