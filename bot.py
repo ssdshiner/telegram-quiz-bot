@@ -4482,8 +4482,8 @@ def handle_getfile_callback(call: types.CallbackQuery):
                 reply_to_message_id=call.message.message_id
             )
             
-            confirmation_text = f"✅ Success! You have downloaded:\n<b>{escape(file_name_to_send)}</b>"
-            bot.edit_message_text(confirmation_text, call.message.chat.id, call.message.message_id, reply_markup=None, parse_mode="HTML")
+            # Instead of editing the message, we delete it to clean up the chat.
+            bot.delete_message(call.message.chat.id, call.message.message_id)
 
         except ApiTelegramException as telegram_error:
             report_error_to_admin(f"Failed to send document (ID: {resource_id}, FileID: {file_id_to_send}). Error: {telegram_error}")
