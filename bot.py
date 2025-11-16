@@ -620,6 +620,7 @@ def create_compact_file_list_page(group, subject, resource_type, page=1, podcast
         nav_buttons = []
         
         # Base callback for next/prev pages. Uses '::' to handle spaces.
+        # *** Note: Does NOT include the page number. ***
         base_callback_str = f"::{group}::{subject}::{resource_type}"
         if podcast_format:
             base_callback_str += f"::{podcast_format}"
@@ -627,7 +628,7 @@ def create_compact_file_list_page(group, subject, resource_type, page=1, podcast
             base_callback_str += "::None" # Add placeholder for consistent structure
 
         if page > 1:
-            # Manually format the 'page' part for the "Prev" button
+            # Add "Prev" button
             prev_callback = f"v_page::{page-1}{base_callback_str}"
             nav_buttons.append(types.InlineKeyboardButton("⬅️ Prev", callback_data=prev_callback))
 
@@ -640,7 +641,7 @@ def create_compact_file_list_page(group, subject, resource_type, page=1, podcast
             nav_buttons.append(types.InlineKeyboardButton("↩️ Back", callback_data=f"v_subj::{group}::{subject}"))
 
         if page < total_pages:
-            # Manually format the 'page' part for the "Next" button
+            # Add "Next" button
             next_callback = f"v_page::{page+1}{base_callback_str}"
             nav_buttons.append(types.InlineKeyboardButton("Next ➡️", callback_data=next_callback))
 
@@ -650,7 +651,6 @@ def create_compact_file_list_page(group, subject, resource_type, page=1, podcast
     except Exception as e:
         report_error_to_admin(f"Error in create_compact_file_list_page: {traceback.format_exc()}")
         return "❌ An error occurred while fetching files.", None
-
 @bot.callback_query_handler(func=lambda call: call.data.startswith('v_'))
 def handle_vault_callbacks(call: types.CallbackQuery):
     """
@@ -4371,7 +4371,6 @@ def handle_interlink_callbacks(call: types.CallbackQuery):
         handle_info_command(call.message)
 
 # --- Vault Command: /listfile ---
-
 @bot.message_handler(commands=['listfile'])
 @membership_required
 def handle_listfile_command(msg: types.Message):
@@ -4392,7 +4391,8 @@ def handle_listfile_command(msg: types.Message):
         
         markup = types.InlineKeyboardMarkup(row_width=2)
         buttons = [
-            types.InlineKeyboardButton(f"📚 {subj}", callback_data=f"v_subj_None_{subj}") 
+            # Uses '::' as the separator
+            types.InlineKeyboardButton(f"📚 {subj}", callback_data=f"v_subj::None::{subj}") 
             for subj in subjects
         ]
         markup.add(*buttons)
