@@ -16,6 +16,8 @@ import time
 import random
 import requests
 import uuid
+from apscheduler.schedulers.background import BackgroundScheduler
+import logging
 from flask import Flask, request, json
 from telebot import TeleBot, types
 from collections import defaultdict
@@ -1253,7 +1255,6 @@ def cleanup_stale_user_states():
 def fetch_icai_announcements():
     """
     Scrapes multiple ICAI BoS pages and returns the count of new announcements sent.
-    -- UPDATED to return a value for manual trigger --
     """
     print("📰 Checking all ICAI announcement pages...")
     try:
@@ -1268,7 +1269,7 @@ def fetch_icai_announcements():
 
         for url in urls_to_check:
             try:
-                print(f"   -> Scraping: {url}")
+                # print(f"   -> Scraping: {url}") # Optional debug print
                 response = requests.get(url, headers=headers, timeout=20)
                 response.raise_for_status()
                 soup = BeautifulSoup(response.content, 'html.parser')
@@ -1304,30 +1305,36 @@ def fetch_icai_announcements():
         new_announcements_sent = 0
         for url, title in all_new_announcements.items():
             title_lower = title.lower()
-            # Broadened keywords to catch all relevant student news
-            keywords = ['intermediate', 'inter', 'result', 'student', 'foundation', 'final', 'exam', 'admit card', 'bos', 'training']
+            
+            # --- UPDATED FILTER: Catch all student/exam related news ---
+            keywords = [
+                'intermediate', 'inter', 'result', 'admit card', 
+                'exam', 'reschedule', 'syllabus', 'bos', 
+                'foundation', 'final', 'training', 'scholarship'
+            ]
+            
             if any(k in title_lower for k in keywords):
-                existing = supabase.table('sent_announcements').select('id').eq('announcement_url', url).execute()
-                if not existing.data:
-                    new_announcements_sent += 1
-                    print(f"Found new Intermediate announcement: {title}")
-                    message_text = (
-                        f"📢 **New ICAI Announcement (Intermediate)!**\n\n"
-                        f"<b>Title:</b> {escape(title)}\n\n"
-                        f"🔗 <b>Read More:</b> {url}"
-                    )
-                    bot.send_message(GROUP_ID, message_text, parse_mode="HTML", message_thread_id=UPDATES_TOPIC_ID, disable_web_page_preview=True)
-                    supabase.table('sent_announcements').insert({'announcement_url': url, 'announcement_title': title}).execute()
-                    time.sleep(5)
+                try:
+                    existing = supabase.table('sent_announcements').select('id').eq('announcement_url', url).execute()
+                    if not existing.data:
+                        new_announcements_sent += 1
+                        print(f"Found new ICAI announcement: {title}")
+                        message_text = (
+                            f"📢 **New ICAI Announcement!**\n\n"
+                            f"<b>Title:</b> {escape(title)}\n\n"
+                            f"🔗 <b>Read More:</b> {url}"
+                        )
+                        bot.send_message(GROUP_ID, message_text, parse_mode="HTML", message_thread_id=UPDATES_TOPIC_ID, disable_web_page_preview=True)
+                        supabase.table('sent_announcements').insert({'announcement_url': url, 'announcement_title': title}).execute()
+                        time.sleep(2)
+                except Exception as e:
+                    print(f"Error processing ICAI announcement: {e}")
         
-        if new_announcements_sent == 0:
-            print("No new *Intermediate-specific* announcements found.")
-        
-        return new_announcements_sent # This line is the main change
+        return new_announcements_sent
 
     except Exception as e:
         report_error_to_admin(f"Error in fetch_icai_announcements: {traceback.format_exc()}")
-        return 0 # Return 0 if there was an error
+        return 0
 def fetch_and_send_external_news():
     """
     Fetches news from multiple sources and sends ALL new unique articles found.
@@ -1347,9 +1354,13 @@ def fetch_and_send_external_news():
                     f"<b>Headline:</b> {escape(news_item['title'])}\n\n"
                     f"🔗 Read the full story here:\n{news_item['url']}"
                 )
-                bot.send_message(GROUP_ID, message_text, parse_mode="HTML", message_thread_id=UPDATES_TOPIC_ID, disable_web_page_preview=False)
-                supabase.table('sent_announcements').insert({'announcement_url': news_item['url'], 'announcement_title': news_item['title']}).execute()
-                return True
+                # Send to group
+                try:
+                    bot.send_message(GROUP_ID, message_text, parse_mode="HTML", message_thread_id=UPDATES_TOPIC_ID, disable_web_page_preview=False)
+                    supabase.table('sent_announcements').insert({'announcement_url': news_item['url'], 'announcement_title': news_item['title']}).execute()
+                    return True
+                except Exception as e:
+                    print(f"Error sending message: {e}")
         except Exception as e:
             print(f"Error processing {source_name} news: {e}")
         return False
@@ -1358,7 +1369,7 @@ def fetch_and_send_external_news():
     try:
         response = requests.get("https://www.caclubindia.com/news/", headers={'User-Agent': 'Mozilla/5.0'}, timeout=20)
         soup = BeautifulSoup(response.content, 'html.parser')
-        news_div = soup.find('div', class_='item-box') # Adjust selector if site changes
+        news_div = soup.find('div', class_='item-box') 
         if news_div:
             link_tag = news_div.find('a')
             title_tag = news_div.find('h4')
@@ -1378,19 +1389,18 @@ def fetch_and_send_external_news():
                 process_news_item({'title': title_tag.text.strip(), 'url': link_tag['href']}, 'TaxGuru')
     except Exception as e: print(f"TaxGuru Error: {e}")
 
-    # --- 3. Economic Times (Finance) ---
+    # --- 3. Economic Times ---
     try:
         response = requests.get("https://economictimes.indiatimes.com/topic/chartered-accountant", headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
         soup = BeautifulSoup(response.content, 'html.parser')
         news_div = soup.find('div', class_='topicstry')
         if news_div:
             link_tag = news_div.find('a')
-            title_tag = news_div.find('h2') or news_div.find('h3') # ET changes tags often
+            title_tag = news_div.find('h2') or news_div.find('h3')
             if link_tag and title_tag:
                 full_url = "https://economictimes.indiatimes.com" + link_tag['href'] if not link_tag['href'].startswith('http') else link_tag['href']
                 process_news_item({'title': title_tag.text.strip(), 'url': full_url}, 'The Economic Times')
     except Exception as e: print(f"Economic Times Error: {e}")
-        return None
         
     # --- Scraper for NDTV (ADDED BACK) ---
     def get_ndtv_news():
@@ -1446,393 +1456,145 @@ if news_to_send:
         except Exception as e:
             print(f"Error sending news message: {e}")
             return False
-def background_worker():
-    """Runs all scheduled tasks in a continuous loop."""
-    # --- GLOBAL DECLARATIONS ---
-    global PAUSE_AUTO_SCHEDULES, pause_command_date
-    global last_daily_check_day, last_schedule_announce_day
-    global last_daily_content_day, last_daily_resource_day
-    global last_auto_quiz_time
-    # --- END GLOBALS ---
+def handle_auto_quiz():
+    """Runs the automatic random quiz."""
+    global active_polls, last_auto_quiz_time
+    if PAUSE_AUTO_SCHEDULES: return
 
-    # Initialize local loop variables AFTER the global declaration
-    cleanup_interval = 300
-    last_cleanup_time = time.time()
-    
-    news_check_interval = 1800 # For ICAI announcements
-    last_news_check_time = time.time() - news_check_interval
+    print("🎲 Starting automatic random quiz job...")
+    try:
+        response = supabase.rpc('get_random_quiz', {}).execute()
+        if response.data:
+            quiz_data = response.data[0]
+            question_id = quiz_data.get('id')
+            question_text = quiz_data.get('question_text')
+            options_data = quiz_data.get('options')
+            correct_index = quiz_data.get('correct_index')
+            explanation_text = quiz_data.get('explanation')
+            category = quiz_data.get('category', 'General Knowledge')
+            image_file_id = quiz_data.get('image_file_id')
 
-    # NEW: Flags for twice-a-day external news
-    morning_news_sent = False
-    evening_news_sent = False
+            if not all([question_text, isinstance(options_data, list), len(options_data) == 4, correct_index is not None]):
+                supabase.table('questions').update({'used': True}).eq('id', question_id).execute()
+                return
 
-    while True:
-        try:
-            now = time.time()
+            if image_file_id:
+                try:
+                    bot.send_photo(GROUP_ID, image_file_id, caption="🖼️ <b>Visual Clue!</b>", parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
+                    time.sleep(3)
+                except: pass
+
+            option_emojis = ['1️⃣', '2️⃣', '3️⃣', '4️⃣']
+            formatted_options = [f"{option_emojis[i]} {unescape(str(opt))}" for i, opt in enumerate(options_data)]
+            
+            sent_poll = bot.send_poll(
+                chat_id=GROUP_ID,
+                message_thread_id=QUIZ_TOPIC_ID,
+                question=f"🎲 Auto Quiz!\n📚 {unescape(category)}\n\n{unescape(question_text)}",
+                options=[escape(opt) for opt in formatted_options],
+                type='quiz',
+                correct_option_id=correct_index,
+                open_period=600,
+                explanation=escape(unescape(explanation_text)) if explanation_text else None,
+                explanation_parse_mode="HTML"
+            )
+            active_polls.append({'poll_id': sent_poll.poll.id, 'correct_option_id': correct_index, 'type': 'random_quiz', 'question_id': question_id})
+            supabase.table('questions').update({'used': True}).eq('id', question_id).execute()
+            last_auto_quiz_time = time.time()
+            print(f"✅ Sent auto quiz QID: {question_id}")
+    except Exception as e:
+        print(f"❌ Auto quiz failed: {e}")
+
+def handle_daily_content():
+    """Sends Daily Law/Definition (10 AM)."""
+    if PAUSE_AUTO_SCHEDULES: return
+    print("☀️ Starting daily content job...")
+    try:
+        choice = random.choice(['law', 'definition'])
+        message_to_send = ""
+        if choice == 'law':
+            lib_key = random.choice(list(LAW_LIBRARIES.keys()))
+            library = LAW_LIBRARIES[lib_key]
+            response = supabase.rpc('get_random_law_entries', {'table_name_input': library['table']}).execute()
+            if response.data:
+                entry = response.data[0]
+                message_to_send = f"🏛️ <b>Daily Legal Bite!</b>\n📚 <b>{library['name']}</b>\n🔑 <b>{escape(entry.get('section_number'))}: {escape(entry.get('title'))}</b>\n<blockquote>{escape(entry.get('summary'))}</blockquote>"
+        elif choice == 'definition':
+            workbook = get_gsheet()
+            if workbook:
+                sheet = workbook.worksheet('Glossary')
+                all_values = sheet.get_all_values()
+                if len(all_values) > 1:
+                    row = random.choice(all_values[1:])
+                    message_to_send = f"📖 <b>Term of the Day!</b>\n🔑 <b>{escape(row[1])}</b>\n📚 <i>{escape(row[3] if len(row)>3 else 'General')}</i>\n<blockquote>{escape(row[2])}</blockquote>"
+        if message_to_send:
+            bot.send_message(GROUP_ID, message_to_send, parse_mode="HTML", message_thread_id=CHATTING_TOPIC_ID)
+    except Exception as e: print(f"❌ Daily content failed: {e}")
+
+def handle_daily_resource():
+    """Sends Daily Resource (8 PM)."""
+    if PAUSE_AUTO_SCHEDULES: return
+    print("🌙 Starting daily resource job...")
+    try:
+        count_res = supabase.table('resources').select('id', count='exact').execute()
+        if count_res.count > 0:
+            offset = random.randint(0, count_res.count - 1)
+            res = supabase.table('resources').select('*').range(offset, offset).limit(1).execute().data[0]
+            caption = f"🌙 <b>Evening Resource Drop!</b>\n📄 <b>{escape(res.get('file_name'))}</b>"
+            bot.send_document(GROUP_ID, res['file_id'], caption=caption, parse_mode="HTML", message_thread_id=UPDATES_TOPIC_ID)
+    except Exception as e: print(f"❌ Daily resource failed: {e}")
+
+def handle_smart_exam_reminder():
+    """Checks chat activity and sends countdown."""
+    try:
+        five_mins_ago = (datetime.datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+        response = supabase.table('quiz_activity').select('user_id', count='exact').gt('last_quiz_timestamp', five_mins_ago).execute()
+        if response.count > 2:
             ist_tz = timezone(timedelta(hours=5, minutes=30))
-            current_time_ist = datetime.datetime.now(ist_tz)
-            current_day = current_time_ist.day
-            current_hour = current_time_ist.hour
-            
-# --- Reset daily flags at midnight ---
-            if current_hour == 0 and current_day != last_daily_check_day: # Check against a known daily flag to ensure it runs only once
-                morning_news_sent = False
-                evening_news_sent = False
-                last_daily_content_day = -1 # Reset morning content flag
-                last_daily_resource_day = -1 # Reset evening resource flag
+            today = datetime.datetime.now(ist_tz).date()
+            days_left = (datetime.date(2026, 1, 3) - today).days
+            if days_left > 0:
+                bot.send_message(GROUP_ID, f"💡 <b>Study Reminder:</b> Only <b>{days_left} days</b> left until Jan 2026 exams!", parse_mode="HTML", message_thread_id=CHATTING_TOPIC_ID)
+    except: pass
+def start_scheduler():
+    """
+    Starts the APScheduler to handle ALL background tasks reliably.
+    """
+    # timezone="Asia/Kolkata" ensures it follows Indian time (IST)
+    scheduler = BackgroundScheduler(timezone="Asia/Kolkata")
+    
+    # --- 1. News Updates ---
+    # Checks ICAI website every 30 mins
+    scheduler.add_job(fetch_icai_announcements, 'interval', minutes=30, id='icai_news')
+    
+    # Checks External sites (TaxGuru, ET) at 9:00 AM and 7:00 PM
+    scheduler.add_job(fetch_and_send_external_news, 'cron', hour=9, minute=0, id='ext_news_morn')
+    scheduler.add_job(fetch_and_send_external_news, 'cron', hour=19, minute=0, id='ext_news_eve')
+    
+    # --- 2. Content Schedule ---
+    # Daily Law/Definition at 10:00 AM
+    scheduler.add_job(handle_daily_content, 'cron', hour=10, minute=0, id='daily_content')
+    
+    # Daily Resource File at 8:00 PM
+    scheduler.add_job(handle_daily_resource, 'cron', hour=20, minute=0, id='daily_resource')
+    
+    # --- 3. Quizzes & Engagement ---
+    # Auto Quiz: Every 90 mins (1.5 hours) between 8 AM and 9 PM
+    # Runs at 8:00, 9:30, 11:00, 12:30... 20:00, 21:30
+    scheduler.add_job(handle_auto_quiz, 'cron', hour='8-21', minute='0,30', id='auto_quiz')
 
-                # Reset pause flag only if the pause was initiated on a previous day
-                ist_tz = timezone(timedelta(hours=5, minutes=30))
-                today = datetime.datetime.now(ist_tz).date()
-                if pause_command_date is not None and pause_command_date < today:
-                    PAUSE_AUTO_SCHEDULES = False
-                    pause_command_date = None
-                    print("🔄 Resetting auto-schedule pause status for the new day.")
+    # Smart Exam Reminder: Check every 30 mins if chat is active
+    scheduler.add_job(handle_smart_exam_reminder, 'interval', minutes=30, id='exam_reminder')
 
-                # Keep track of the last day checks were run/reset
-                last_daily_check_day = current_day # Update the day tracker
-                last_schedule_announce_day = current_day # Also update schedule tracker if using it
+    # --- 4. Maintenance ---
+    # Run daily inactivity checks/warnings at 10:30 PM
+    scheduler.add_job(run_daily_checks, 'cron', hour=22, minute=30, id='daily_checks')
+    
+    # Save bot state to DB every 5 minutes (Replacing the old loop's save)
+    scheduler.add_job(save_data, 'interval', minutes=5, id='save_state')
 
-                print("☀️ Resetting all daily flags for the new day.")
-# --- Daily Law/Definition Content (10:00 AM IST) ---
-# --- Daily Law/Definition Content (10:00 AM IST) ---
-            if current_hour == 10 and last_daily_content_day != current_day and not PAUSE_AUTO_SCHEDULES:
-                print(f"[{current_time_ist.strftime('%H:%M:%S')}] INFO: Starting daily content job...")
-                message_to_send = ""
-                content_type = ""
-                try:
-                    choice = random.choice(['law', 'definition'])
-                    print(f"   - Selected type: {choice}")
-
-                    if choice == 'law':
-                        content_type = 'Law Section'
-                        lib_key = random.choice(list(LAW_LIBRARIES.keys()))
-                        library = LAW_LIBRARIES[lib_key]
-                        print(f"   - Attempting to fetch random entry from: {library['table']}")
-                        response = supabase.rpc('get_random_law_entries', {'table_name_input': library['table']}).execute()
-                        if response.data:
-                            entry = response.data[0]
-                            section_num = escape(entry.get('section_number', 'N/A'))
-                            title = escape(entry.get('title', 'N/A'))
-                            summary = escape(entry.get('summary', 'No summary available.'))
-                            command = next((cmd_key for cmd_key, details in LAW_LIBRARIES.items() if details['table'] == library['table']), None)
-                            command_hint = f"Tap <code>/{command} {section_num}</code> for more details!" if command else ""
-                            message_to_send = (
-                                f"🏛️ <b>Daily Legal Bite!</b> 🏛️\n\n"
-                                f"📚 From: <b>{library['name']}</b>\n\n"
-                                f"🔑 <b>{section_num}: {title}</b>\n\n"
-                                f"<blockquote>{summary}</blockquote>\n\n"
-                                f"{command_hint}"
-                            )
-                            print(f"   - Prepared message for {library['name']} section {section_num}.")
-                        else:
-                            print(f"   - WARNING: No data returned from RPC 'get_random_law_entries' for table {library['table']}.")
-
-                    elif choice == 'definition':
-                        content_type = 'Definition'
-                        print("   - Attempting to fetch random definition from GSheet...")
-                        workbook = get_gsheet()
-                        if workbook:
-                            try:
-                                sheet = workbook.worksheet('Glossary') # Ensure sheet name is correct
-                                all_values = sheet.get_all_values()
-                                if len(all_values) > 1:
-                                    random_row = random.choice(all_values[1:])
-                                    term = escape(random_row[1])
-                                    definition = escape(random_row[2])
-                                    category = escape(random_row[3] if len(random_row) > 3 else 'General')
-                                    message_to_send = (
-                                        f"📖 <b>Term of the Day!</b> 📖\n\n"
-                                        f"🔑 <b>Term:</b> <code>{term}</code>\n"
-                                        f"📚 <b>Category:</b> <i>{category}</i>\n\n"
-                                        f"<blockquote>{definition}</blockquote>"
-                                    )
-                                    print(f"   - Prepared message for definition: {term}.")
-                                else:
-                                    print("   - WARNING: Glossary sheet has no definitions (only header or empty).")
-                            except gspread.exceptions.WorksheetNotFound:
-                                print("   - ERROR: Worksheet 'Glossary' not found in Google Sheet.")
-                                report_error_to_admin("ERROR: Scheduled task failed. Worksheet 'Glossary' not found in Google Sheet.")
-                            except Exception as gsheet_error:
-                                print(f"   - ERROR: Failed accessing GSheet 'Glossary': {gsheet_error}")
-                                report_error_to_admin(f"ERROR: Scheduled task failed accessing GSheet 'Glossary':\n{gsheet_error}")
-                        else:
-                            print("   - ERROR: Could not connect to Google Sheets for definition.")
-                            report_error_to_admin("ERROR: Scheduled task failed. Could not connect to Google Sheets.")
-
-                    # Send the message
-                    if message_to_send:
-                        bot.send_message(GROUP_ID, message_to_send, parse_mode="HTML", message_thread_id=CHATTING_TOPIC_ID)
-                        last_daily_content_day = current_day
-                        print(f"[{current_time_ist.strftime('%H:%M:%S')}] SUCCESS: Sent daily scheduled content ({content_type}).")
-                    else:
-                        print(f"[{current_time_ist.strftime('%H:%M:%S')}] INFO: No daily content generated to send for type '{choice}'.")
-                        # Mark as 'sent' anyway for today to prevent retrying if one type consistently fails
-                        last_daily_content_day = current_day
-
-                except Exception as content_error:
-                    # Generic catch-all for unexpected errors during the process
-                    print(f"[{current_time_ist.strftime('%H:%M:%S')}] ERROR: Unexpected error during daily content job: {content_error}")
-                    report_error_to_admin(f"CRITICAL ERROR: Daily scheduled content job failed unexpectedly.\n{traceback.format_exc()}")
-                    # Mark as 'sent' to prevent error loop today
-                    last_daily_content_day = current_day
-# --- Daily Resource File (8:00 PM / 20:00 IST) ---
-            if current_hour == 20 and last_daily_resource_day != current_day and not PAUSE_AUTO_SCHEDULES:
-                print(f"[{current_time_ist.strftime('%H:%M:%S')}] INFO: Starting daily resource job...")
-                resource_sent = False
-                try:
-                    # Attempt to get a somewhat random resource
-                    resource = None
-                    total_resources = 0
-                    try:
-                        offset_res = supabase.table('resources').select('id', count='exact').execute()
-                        total_resources = offset_res.count
-                        if total_resources > 0:
-                            random_offset = random.randint(0, max(0, total_resources - 1))
-                            response = supabase.table('resources').select('*').range(random_offset, random_offset).limit(1).execute()
-                            if response.data:
-                                resource = response.data[0]
-                                print(f"   - Selected resource ID: {resource.get('id')}, Name: {resource.get('file_name')}")
-                            else:
-                                print(f"   - WARNING: Query returned no data for offset {random_offset} (Total: {total_resources}).")
-                        else:
-                            print("   - INFO: 'resources' table is empty.")
-                    except Exception as db_fetch_error:
-                         print(f"   - ERROR: Failed to fetch from 'resources' table: {db_fetch_error}")
-                         report_error_to_admin(f"ERROR: Daily resource job failed fetching from DB.\n{traceback.format_exc()}")
-                         # Mark as done for today to prevent error loop
-                         last_daily_resource_day = current_day
-                         continue # Skip the rest of this block if DB fetch failed
-
-                    if resource:
-                        file_id = resource['file_id']
-                        file_name = resource.get('file_name', 'Resource File')
-                        description = resource.get('description', f"Check out this resource: {file_name}")
-                        file_type = resource.get('file_type', '').lower()
-
-                        caption = f"🌙 <b>Evening Resource Drop!</b> ✨\n\nCheck out this file:\n\n📄 <b>{escape(file_name)}</b>\n\n"
-                        send_method = None
-
-                        if 'pdf' in file_type: caption += "📖 Happy reading!"; send_method = bot.send_document
-                        elif 'audio' in file_type: caption += "🎧 Listen and learn!"; send_method = bot.send_audio
-                        elif 'video' in file_type: caption += "🎬 Watch and understand!"; send_method = bot.send_video
-                        elif 'zip' in file_type or 'archive' in file_type: caption += "📦 Contains multiple files."; send_method = bot.send_document
-                        elif 'image' in file_type or 'photo' in file_type: caption += "🖼️ Visual learning aid!"; send_method = bot.send_photo
-                        else: caption += "📎 Check out this file."; send_method = bot.send_document
-
-                        try:
-                            print(f"   - Attempting to send using {send_method.__name__}...")
-                            send_method(GROUP_ID, file_id, caption=caption, parse_mode="HTML", message_thread_id=UPDATES_TOPIC_ID)
-                            resource_sent = True
-                            print(f"[{current_time_ist.strftime('%H:%M:%S')}] SUCCESS: Sent daily scheduled resource file: {file_name}")
-                        except ApiTelegramException as send_error:
-                             print(f"   - ERROR: Failed to send resource '{file_name}' (ID: {resource.get('id')}, FileID: {file_id}). API Error: {send_error}")
-                             report_error_to_admin(f"ERROR: Failed to send scheduled resource '{file_name}' (File ID: {file_id}). Check if file expired.\nAPI Error: {send_error}")
-                        except Exception as generic_send_error:
-                             print(f"   - ERROR: Unexpected error sending resource '{file_name}': {generic_send_error}")
-                             report_error_to_admin(f"CRITICAL ERROR: Unexpected error sending scheduled resource '{file_name}'.\n{traceback.format_exc()}")
-                    else:
-                        # This case is handled if total_resources was 0 or the random fetch failed
-                        print(f"[{current_time_ist.strftime('%H:%M:%S')}] INFO: No resource found to send today.")
-
-                except Exception as resource_job_error:
-                    # Catch-all for unexpected errors in the job logic itself
-                    print(f"[{current_time_ist.strftime('%H:%M:%S')}] ERROR: Unexpected error during daily resource job: {resource_job_error}")
-                    report_error_to_admin(f"CRITICAL ERROR: Daily scheduled resource job failed unexpectedly.\n{traceback.format_exc()}")
-
-                finally:
-                    # Ensure the day flag is always updated, even on errors, to prevent loops
-                    last_daily_resource_day = current_day
-                    if not resource_sent and total_resources > 0 : # Log if we intended to send but failed
-                         print(f"[{current_time_ist.strftime('%H:%M:%S')}] FAILED: Daily resource job finished without sending a file.")
-# --- Automatic Random Quiz (8 AM - 9 PM IST, every 1.5 hours) ---
-            # Check time window (8:00 to 20:59) and pause flag
-            if 8 <= current_hour < 21 and not PAUSE_AUTO_SCHEDULES:
-                # Check interval since last auto quiz
-                if (now - last_auto_quiz_time) > AUTO_QUIZ_INTERVAL:
-                    print(f"[{current_time_ist.strftime('%H:%M:%S')}] INFO: Time for automatic random quiz...")
-                    try:
-                        # --- Replicate core logic from handle_random_quiz ---
-                        response = supabase.rpc('get_random_quiz', {}).execute()
-
-                        if response.data:
-                            quiz_data = response.data[0]
-                            question_id = quiz_data.get('id')
-                            question_text = quiz_data.get('question_text')
-                            options_data = quiz_data.get('options')
-                            correct_index = quiz_data.get('correct_index')
-                            explanation_text = quiz_data.get('explanation')
-                            category = quiz_data.get('category', 'General Knowledge')
-                            image_file_id = quiz_data.get('image_file_id') # Get image ID too
-
-                            # Basic validation (same as in handle_random_quiz)
-                            if not all([question_text, isinstance(options_data, list), len(options_data) == 4, correct_index is not None]):
-                                print(f"   - ERROR: Auto Quiz QID {question_id} has malformed data. Marking used and skipping.")
-                                report_error_to_admin(f"ERROR: Auto Quiz QID {question_id} has malformed data. Marked used and skipped.")
-                                supabase.table('questions').update({'used': True}).eq('id', question_id).execute()
-                            else:
-                                # Send image first if it exists
-                                if image_file_id:
-                                    try:
-                                        image_caption = f"🖼️ <b>Visual Clue for the upcoming quiz!</b>\n\n📸 <i>Study this image carefully...</i>"
-                                        bot.send_photo(GROUP_ID, image_file_id, caption=image_caption, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
-                                        time.sleep(3) # Give time to see image
-                                    except Exception as img_err:
-                                        print(f"   - WARNING: Failed to send image {image_file_id} for auto quiz QID {question_id}: {img_err}")
-                                        # Proceed without image
-
-                                # Format and send poll (using helper function if you have one, or inline like below)
-                                option_emojis = ['1️⃣', '2️⃣', '3️⃣', '4️⃣']
-                                formatted_options = [f"{option_emojis[i]} {unescape(str(opt))}" for i, opt in enumerate(options_data)]
-                                clean_question_text = unescape(question_text)
-                                clean_category = unescape(category)
-                                title = "🖼️ Auto Visual Quiz!" if image_file_id else "🎲 Auto Quick Quiz!"
-
-                                formatted_question = (
-                                    f"{title}\n"
-                                    f"📚 {clean_category}\n\n"
-                                    f"{clean_question_text}"
-                                )
-
-                                safe_explanation = escape(unescape(explanation_text)) if explanation_text else None
-                                open_period_seconds = 600 # 10 minutes
-
-                                safe_options = [escape(opt) for opt in formatted_options]
-
-                                sent_poll = bot.send_poll(
-                                    chat_id=GROUP_ID,
-                                    message_thread_id=QUIZ_TOPIC_ID,
-                                    question=formatted_question,
-                                    options=safe_options,
-                                    type='quiz',
-                                    correct_option_id=correct_index,
-                                    is_anonymous=False,
-                                    open_period=open_period_seconds,
-                                    explanation=safe_explanation,
-                                    explanation_parse_mode="HTML"
-                                )
-
-                                # Add timer message (similar to handle_random_quiz)
-                                timer_message = f"""⏰ <b>{open_period_seconds // 60} Minutes</b> to answer!\n\n🏆 <i>Every answer counts!</i>"""
-                                bot.send_message(GROUP_ID, timer_message, reply_to_message_id=sent_poll.message_id, parse_mode="HTML", message_thread_id=QUIZ_TOPIC_ID)
-
-                                # Add to active polls list
-                                active_polls.append({
-                                    'poll_id': sent_poll.poll.id,
-                                    'correct_option_id': correct_index,
-                                    'type': 'random_quiz', # Keep type consistent
-                                    'question_id': question_id,
-                                    'category': category
-                                })
-
-                                # Mark question as used
-                                supabase.table('questions').update({'used': True}).eq('id', question_id).execute()
-                                last_auto_quiz_time = now # Update timestamp
-                                print(f"[{current_time_ist.strftime('%H:%M:%S')}] SUCCESS: Sent automatic random quiz (QID: {question_id}).")
-
-                        else:
-                            print(f"[{current_time_ist.strftime('%H:%M:%S')}] INFO: No unused random questions available for auto quiz.")
-                            # Optional: Send admin message if no questions are left?
-                            # report_error_to_admin("INFO: Automatic random quiz skipped - no unused questions found.")
-                            # Update time anyway to prevent immediate retries if db is empty
-                            last_auto_quiz_time = now
-
-                    except Exception as auto_quiz_error:
-                        print(f"[{current_time_ist.strftime('%H:%M:%S')}] ERROR: Failed to send automatic random quiz: {auto_quiz_error}")
-                        report_error_to_admin(f"ERROR: Automatic random quiz job failed.\n{traceback.format_exc()}")
-                        # Update time to prevent rapid error loops
-                        last_auto_quiz_time = now
-                #else: # Optional: Log when skipping due to interval
-                    #print(f"[{current_time_ist.strftime('%H:%M:%S')}] DEBUG: Skipping auto quiz, interval not met. Last sent: {datetime.datetime.fromtimestamp(last_auto_quiz_time).strftime('%H:%M:%S')}")
-            #else: # Optional: Log when skipping due to time window or pause
-                #if PAUSE_AUTO_SCHEDULES:
-                #    print(f"[{current_time_ist.strftime('%H:%M:%S')}] DEBUG: Skipping auto quiz, schedules paused.")
-                #else:
-                # print(f"[{current_time_ist.strftime('%H:%M:%S')}] DEBUG: Skipping auto quiz, outside active hours (8AM-9PM).")
-            # --- Call the janitor function periodically ---
-            if (now - last_cleanup_time) > cleanup_interval:
-                cleanup_stale_user_states()
-                last_cleanup_time = now
-            
-            # --- Call the ICAI announcement checker periodically ---
-            if (now - last_news_check_time) > news_check_interval:
-                fetch_icai_announcements()
-                last_news_check_time = now
-
-            # --- NEW: Call external news checker twice a day ---
-            # Morning News (e.g., at 9 AM)
-            if current_hour == 9 and not morning_news_sent:
-                fetch_and_send_one_external_news()
-                morning_news_sent = True
-
-            # Evening News (e.g., at 7 PM / 19:00)
-            if current_hour == 19 and not evening_news_sent:
-                fetch_and_send_one_external_news()
-                evening_news_sent = True
-
-            # --- Daily Inactivity/Appreciation Check (around 10:30 PM) ---
-            if current_hour == 22 and current_time_ist.minute >= 30 and last_daily_check_day != current_day:
-                run_daily_checks()
-                last_daily_check_day = current_day
-
-            # --- Process other scheduled tasks ---
-            # (Your existing task processing code remains here)
-            for task in scheduled_tasks[:]:
-                if current_time_ist >= task['run_at'].astimezone(ist_tz):
-                    try:
-                        bot.send_message(
-                            task['chat_id'],
-                            task['text'],
-                            parse_mode="HTML",
-                            message_thread_id=task.get('message_thread_id')
-                        )
-                        print(f"✅ Executed scheduled task: {task['text']}")
-                    except Exception as task_error:
-                        print(f"❌ Failed to execute scheduled task. Error: {task_error}")
-                    scheduled_tasks.remove(task)
-
-        except Exception as e:
-            tb_string = traceback.format_exc()
-            print(f"❌ Error in background_worker loop:\n{tb_string}")
-            report_error_to_admin(f"An error occurred in the background worker: {tb_string}")
-        # --- 4. Smart Exam Countdown Reminder ---
-            global last_exam_reminder_time
-            now = time.time()
-            
-            # Check if 30-min cooldown is active
-            if (now - last_exam_reminder_time) > CHAT_REMINDER_COOLDOWN:
-                try:
-                    # Check how many distinct users have chatted in the last 5 mins
-                    five_mins_ago = (datetime.datetime.now(IST) - timedelta(minutes=5)).isoformat()
-                    
-                    response = supabase.table('quiz_activity').select('user_id', count='exact').gt('last_quiz_timestamp', five_mins_ago).execute()
-                    
-                    active_chatters = response.count
-
-                    if active_chatters > 2:
-                        # More than 2 people are chatting! Send the reminder.
-                        exam_date = datetime.date(2026, 1, 3)
-                        today = datetime.datetime.now(IST).date()
-                        days_left = (exam_date - today).days
-
-                        if days_left > 0:
-                            reminder_messages = [
-                                f"Just a friendly study reminder! ⏰ Keep the discussion going, and also remember there are just <b>{days_left} days</b> left until the exams on January 3, 2026!",
-                                f"Loving the active chat! Just a quick heads-up: <b>{days_left} days</b> until the exam on Jan 3, 2026. Let's make every day count!"
-                            ]
-                            reminder_text = f"💡 {random.choice(reminder_messages)} You've got this! 💪"
-                            
-                            bot.send_message(GROUP_ID, reminder_text, parse_mode="HTML", message_thread_id=CHATTING_TOPIC_ID)
-                        
-                        # Reset the cooldown
-                        last_exam_reminder_time = now
-
-                except Exception as e:
-                    print(f"Error in Smart Exam Reminder: {e}")
-                    report_error_to_admin(f"Error in Smart Exam Reminder logic: {e}")
-        finally:
-            save_data()
-            time.sleep(30)
+    scheduler.start()
+    print("✅ APScheduler started successfully with ALL tasks (News, Content, Resources, Quizzes).")
 # =============================================================================
 # 7. FLASK WEB SERVER & WEBHOOK
 # =============================================================================
@@ -9889,14 +9651,7 @@ print("="*50 + "\n")
 print("\n" + "="*50)
 print("🚀 BOT IS LIVE AND READY FOR UPDATES 🚀")
 print("="*50 + "\n")
-# --- START BACKGROUND TASKS ---
-# This checks if the background worker is already running to prevent duplicates
-if not any(t.name == "BackgroundWorkerThread" for t in threading.enumerate()):
-    scheduler_thread = threading.Thread(target=background_worker, name="BackgroundWorkerThread", daemon=True)
-    scheduler_thread.start()
-    print("✅ Background scheduler thread started successfully.")
-else:
-    print("ℹ️ Background scheduler is already running.")
+
 # --- START BACKGROUND TASKS ---
 # This checks if the background worker is already running to prevent duplicates
 if not any(t.name == "BackgroundWorkerThread" for t in threading.enumerate()):
