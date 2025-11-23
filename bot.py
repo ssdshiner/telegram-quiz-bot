@@ -9619,13 +9619,11 @@ print("🚀 BOT IS LIVE AND READY FOR UPDATES 🚀")
 print("="*50 + "\n")
 
 # --- START BACKGROUND TASKS ---
-# This checks if the background worker is already running to prevent duplicates
-if not any(t.name == "BackgroundWorkerThread" for t in threading.enumerate()):
-    scheduler_thread = threading.Thread(target=background_worker, name="BackgroundWorkerThread", daemon=True)
-    scheduler_thread.start()
-    print("✅ Background scheduler thread started successfully.")
-else:
-    print("ℹ️ Background scheduler is already running.")
+try:
+    # Initialize and start the APScheduler
+    start_scheduler()
+except Exception as e:
+    print(f"❌ Failed to start scheduler: {e}")
 
 if __name__ == '__main__':
     # This block is for local testing only and will not run on Render
