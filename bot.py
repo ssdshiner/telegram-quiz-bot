@@ -1304,7 +1304,9 @@ def fetch_icai_announcements():
         new_announcements_sent = 0
         for url, title in all_new_announcements.items():
             title_lower = title.lower()
-            if 'intermediate' in title_lower or 'inter' in title_lower or 'result' in title_lower:
+            # Broadened keywords to catch all relevant student news
+            keywords = ['intermediate', 'inter', 'result', 'student', 'foundation', 'final', 'exam', 'admit card', 'bos', 'training']
+            if any(k in title_lower for k in keywords):
                 existing = supabase.table('sent_announcements').select('id').eq('announcement_url', url).execute()
                 if not existing.data:
                     new_announcements_sent += 1
@@ -1326,71 +1328,68 @@ def fetch_icai_announcements():
     except Exception as e:
         report_error_to_admin(f"Error in fetch_icai_announcements: {traceback.format_exc()}")
         return 0 # Return 0 if there was an error
-def fetch_and_send_one_external_news():
+def fetch_and_send_external_news():
     """
-    Master function to fetch news from multiple sources and send only one.
-    -- FINAL VERSION with all requested sources --
+    Fetches news from multiple sources and sends ALL new unique articles found.
     """
     print("📰 Checking for new external news articles from all sources...")
     
-    # --- Scraper for CAclubindia ---
-    def get_caclubindia_news():
+    # Helper to process a news item
+    def process_news_item(news_item, source_name):
+        if not news_item: return False
         try:
-            url = "https://www.caclubindia.com/news/"
-            headers = {'User-Agent': 'Mozilla/5.0'}
-            response = requests.get(url, headers=headers, timeout=20)
-            soup = BeautifulSoup(response.content, 'html.parser')
-            news_item = soup.find('div', class_='item-box')
-            if news_item:
-                link_tag = news_item.find('a')
-                title_tag = news_item.find('h4')
-                news_url = "https://www.caclubindia.com" + link_tag['href']
-                news_title = title_tag.text.strip()
-                existing = supabase.table('sent_announcements').select('id').eq('announcement_url', news_url).execute()
-                if not existing.data:
-                    return {'title': news_title, 'url': news_url, 'source': 'CAclubindia'}
+            existing = supabase.table('sent_announcements').select('id').eq('announcement_url', news_item['url']).execute()
+            if not existing.data:
+                print(f"Found new article from {source_name}: {news_item['title']}")
+                message_text = (
+                    f"🗞️ <b>Today's News Update</b>\n\n"
+                    f"<b>Source:</b> <i>{escape(source_name)}</i>\n\n"
+                    f"<b>Headline:</b> {escape(news_item['title'])}\n\n"
+                    f"🔗 Read the full story here:\n{news_item['url']}"
+                )
+                bot.send_message(GROUP_ID, message_text, parse_mode="HTML", message_thread_id=UPDATES_TOPIC_ID, disable_web_page_preview=False)
+                supabase.table('sent_announcements').insert({'announcement_url': news_item['url'], 'announcement_title': news_item['title']}).execute()
+                return True
         except Exception as e:
-            print(f"Could not fetch from CAclubindia: {e}")
-        return None
+            print(f"Error processing {source_name} news: {e}")
+        return False
 
-    # --- Scraper for TaxGuru ---
-    def get_taxguru_news():
-        try:
-            url = "https://taxguru.in/category/chartered-accountant/"
-            headers = {'User-Agent': 'Mozilla/5.0'}
-            response = requests.get(url, headers=headers, timeout=20)
-            soup = BeautifulSoup(response.content, 'html.parser')
-            news_item = soup.find('article')
-            if news_item:
-                link_tag = news_item.find('a')
-                title_tag = news_item.find('h3', class_='entry-title')
-                news_url = link_tag['href']
-                news_title = title_tag.text.strip()
-                existing = supabase.table('sent_announcements').select('id').eq('announcement_url', news_url).execute()
-                if not existing.data:
-                    return {'title': news_title, 'url': news_url, 'source': 'TaxGuru'}
-        except Exception as e:
-            print(f"Could not fetch from TaxGuru: {e}")
-        return None
+    # --- 1. CAclubindia ---
+    try:
+        response = requests.get("https://www.caclubindia.com/news/", headers={'User-Agent': 'Mozilla/5.0'}, timeout=20)
+        soup = BeautifulSoup(response.content, 'html.parser')
+        news_div = soup.find('div', class_='item-box') # Adjust selector if site changes
+        if news_div:
+            link_tag = news_div.find('a')
+            title_tag = news_div.find('h4')
+            if link_tag and title_tag:
+                process_news_item({'title': title_tag.text.strip(), 'url': "https://www.caclubindia.com" + link_tag['href']}, 'CAclubindia')
+    except Exception as e: print(f"CAclubindia Error: {e}")
 
-    # --- Scraper for The Economic Times ---
-    def get_et_news():
-        try:
-            url = "https://economictimes.indiatimes.com/topic/chartered-accountant"
-            headers = {'User-Agent': 'Mozilla/5.0'}
-            response = requests.get(url, headers=headers, timeout=15)
-            soup = BeautifulSoup(response.content, 'html.parser')
-            news_item = soup.find('div', class_='topicstry')
-            if news_item:
-                link_tag = news_item.find('a')
-                title_tag = news_item.find('h2')
-                news_url = "https://economictimes.indiatimes.com" + link_tag['href']
-                news_title = title_tag.text.strip()
-                existing = supabase.table('sent_announcements').select('id').eq('announcement_url', news_url).execute()
-                if not existing.data:
-                    return {'title': news_title, 'url': news_url, 'source': 'The Economic Times'}
-        except Exception as e:
-            print(f"Could not fetch from Economic Times: {e}")
+    # --- 2. TaxGuru ---
+    try:
+        response = requests.get("https://taxguru.in/category/chartered-accountant/", headers={'User-Agent': 'Mozilla/5.0'}, timeout=20)
+        soup = BeautifulSoup(response.content, 'html.parser')
+        article = soup.find('article')
+        if article:
+            link_tag = article.find('a')
+            title_tag = article.find('h3', class_='entry-title')
+            if link_tag and title_tag:
+                process_news_item({'title': title_tag.text.strip(), 'url': link_tag['href']}, 'TaxGuru')
+    except Exception as e: print(f"TaxGuru Error: {e}")
+
+    # --- 3. Economic Times (Finance) ---
+    try:
+        response = requests.get("https://economictimes.indiatimes.com/topic/chartered-accountant", headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
+        soup = BeautifulSoup(response.content, 'html.parser')
+        news_div = soup.find('div', class_='topicstry')
+        if news_div:
+            link_tag = news_div.find('a')
+            title_tag = news_div.find('h2') or news_div.find('h3') # ET changes tags often
+            if link_tag and title_tag:
+                full_url = "https://economictimes.indiatimes.com" + link_tag['href'] if not link_tag['href'].startswith('http') else link_tag['href']
+                process_news_item({'title': title_tag.text.strip(), 'url': full_url}, 'The Economic Times')
+    except Exception as e: print(f"Economic Times Error: {e}")
         return None
         
     # --- Scraper for NDTV (ADDED BACK) ---
@@ -1430,7 +1429,7 @@ def fetch_and_send_one_external_news():
     if not news_to_send:
         news_to_send = get_ndtv_news()
 
-    if news_to_send:
+if news_to_send:
         print(f"Found new article from {news_to_send['source']}: {news_to_send['title']}")
         
         message_text = (
@@ -1440,12 +1439,13 @@ def fetch_and_send_one_external_news():
             f"🔗 Read the full story here:\n{news_to_send['url']}"
         )
         
-        bot.send_message(GROUP_ID, message_text, parse_mode="HTML", message_thread_id=UPDATES_TOPIC_ID, disable_web_page_preview=False)
-        supabase.table('sent_announcements').insert({'announcement_url': news_to_send['url'], 'announcement_title': news_to_send['title']}).execute()
-        return True
-        
-    print("No new external news found from any source.")
-    return False
+        try:
+            bot.send_message(GROUP_ID, message_text, parse_mode="HTML", message_thread_id=UPDATES_TOPIC_ID, disable_web_page_preview=False)
+            supabase.table('sent_announcements').insert({'announcement_url': news_to_send['url'], 'announcement_title': news_to_send['title']}).execute()
+            return True
+        except Exception as e:
+            print(f"Error sending news message: {e}")
+            return False
 def background_worker():
     """Runs all scheduled tasks in a continuous loop."""
     # --- GLOBAL DECLARATIONS ---
@@ -9889,11 +9889,25 @@ print("="*50 + "\n")
 print("\n" + "="*50)
 print("🚀 BOT IS LIVE AND READY FOR UPDATES 🚀")
 print("="*50 + "\n")
+# --- START BACKGROUND TASKS ---
+# This checks if the background worker is already running to prevent duplicates
+if not any(t.name == "BackgroundWorkerThread" for t in threading.enumerate()):
+    scheduler_thread = threading.Thread(target=background_worker, name="BackgroundWorkerThread", daemon=True)
+    scheduler_thread.start()
+    print("✅ Background scheduler thread started successfully.")
+else:
+    print("ℹ️ Background scheduler is already running.")
+# --- START BACKGROUND TASKS ---
+# This checks if the background worker is already running to prevent duplicates
+if not any(t.name == "BackgroundWorkerThread" for t in threading.enumerate()):
+    scheduler_thread = threading.Thread(target=background_worker, name="BackgroundWorkerThread", daemon=True)
+    scheduler_thread.start()
+    print("✅ Background scheduler thread started successfully.")
+else:
+    print("ℹ️ Background scheduler is already running.")
 
 if __name__ == '__main__':
     # This block is for local testing only and will not run on Render
     port = int(os.environ.get("PORT", 10000))
     print(f"Starting Flask development server for local testing on http://0.0.0.0:{port}")
-    # To test locally without a webhook, you would use bot.polling()
-    # For now, we keep app.run() for webhook testing if needed
     app.run(host="0.0.0.0", port=port)
