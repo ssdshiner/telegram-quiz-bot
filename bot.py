@@ -1341,7 +1341,7 @@ def fetch_and_send_external_news():
     """
     print("📰 Checking for new external news articles from all sources...")
     
-    # Helper to process a news item
+    # --- Helper Function to Send & Save ---
     def process_news_item(news_item, source_name):
         if not news_item: return False
         try:
@@ -1401,61 +1401,27 @@ def fetch_and_send_external_news():
                 full_url = "https://economictimes.indiatimes.com" + link_tag['href'] if not link_tag['href'].startswith('http') else link_tag['href']
                 process_news_item({'title': title_tag.text.strip(), 'url': full_url}, 'The Economic Times')
     except Exception as e: print(f"Economic Times Error: {e}")
-        
-    # --- Scraper for NDTV (ADDED BACK) ---
-    def get_ndtv_news():
-        try:
-            # We will check both URLs you provided
-            urls_to_check = [
-                "https://www.ndtv.com/topic/ca-students",
-                "https://www.ndtv.com/topic/chartered-accountancy-students"
-            ]
-            for url in urls_to_check:
-                headers = {'User-Agent': 'Mozilla/5.0'}
-                response = requests.get(url, headers=headers, timeout=15)
+
+    # --- 4. NDTV (Students) ---
+    try:
+        urls_to_check = [
+            "https://www.ndtv.com/topic/ca-students",
+            "https://www.ndtv.com/topic/chartered-accountancy-students"
+        ]
+        for url in urls_to_check:
+            try:
+                response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
                 soup = BeautifulSoup(response.content, 'html.parser')
                 news_item = soup.find('div', class_='src_lst-li')
                 if news_item:
                     link_tag = news_item.find('a')
                     title_tag = news_item.find('div', class_='src_lst-ttl')
-                    news_url = link_tag['href']
-                    news_title = title_tag.text.strip()
-                    existing = supabase.table('sent_announcements').select('id').eq('announcement_url', news_url).execute()
-                    if not existing.data:
-                        return {'title': news_title, 'url': news_url, 'source': 'NDTV'}
-        except Exception as e:
-            print(f"Could not fetch from NDTV: {e}")
-        return None
-
-    # --- Main Logic: Try each source in order ---
-    news_to_send = get_caclubindia_news()
-
-    if not news_to_send:
-        news_to_send = get_taxguru_news()
-        
-    if not news_to_send:
-        news_to_send = get_et_news()
-
-    if not news_to_send:
-        news_to_send = get_ndtv_news()
-
-if news_to_send:
-        print(f"Found new article from {news_to_send['source']}: {news_to_send['title']}")
-        
-        message_text = (
-            f"🗞️ <b>Today's News Update</b>\n\n"
-            f"<b>Source:</b> <i>{escape(news_to_send['source'])}</i>\n\n"
-            f"<b>Headline:</b> {escape(news_to_send['title'])}\n\n"
-            f"🔗 Read the full story here:\n{news_to_send['url']}"
-        )
-        
-        try:
-            bot.send_message(GROUP_ID, message_text, parse_mode="HTML", message_thread_id=UPDATES_TOPIC_ID, disable_web_page_preview=False)
-            supabase.table('sent_announcements').insert({'announcement_url': news_to_send['url'], 'announcement_title': news_to_send['title']}).execute()
-            return True
-        except Exception as e:
-            print(f"Error sending news message: {e}")
-            return False
+                    if link_tag and title_tag:
+                        # Process immediately using the helper
+                        process_news_item({'title': title_tag.text.strip(), 'url': link_tag['href']}, 'NDTV')
+                        break # Stop checking other NDTV urls if one is found to avoid dupes in one run
+            except Exception: continue
+    except Exception as e: print(f"NDTV Error: {e}")
 def handle_auto_quiz():
     """Runs the automatic random quiz."""
     global active_polls, last_auto_quiz_time
