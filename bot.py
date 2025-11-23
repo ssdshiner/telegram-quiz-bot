@@ -8569,8 +8569,9 @@ def handle_fetch_news_command(msg: types.Message):
         # Run the ICAI scraper and get the result
         icai_found_count = fetch_icai_announcements()
         
-        # Run the external news scraper and get the result
-        external_news_found = fetch_and_send_one_external_news()
+        # Run the external news scraper (Returns None, it sends messages directly)
+        # We updated the function name here:
+        fetch_and_send_external_news()
 
         # --- Send a summary report back to the admin ---
         report_text = "✅ **Manual Fetch Complete!**\n\n"
@@ -8580,10 +8581,7 @@ def handle_fetch_news_command(msg: types.Message):
         else:
             report_text += "- No new ICAI announcements found.\n"
             
-        if external_news_found:
-            report_text += "- Found and posted 1 new external news article."
-        else:
-            report_text += "- No new external news articles found."
+        report_text += "- External news check completed (check group for any new posts)."
             
         bot.send_message(msg.chat.id, report_text, parse_mode="HTML")
 
