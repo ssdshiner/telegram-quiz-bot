@@ -1585,7 +1585,21 @@ def health_check():
 # =============================================================================
 # 8. TELEGRAM BOT HANDLERS - VAULT UPLOAD FLOW (/add_resource)
 # =============================================================================
-
+def is_group_admin(user_id):
+    """
+    Checks if a user is an Administrator in the main group (GROUP_ID).
+    Returns True if they are Creator or Administrator.
+    """
+    # Always allow the Bot Owner
+    if user_id == ADMIN_USER_ID:
+        return True
+        
+    try:
+        member = bot.get_chat_member(GROUP_ID, user_id)
+        return member.status in ['creator', 'administrator']
+    except Exception as e:
+        print(f"Error checking admin status for {user_id}: {e}")
+        return False
 def check_uploader_role(user_id):
     """Helper function to check if a user is an admin or a contributor."""
     if is_admin(user_id):
@@ -2784,11 +2798,9 @@ Hello Admin! Here are your available tools.
 @bot.poll_answer_handler()
 def handle_poll_answer(poll_answer: types.PollAnswer):
     """
-    This is the single, master handler for all poll answers.
-    It intelligently routes the answer to the correct logic for
-    Marathons, or Random Quizzes.
+    Master handler for all poll answers.
+    Robustly routes answers to Marathons, Law Quizzes, or Random Quizzes without crashing.
     """
-    # Removed global team_battle_session as the feature is gone
     poll_id_str = poll_answer.poll_id
     user_info = poll_answer.user
     selected_option = poll_answer.option_ids[0] if poll_answer.option_ids else None
@@ -2801,109 +2813,130 @@ def handle_poll_answer(poll_answer: types.PollAnswer):
             # --- ROUTE 1: Check if it's a Quiz Marathon poll ---
             session_id = str(GROUP_ID)
             marathon_session = QUIZ_SESSIONS.get(session_id)
+            
+            # Check if this specific poll ID belongs to the active marathon
             if marathon_session and marathon_session.get('is_active') and poll_id_str == marathon_session.get('current_poll_id'):
+                
                 participants = QUIZ_PARTICIPANTS.setdefault(session_id, {})
                 if user_info.id not in participants:
                     participants[user_info.id] = {
                         'name': user_info.first_name, 'user_name': user_info.username or user_info.first_name,
                         'score': 0, 'total_time': 0, 'questions_answered': 0, 'correct_answer_times': [],
-                        'topic_scores': {}, 'performance_breakdown': {}
+                        'topic_scores': {}, 'performance_breakdown': {},
+                        'answered_polls': set() # Added for deduplication
                     }
                 participant = participants[user_info.id]
 
-                time_taken = (datetime.datetime.now(IST) - marathon_session['question_start_time']).total_seconds()
+                # 1. Deduplication: Check if user already answered THIS poll
+                # (This prevents double counting if Telegram sends the update twice)
+                if 'answered_polls' not in participant: 
+                    participant['answered_polls'] = set()
+                
+                if poll_id_str in participant['answered_polls']:
+                    return # Already processed this answer
+                
+                participant['answered_polls'].add(poll_id_str)
 
-                # Use the index of the question that was just sent, which is now reliable
-                # Safety check for index out of bounds
-                question_idx = marathon_session['current_question_index'] - 1
-                if question_idx < 0 or question_idx >= len(marathon_session['questions']):
-                     print(f"MARATHON LOG: Invalid question index {question_idx} for session {session_id}. Ignoring poll answer.")
-                     return # Ignore if index is invalid
+                # Calculate time taken
+                start_time = marathon_session.get('question_start_time', datetime.datetime.now(IST))
+                time_taken = (datetime.datetime.now(IST) - start_time).total_seconds()
 
-                question_data = marathon_session['questions'][question_idx]
-                correct_option_index = ['A', 'B', 'C', 'D'].index(str(question_data.get('Correct Answer', 'A')).upper())
+                # Get Question Index Safely
+                question_idx = marathon_session.get('current_question_index', 1) - 1
+                questions_list = marathon_session.get('questions', [])
+
+                # Safety Check: Ensure index is valid
+                if question_idx < 0 or question_idx >= len(questions_list):
+                     print(f"MARATHON LOG: Invalid question index {question_idx}. Ignoring.")
+                     return 
+
+                question_data = questions_list[question_idx]
+                
+                # Determine Correct Option safely
+                correct_letter = str(question_data.get('Correct Answer', 'A')).strip().upper()
+                try:
+                    correct_option_index = ['A', 'B', 'C', 'D'].index(correct_letter)
+                except ValueError:
+                    correct_option_index = 0 
+
                 is_correct = (selected_option == correct_option_index)
 
+                # Update Stats
                 participant['questions_answered'] += 1
                 participant['total_time'] += time_taken
                 if is_correct:
                     participant['score'] += 1
                     participant['correct_answer_times'].append(time_taken)
 
+                # Update Breakdown safely
                 topic = question_data.get('topic', 'General')
                 q_type = question_data.get('question_type', 'Theory')
-                # Use .get() for safer access
+                
                 breakdown = participant.get('performance_breakdown', {}).setdefault(topic, {}).setdefault(q_type, {'correct': 0, 'total': 0, 'time': 0})
                 breakdown['total'] += 1
                 breakdown['time'] += time_taken
                 if is_correct:
                     breakdown['correct'] += 1
 
-                # Add clearer logging for easier debugging
-                print(f"MARATHON LOG | User: {participant.get('name')} | Q_Index: {question_idx} | Correct: {correct_option_index} | Chosen: {selected_option} | Result: {is_correct}")
-
-                # This logic remains the same but will now be fed correct data
+                # Update Global Stats for the Session
+                # 2. Key Consistency: Use str(question_idx) to match JSON format from DB
+                idx_str = str(question_idx)
                 marathon_session.setdefault('question_stats', {})
-                marathon_session['question_stats'].setdefault(question_idx, {'correct': 0, 'total': 0, 'time': 0})
-                q_stats = marathon_session['question_stats'][question_idx]
+                marathon_session['question_stats'].setdefault(idx_str, {'correct': 0, 'total': 0, 'time': 0})
+                q_stats = marathon_session['question_stats'][idx_str]
                 q_stats['total'] += 1
                 q_stats['time'] += time_taken
                 if is_correct:
                     q_stats['correct'] += 1
-                return # End processing for Marathon
+                
+                return # Stop processing (It was a Marathon poll)
 
             # --- ROUTE 2: Check if it's a Law Quiz (/testme) poll ---
             law_session_id, law_session, question_info = (None, None, None)
+            
+            # Iterate through all sessions safely
             for s_id, s_data in QUIZ_SESSIONS.items():
-                # Check for a session that is active AND has a 'questions' list
-                if s_data.get('is_active') and s_data.get('questions') is not None:
-                    q_info = next((q for q in s_data.get('questions', []) if q['poll_id'] == poll_id_str), None)
-                    if q_info:
-                        law_session_id, law_session, question_info = s_id, s_data, q_info
+                if s_data.get('is_active') and s_data.get('questions'):
+                    # Using .get('poll_id') prevents the KeyError crash
+                    found_q = next((q for q in s_data['questions'] if q.get('poll_id') == poll_id_str), None)
+                    if found_q:
+                        law_session_id, law_session, question_info = s_id, s_data, found_q
                         break
             
             if law_session and question_info:
                 participant = law_session['participants'].get(user_info.id)
                 
-                # Check if this poll has already been answered by this user
-                answered_polls_key = 'answered_polls'
                 if participant:
+                    answered_polls_key = 'answered_polls'
                     if answered_polls_key not in participant:
                         participant[answered_polls_key] = set()
                     
                     if poll_id_str not in participant[answered_polls_key]:
                         is_correct = (selected_option == question_info['correct_option_index'])
                         if is_correct:
-                            participant['score'] += 10 # Add 10 points for a correct answer
+                            participant['score'] += 10
                         
                         participant[answered_polls_key].add(poll_id_str)
-                        print(f"LAW QUIZ LOG | User: {participant.get('name')} | Correct: {is_correct} | New Score: {participant.get('score', 0)}")
-                return # End processing for Law Quiz
+                return # Stop processing (It was a Law Quiz poll)
 
             # --- ROUTE 3: Check if it's a Random Quiz poll ---
-            active_poll_info = next((poll for poll in active_polls if poll['poll_id'] == poll_id_str), None)
+            # 3. Safety: Added .get() here too just in case active_polls has bad data
+            active_poll_info = next((poll for poll in active_polls if poll.get('poll_id') == poll_id_str), None)
+            
             if active_poll_info and active_poll_info.get('type') == 'random_quiz':
                 is_correct = (selected_option == active_poll_info['correct_option_id'])
                 score_percentage = 100.0 if is_correct else 0.0
-                time_taken = 0 # Placeholder, as exact time isn't available
+                time_taken = 0 
 
                 try:
                     record_quiz_participation(user_info.id, user_info.first_name, score_percentage, time_taken)
-                    print(f"Recorded random quiz participation for {user_info.first_name} (Correct: {is_correct}).")
-                    # Optionally, keep the leaderboard update if you want both systems
-                    # if is_correct:
-                    #     supabase.rpc('increment_score', {
-                    #         'user_id_in': user_info.id,
-                    #         'user_name_in': user_info.first_name
-                    #     }).execute()
                 except Exception as tracking_error:
-                    print(f"Error: Failed to record Random Quiz participation for {user_info.first_name}: {tracking_error}")
-                    report_error_to_admin(f"Failed core tracking for Random Quiz user {user_info.first_name}:\n{tracking_error}")
-                return # Stop processing after handling random quiz
+                    print(f"Error recording Random Quiz stats: {tracking_error}")
+                return # Stop processing (It was a Random Quiz poll)
 
     except Exception as e:
-        print(f"Error in the master poll answer handler: {traceback.format_exc()}")
-        report_error_to_admin(f"Error in handle_poll_answer:\n{traceback.format_exc()}")
+        print(f"CRITICAL Error in handle_poll_answer: {traceback.format_exc()}")
+        # We generally don't want to spam admin for every poll click error, so we just print to log
 @bot.message_handler(commands=['webresult'])
 @admin_required
 def handle_web_result_command(msg: types.Message):
@@ -3436,7 +3469,8 @@ DELEGATABLE_COMMANDS = {
     'randomquizvisual': '🖼️ Visual Quiz',
     'quizmarathon': '🏁 Start Marathon',
     'roko': '🛑 Stop Marathon',
-    'notify': '🔔 Send Notify'
+    'notify': '🔔 Send Notify',
+    'schedule': '🗓️ Manage Schedule'
 }
 
 @bot.message_handler(commands=['promote'])
@@ -9664,6 +9698,236 @@ def handle_addsection_admin_approval(call: types.CallbackQuery):
     elif action == "decline":
         bot.edit_message_text("🚫 Declined. The submission has been discarded.", call.message.chat.id, call.message.message_id)
         bot.answer_callback_query(call.id, "Submission Declined.")
+# =============================================================================
+# ADMIN SCHEDULE MANAGER (/schedule)
+# =============================================================================
+
+@bot.message_handler(commands=['schedule'])
+@permission_required('schedule')
+def handle_schedule_manager(msg: types.Message):
+    """
+    Starts the interactive Schedule Manager for Promoted Users.
+    """
+    # 1. Security & Privacy Check
+    if msg.chat.type != 'private':
+        bot.reply_to(msg, "🤫 Please use the Schedule Manager in a private chat with me.")
+        return
+
+    # 2. Initialize User State
+
+    # 2. Initialize User State
+    user_id = msg.from_user.id
+    user_states[user_id] = {
+        'action': 'managing_schedule',
+        'step': 'awaiting_date_choice',
+        'data': {},
+        'timestamp': time.time()
+    }
+
+    # 3. Step 1: Date Selection
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    
+    # Calculate dynamic dates
+    ist_tz = timezone(timedelta(hours=5, minutes=30))
+    today = datetime.datetime.now(ist_tz)
+    tomorrow = today + datetime.timedelta(days=1)
+    parso = today + datetime.timedelta(days=2)
+    
+    markup.add(
+        types.InlineKeyboardButton(f"Tomorrow ({tomorrow.strftime('%d %b')})", callback_data=f"sch_date_{tomorrow.strftime('%Y-%m-%d')}"),
+        types.InlineKeyboardButton(f"Parso ({parso.strftime('%d %b')})", callback_data=f"sch_date_{parso.strftime('%Y-%m-%d')}")
+    )
+    markup.add(types.InlineKeyboardButton("📅 Custom Date (YYYY-MM-DD)", callback_data="sch_date_custom"))
+    markup.add(types.InlineKeyboardButton("❌ Cancel", callback_data="sch_cancel"))
+
+    bot.send_message(
+        user_id, 
+        "🗓️ <b>Schedule Manager</b>\n\nLet's add a new quiz to the schedule.\n\n<b>Step 1/5:</b> Select the Date.", 
+        reply_markup=markup, 
+        parse_mode="HTML"
+    )
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('sch_'))
+def handle_schedule_callbacks(call: types.CallbackQuery):
+    """Handles button clicks for the Schedule Manager."""
+    user_id = call.from_user.id
+    chat_id = call.message.chat.id
+    
+    # Validate State
+    state = user_states.get(user_id)
+    if not state or state.get('action') != 'managing_schedule':
+        bot.answer_callback_query(call.id, "Session expired.", show_alert=True)
+        return
+
+    action = call.data.split('_')[1]
+
+    # --- CANCEL ---
+    if action == 'cancel':
+        del user_states[user_id]
+        bot.edit_message_text("❌ Schedule management cancelled.", chat_id, call.message.message_id)
+        return
+
+    # --- DATE SELECTION ---
+    if action == 'date':
+        selection = call.data.split('_')[2]
+        
+        if selection == 'custom':
+            state['step'] = 'awaiting_custom_date'
+            bot.edit_message_text("✍️ Please type the date in this format: <b>YYYY-MM-DD</b>\n(e.g., 2025-12-25)", chat_id, call.message.message_id, parse_mode="HTML")
+        else:
+            # Date is selected via button
+            state['data']['quiz_date'] = selection
+            ask_for_time(chat_id, user_id)
+
+    # --- SUBJECT SELECTION ---
+    elif action == 'subj':
+        subject = call.data.split('_', 2)[-1] # Gets the full subject name
+        state['data']['subject'] = subject
+        state['step'] = 'awaiting_chapter'
+        
+        bot.edit_message_text(
+            f"✅ Subject: <b>{subject}</b>\n\n<b>Step 4/5:</b> What is the <b>Chapter Name</b>?", 
+            chat_id, call.message.message_id, parse_mode="HTML"
+        )
+
+    # --- FINAL CONFIRMATION ---
+    elif action == 'confirm':
+        save_schedule_to_db(chat_id, user_id)
+
+def ask_for_time(chat_id, user_id):
+    """Moves to Step 2: Time."""
+    user_states[user_id]['step'] = 'awaiting_time'
+    markup = types.InlineKeyboardMarkup(row_width=3)
+    # Common slots for quick selection
+    markup.add(
+        types.InlineKeyboardButton("09:00 AM", callback_data="sch_time_09:00:00"),
+        types.InlineKeyboardButton("02:00 PM", callback_data="sch_time_14:00:00"),
+        types.InlineKeyboardButton("05:00 PM", callback_data="sch_time_17:00:00"),
+        types.InlineKeyboardButton("08:00 PM", callback_data="sch_time_20:00:00")
+    )
+    
+    bot.send_message(
+        chat_id, 
+        "✅ Date Saved.\n\n<b>Step 2/5:</b> Select a time slot OR type it manually (24-hour format, e.g., <code>18:30</code> for 6:30 PM).", 
+        reply_markup=markup, 
+        parse_mode="HTML"
+    )
+
+# --- HANDLER FOR TIME BUTTONS (New) ---
+@bot.callback_query_handler(func=lambda call: call.data.startswith('sch_time_'))
+def handle_time_buttons(call: types.CallbackQuery):
+    user_id = call.from_user.id
+    selected_time = call.data.split('_')[2]
+    
+    if user_id in user_states:
+        user_states[user_id]['data']['quiz_time'] = selected_time
+        ask_for_subject(call.message.chat.id, user_id)
+
+# --- TEXT INPUT HANDLERS ---
+
+@bot.message_handler(func=lambda msg: user_states.get(msg.from_user.id, {}).get('action') == 'managing_schedule')
+def handle_schedule_inputs(msg: types.Message):
+    """Handles text inputs for Date, Time, Chapter, Topics."""
+    user_id = msg.from_user.id
+    state = user_states[user_id]
+    step = state['step']
+    text = msg.text.strip()
+
+    # 1. Handle Custom Date Input
+    if step == 'awaiting_custom_date':
+        try:
+            # Validate format
+            datetime.datetime.strptime(text, '%Y-%m-%d')
+            state['data']['quiz_date'] = text
+            ask_for_time(msg.chat.id, user_id)
+        except ValueError:
+            bot.reply_to(msg, "❌ Invalid format. Please use <b>YYYY-MM-DD</b> (e.g., 2025-12-05).", parse_mode="HTML")
+
+    # 2. Handle Time Input
+    elif step == 'awaiting_time':
+        # Validate simple HH:MM
+        if re.match(r'^([01]\d|2[0-3]):([0-5]\d)$', text):
+            state['data']['quiz_time'] = f"{text}:00" # Add seconds for DB
+            ask_for_subject(msg.chat.id, user_id)
+        else:
+            bot.reply_to(msg, "❌ Invalid time. Please use 24-hour format <b>HH:MM</b> (e.g., 14:30).", parse_mode="HTML")
+
+    # 3. Handle Chapter Name
+    elif step == 'awaiting_chapter':
+        state['data']['chapter_name'] = text
+        state['step'] = 'awaiting_topics'
+        bot.reply_to(msg, "✅ Chapter Saved.\n\n<b>Step 5/5:</b> Enter specific <b>Topics/Focus Area</b> (or type 'Full Chapter').")
+
+    # 4. Handle Topics & Show Confirmation
+    elif step == 'awaiting_topics':
+        state['data']['topics_covered'] = text
+        
+        # Calculate Quiz No (Next number for that day)
+        date_str = state['data']['quiz_date']
+        try:
+            res = supabase.table('quiz_schedule').select('quiz_no', count='exact').eq('quiz_date', date_str).execute()
+            next_no = res.count + 1
+        except:
+            next_no = 1
+        
+        state['data']['quiz_no'] = next_no
+        
+        # Show Summary
+        data = state['data']
+        summary = (
+            f"📝 <b>Confirm Schedule Entry?</b>\n\n"
+            f"📅 <b>Date:</b> {data['quiz_date']}\n"
+            f"⏰ <b>Time:</b> {data['quiz_time']}\n"
+            f"🔢 <b>Quiz No:</b> {data['quiz_no']}\n"
+            f"📘 <b>Subject:</b> {data['subject']}\n"
+            f"📌 <b>Chapter:</b> {data['chapter_name']}\n"
+            f"🔍 <b>Topics:</b> {data['topics_covered']}\n"
+        )
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.add(
+            types.InlineKeyboardButton("✅ Confirm & Save", callback_data="sch_confirm"),
+            types.InlineKeyboardButton("❌ Cancel", callback_data="sch_cancel")
+        )
+        bot.send_message(msg.chat.id, summary, reply_markup=markup, parse_mode="HTML")
+
+def ask_for_subject(chat_id, user_id):
+    """Moves to Step 3: Subject Selection (Buttons)."""
+    user_states[user_id]['step'] = 'awaiting_subject'
+    
+    # Exact names as expected by /todayquiz logic
+    group1 = ['Advanced Accounting', 'Law', 'Taxation (Income Tax)', 'Taxation (GST)']
+    group2 = ['Cost', 'Audit', 'Financial Management', 'Strategic Management']
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    buttons = []
+    for subj in group1 + group2:
+        buttons.append(types.InlineKeyboardButton(subj, callback_data=f"sch_subj_{subj}"))
+    markup.add(*buttons)
+    
+    bot.send_message(chat_id, "✅ Time Saved.\n\n<b>Step 3/5:</b> Select the <b>Subject</b>.", reply_markup=markup, parse_mode="HTML")
+
+def save_schedule_to_db(chat_id, user_id):
+    """Finalizes and inserts data into Supabase."""
+    try:
+        data = user_states[user_id]['data']
+        
+        supabase.table('quiz_schedule').insert({
+            'quiz_date': data['quiz_date'],
+            'quiz_time': data['quiz_time'],
+            'quiz_no': data['quiz_no'],
+            'subject': data['subject'],
+            'chapter_name': data['chapter_name'],
+            'topics_covered': data['topics_covered']
+        }).execute()
+        
+        bot.send_message(chat_id, "✅ <b>Success!</b> The quiz has been added to the schedule.", parse_mode="HTML")
+        
+    except Exception as e:
+        report_error_to_admin(f"Error saving schedule: {e}")
+        bot.send_message(chat_id, "❌ Database Error. Could not save schedule.")
+    finally:
+        del user_states[user_id]
 # =============================================================================
 # 18. MAIN EXECUTION BLOCK (ENHANCED WITH HEALTH CHECKS)
 # =============================================================================
