@@ -47,7 +47,7 @@ ADMIN_USER_ID_STR = os.getenv('ADMIN_USER_ID')
 BOT_USERNAME = "CAVYA_bot"
 PUBLIC_GROUP_COMMANDS = [
     # Schedule & Performance
-    'todayquiz', 'kalkaquiz', 'mystats', 'my_analysis', 'webquiz','testme',
+    'todayquiz', 'kalkaquiz', 'parsokaquiz' 'mystats', 'my_analysis', 'webquiz','testme',
 
     # CA Reference, Glossary & Vault
     'listfile', 'need', 'define', 'newdef','addsection','section',
@@ -4097,7 +4097,116 @@ def handle_interlink_callbacks(call: types.CallbackQuery):
     elif call.data == 'show_info':
         bot.answer_callback_query(call.id)
         handle_info_command(call.message)
+# --- Core Command: /parsokaquiz ---
+@bot.message_handler(commands=['parsokaquiz'])
+@membership_required
+def handle_parso_quiz(msg: types.Message):
+    """
+    Shows the schedule for Day After Tomorrow in a Compact Snapshot style.
+    """
+    try:
+        supabase.rpc('update_chat_activity', {'p_user_id': msg.from_user.id, 'p_user_name': msg.from_user.username or msg.from_user.first_name}).execute()
+    except Exception as e:
+        print(f"Activity tracking failed for user {msg.from_user.id} in command: {e}")
 
+    if not is_group_message(msg):
+        bot.send_message(msg.chat.id, "ℹ️ The `/parsokaquiz` command is designed to be used in the main group chat.")
+        return
+
+    try:
+        # Calculate Date: Current Time + 2 Days
+        ist_tz = timezone(timedelta(hours=5, minutes=30))
+        parso_date = datetime.datetime.now(ist_tz) + datetime.timedelta(days=2)
+        parso_date_str = parso_date.strftime('%Y-%m-%d')
+        display_date = parso_date.strftime('%A, %d %B %Y') # e.g., Thursday, 05 December 2025
+
+        response = supabase.table('quiz_schedule').select('*').eq('quiz_date', parso_date_str).order('quiz_time').execute()
+        
+        reply_params = types.ReplyParameters(
+            message_id=msg.message_id,
+            allow_sending_without_reply=True
+        )
+        
+        user_name = escape(msg.from_user.first_name)
+        
+        # If no schedule found
+        if not response.data:
+            message_text = f"✅ Hey {user_name}, the schedule for <b>Parso ({display_date})</b> hasn't been updated yet. Focus on today and tomorrow! 🧘"
+            bot.send_message(msg.chat.id, message_text, parse_mode="HTML", reply_parameters=reply_params)
+            return
+
+        # Motivational Greetings for "Day After Tomorrow"
+        greetings = [
+            f"{user_name}, visionaries plan ahead! Here is your target for Day After Tomorrow. 🔭",
+            f"Stay two steps ahead, {user_name}! A glimpse into your future schedule. 🚀",
+            f"Preparation is power, {user_name}. Here is what awaits you on Parso. 💪",
+            f"Future-proofing your studies, {user_name}! Here is the lineup for {parso_date.strftime('%A')}. ✨"
+        ]
+        
+        # Build the Compact Snapshot Message
+        # Header
+        message_text = f"{random.choice(greetings)}\n\n"
+        message_text += f"⏩ <b>Parso (Day After Tomorrow)</b>\n"
+        message_text += f"📅 <i>{display_date}</i>\n"
+        message_text += "──────────────────\n"
+
+        # Loop through quizzes
+        for quiz in response.data:
+            try:
+                # Format Time
+                time_obj = datetime.datetime.strptime(quiz['quiz_time'], '%H:%M:%S').time()
+                formatted_time = time_obj.strftime('%I:%M %p')
+                
+                # Determine Subject Emoji
+                subj_lower = quiz.get('subject', '').lower()
+                if "law" in subj_lower: emoji = "⚖️"
+                elif "tax" in subj_lower or "dt" in subj_lower or "gst" in subj_lower: emoji = "💰"
+                elif "cost" in subj_lower: emoji = "🧮"
+                elif "audit" in subj_lower: emoji = "🔍"
+                elif "account" in subj_lower: emoji = "📊"
+                elif "fm" in subj_lower or "sm" in subj_lower: emoji = "📈"
+                else: emoji = "📘"
+
+                subject = escape(quiz.get('subject', 'Subject'))
+                chapter = escape(quiz.get('chapter_name', 'Topic details'))
+
+                # Compact Format Line
+                message_text += f"▪️ {formatted_time} | {emoji} <b>{subject}</b>\n"
+                message_text += f"↳ <i>{chapter}</i>\n\n"
+
+            except Exception:
+                continue
+
+        # Footer
+        message_text += "──────────────────\n"
+        message_text += "🔗 Use <code>/kalkaquiz</code> for tomorrow's plan."
+
+        # Interactive Buttons
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            types.InlineKeyboardButton("📅 View Full Schedule", url="https://studyprosync.web.app/")
+        )
+        markup.add(
+            types.InlineKeyboardButton("📊 My Stats", callback_data=f"show_mystats_{msg.from_user.id}"),
+            types.InlineKeyboardButton("🤖 All Commands", callback_data="show_info")
+        )
+
+        bot.send_message(
+            msg.chat.id,
+            message_text,
+            parse_mode="HTML",
+            reply_markup=markup,
+            reply_parameters=reply_params
+        )
+
+    except Exception as e:
+        print(f"CRITICAL Error in /parsokaquiz: {traceback.format_exc()}")
+        report_error_to_admin(f"Failed to fetch Parso quiz schedule:\n{traceback.format_exc()}")
+        try:
+            reply_params = types.ReplyParameters(message_id=msg.message_id, allow_sending_without_reply=True)
+            bot.send_message(msg.chat.id, "😥 Oops! Something went wrong while fetching the schedule.", reply_parameters=reply_params)
+        except Exception:
+            pass
 # --- Vault Command: /listfile ---
 @bot.message_handler(commands=['listfile'])
 @membership_required
