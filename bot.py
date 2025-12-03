@@ -3159,22 +3159,23 @@ def save_data():
 
         supabase.table('bot_state').upsert(data_to_save).execute()
 
-    except (httpx.ConnectError, RemoteProtocolError) as e:
-        # --- THE FIX IS HERE ---
-        # This block catches multiple types of temporary network errors and skips the save.
-        print(f"⚠️ Network error ({type(e).__name__}). This is a temporary issue. Skipping this state save. Error: {e}")
+    except (httpx.ConnectError, httpx.ReadTimeout, httpx.WriteTimeout, RemoteProtocolError) as e:
+        # --- THE FIX ---
+        # We now catch RemoteProtocolError and Timeouts specifically.
+        print(f"⚠️ Transient Network Error during save: {type(e).__name__}. Skipping this cycle.")
 
     except APIError as e:
-        # This block specifically catches Supabase/Postgrest errors.
+        # Catch Supabase/Postgrest specific API errors
         if hasattr(e, 'code') and str(e.code).startswith('5'):
-            print(f"⚠️ Supabase is temporarily unavailable (Error: {e.code}). This is a server issue. Skipping state save.")
+            print(f"⚠️ Supabase Server Error (5xx). Skipping save.")
         else:
-            print(f"❌ CRITICAL: A Supabase API error occurred while saving state: {e}")
-            report_error_to_admin(f"Failed to save bot state due to Supabase APIError:\n{traceback.format_exc()}")
+            print(f"❌ Supabase API Error: {e}")
+            # Optional: Uncomment below if you want to be notified of logic errors, but not connection ones
+            # report_error_to_admin(f"Failed to save bot state (API Error):\n{e}")
             
     except Exception as e:
-        # This catches any other non-API error.
-        print(f"❌ CRITICAL: Failed to save bot state to Supabase. Error: {e}")
+        # This catches actual coding errors (like JSON serialization issues)
+        print(f"❌ CRITICAL: Failed to save bot state. Error: {e}")
         report_error_to_admin(f"Failed to save bot state to Supabase:\n{traceback.format_exc()}")
 # =============================================================================
 # 8. TELEGRAM BOT HANDLERS - CORE COMMANDS (Continued)
